@@ -22,6 +22,7 @@ import (
 
 	"github.com/kuwa72/lead-cli/internal/adapters/ghcli"
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
+	"github.com/kuwa72/lead-cli/internal/finish"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 )
@@ -215,7 +216,29 @@ Agent dispatch lands in #37; this command prints the next steps.`,
 	}
 	cleanCmd.Flags().String("part", "", "work unit within a multi-PR issue")
 
-	root.AddCommand(versionCmd, workCmd, statusCmd, cleanCmd, setupCmd, completionCmd, doctorCmd, updateCmd)
+	finishCmd := &cobra.Command{
+		Use:   "finish <issue-number>",
+		Short: "Wait CI, squash-merge the PR, and close the issue",
+		Long: `Re-verify the recorded PR, wait for CI, then merge (squash) and close
+under the merge policy (RFC §7). Pauses — confirm policy, never policy,
+auto-merge-disabled repos — exit 0 with the next step, not an error.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runFinish(cmd, deps, args[0])
+		},
+	}
+	finishCmd.Flags().Int("pr", 0, "use this PR number instead of the recorded one")
+	finishCmd.Flags().String("part", "", "work unit within a multi-PR issue")
+	finishCmd.Flags().Bool("merge", false, "merge after CI passes (overrides confirm pause)")
+	finishCmd.Flags().Bool("close", false, "close the issue")
+	finishCmd.Flags().Bool("no-close", false, "never close the issue")
+	finishCmd.Flags().String("comment", "", "post a completion comment")
+	finishCmd.Flags().String("outcome", "", "record a non-PR outcome (research/docs without PR)")
+	finishCmd.Flags().String("merge-policy", "", "policy override (auto|confirm|never)")
+	finishCmd.Flags().Duration("timeout", 0, "CI wait cap (default 30m)")
+	finishCmd.Flags().Duration("poll-interval", 0, "CI poll interval (default 10s)")
+
+	root.AddCommand(versionCmd, workCmd, statusCmd, cleanCmd, finishCmd, setupCmd, completionCmd, doctorCmd, updateCmd)
 	return root
 }
 
@@ -350,6 +373,35 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 		fmt.Fprintln(out)
 	}
 	return nil
+}
+
+// runFinish implements `lead finish <number>`.
+func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
+	number, err := strconv.Atoi(raw)
+	if err != nil || number <= 0 {
+		return fmt.Errorf("invalid issue number %q", raw)
+	}
+	flags := cmd.Flags()
+	pr, _ := flags.GetInt("pr")
+	part, _ := flags.GetString("part")
+	merge, _ := flags.GetBool("merge")
+	closeIssue, _ := flags.GetBool("close")
+	noClose, _ := flags.GetBool("no-close")
+	comment, _ := flags.GetString("comment")
+	outcome, _ := flags.GetString("outcome")
+	policy, _ := flags.GetString("merge-policy")
+	timeout, _ := flags.GetDuration("timeout")
+	interval, _ := flags.GetDuration("poll-interval")
+
+	res, err := finish.Run(cmd.Context(), deps.gh(), &state.Store{Path: deps.stateFile()}, number, finish.Options{
+		PR: pr, Part: part, Merge: merge, Close: closeIssue, NoClose: noClose,
+		Comment: comment, Outcome: outcome, MergePolicy: policy,
+		Timeout: timeout, PollInterval: interval,
+	})
+	if res.Message != "" {
+		fmt.Fprintln(cmd.OutOrStdout(), res.Message)
+	}
+	return err
 }
 
 // runClean implements `lead clean <number>`: safely remove the recorded

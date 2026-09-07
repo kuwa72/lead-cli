@@ -113,3 +113,83 @@ func (c *Client) View(ctx context.Context, number int) (ports.Issue, error) {
 		State:  raw.State,
 	}, nil
 }
+
+// PrChecks runs `gh pr checks <pr> --json bucket,name,state`.
+func (c *Client) PrChecks(ctx context.Context, pr int) ([]ports.PRCheck, error) {
+	out, err := c.run(ctx, "pr", "checks", strconv.Itoa(pr),
+		"--json", "bucket,name,state")
+	if err != nil {
+		return nil, err
+	}
+	var raw []struct {
+		Name   string `json:"name"`
+		Bucket string `json:"bucket"`
+		State  string `json:"state"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return nil, fmt.Errorf("gh pr checks %d: decode JSON: %w", pr, err)
+	}
+	checks := make([]ports.PRCheck, len(raw))
+	for i, r := range raw {
+		checks[i] = ports.PRCheck{Name: r.Name, Bucket: r.Bucket, State: r.State}
+	}
+	return checks, nil
+}
+
+// PrInfo runs `gh pr view <pr> --json number,state,mergeable,mergeStateStatus`.
+func (c *Client) PrInfo(ctx context.Context, pr int) (ports.PRInfo, error) {
+	out, err := c.run(ctx, "pr", "view", strconv.Itoa(pr),
+		"--json", "number,state,mergeable,mergeStateStatus")
+	if err != nil {
+		return ports.PRInfo{}, err
+	}
+	var raw struct {
+		Number           int    `json:"number"`
+		State            string `json:"state"`
+		Mergeable        string `json:"mergeable"`
+		MergeStateStatus string `json:"mergeStateStatus"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return ports.PRInfo{}, fmt.Errorf("gh pr view %d: decode JSON: %w", pr, err)
+	}
+	return ports.PRInfo{
+		Number:           raw.Number,
+		State:            raw.State,
+		Mergeable:        raw.Mergeable,
+		MergeStateStatus: raw.MergeStateStatus,
+	}, nil
+}
+
+// PrMerge runs `gh pr merge <pr> --squash --delete-branch` (squash default).
+func (c *Client) PrMerge(ctx context.Context, pr int) error {
+	_, err := c.run(ctx, "pr", "merge", strconv.Itoa(pr), "--squash", "--delete-branch")
+	return err
+}
+
+// RepoAllowsAutoMerge runs `gh api repos/<repo> --jq .allow_auto_merge`.
+func (c *Client) RepoAllowsAutoMerge(ctx context.Context, repo string) (bool, error) {
+	out, err := c.run(ctx, "api", "repos/"+repo, "--jq", ".allow_auto_merge")
+	if err != nil {
+		return false, err
+	}
+	switch strings.TrimSpace(string(out)) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("gh api repos/%s: unexpected allow_auto_merge %q", repo, strings.TrimSpace(string(out)))
+	}
+}
+
+// IssueClose runs `gh issue close <n>`.
+func (c *Client) IssueClose(ctx context.Context, number int) error {
+	_, err := c.run(ctx, "issue", "close", strconv.Itoa(number))
+	return err
+}
+
+// IssueComment runs `gh issue comment <n> --body <body>`.
+func (c *Client) IssueComment(ctx context.Context, number int, body string) error {
+	_, err := c.run(ctx, "issue", "comment", strconv.Itoa(number), "--body", body)
+	return err
+}
