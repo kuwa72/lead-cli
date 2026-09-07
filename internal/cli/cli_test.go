@@ -83,15 +83,10 @@ func TestVersionPrintsStampedFields(t *testing.T) {
 	}
 }
 
-func TestWorkWithoutNumberNeedsTUI(t *testing.T) {
-	_, _, err := execute(t, "work")
-	if err == nil {
-		t.Fatal("bare `lead work` = nil error, want TUI-pending failure (#37)")
-	}
-	if !strings.Contains(err.Error(), "not yet implemented") {
-		t.Errorf("work error = %q, want 'not yet implemented' pointer", err)
-	}
-}
+// NOTE: bare `lead work` (picker path) is covered by tui_test.go with
+// FakeSelector plus test/test_tui_picker.sh via LEAD_TEST_SELECTION.
+// It is intentionally not exercised here with production defaults:
+// that would list real issues and touch the TTY.
 
 func TestWorkAcceptsDocumentedFlags(t *testing.T) {
 	root := NewRootCmd("v0.0.0-test", "abc1234", "2026-09-07")

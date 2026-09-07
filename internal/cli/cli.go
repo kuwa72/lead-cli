@@ -24,6 +24,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kuwa72/lead-cli/internal/adapters/agent"
+	"github.com/kuwa72/lead-cli/internal/adapters/fzf"
 	"github.com/kuwa72/lead-cli/internal/adapters/ghcli"
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/doctor"
@@ -31,6 +33,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/setup"
 	"github.com/kuwa72/lead-cli/internal/state"
+	"github.com/kuwa72/lead-cli/internal/tui"
 	"github.com/kuwa72/lead-cli/internal/update"
 )
 
@@ -72,6 +75,9 @@ type Deps struct {
 	ExePath    string
 	LookPath   func(string) (string, error)
 	BrewPrefix func() (string, error)
+	// Selector picks issues when `work` has no number.
+	// Nil means the embedded go-fzf picker (or LEAD_TEST_SELECTION below).
+	Selector tui.Selector
 }
 
 func (d Deps) gh() ports.GhClient {
@@ -138,6 +144,41 @@ func (d Deps) lookPath() func(string) (string, error) {
 	return exec.LookPath
 }
 
+// selector resolves the issue picker: explicit Deps first, then the
+// LEAD_TEST_SELECTION hook (<number>[:<agent|browser>] for headless tests),
+// then the interactive embedded picker.
+func (d Deps) selector() tui.Selector {
+	if d.Selector != nil {
+		return d.Selector
+	}
+	if raw := os.Getenv("LEAD_TEST_SELECTION"); raw != "" {
+		if sel, err := parseTestSelection(raw); err == nil {
+			return &tui.FakeSelector{Selection: sel}
+		}
+	}
+	return fzf.New()
+}
+
+// parseTestSelection parses the LEAD_TEST_SELECTION hook:
+// "36" (default agent), "36:devin", or "36:browser".
+func parseTestSelection(raw string) (tui.Selection, error) {
+	parts := strings.SplitN(raw, ":", 2)
+	number, err := strconv.Atoi(parts[0])
+	if err != nil || number <= 0 {
+		return tui.Selection{}, fmt.Errorf("invalid LEAD_TEST_SELECTION %q: want <number>[:<agent|browser>]", raw)
+	}
+	if len(parts) == 1 {
+		return tui.Selection{IssueNumber: number, Agent: agent.DefaultAgent, Action: tui.ActionWork}, nil
+	}
+	if parts[1] == "" {
+		return tui.Selection{}, fmt.Errorf("invalid LEAD_TEST_SELECTION %q: empty action", raw)
+	}
+	if parts[1] == "browser" {
+		return tui.Selection{IssueNumber: number, Action: tui.ActionBrowse}, nil
+	}
+	return tui.Selection{IssueNumber: number, Agent: parts[1], Action: tui.ActionWork}, nil
+}
+
 // NewRootCmd builds the lead command tree with production defaults.
 // Callers set Out/Err/Args in tests.
 func NewRootCmd(version, commit, date string) *cobra.Command {
@@ -181,12 +222,13 @@ coding agent (Herdr side-pane or inline), then wait CI and merge.`,
 		Short: "Start working on an issue (branch + worktree + state)",
 		Long: `With an issue number: fetch the issue, create/check out the working
 branch, optionally create a worktree, and record the workflow state.
-Without a number, issue selection needs the #37 TUI (not yet implemented).
-Agent dispatch lands in #37; this command prints the next steps.`,
+Without a number, the embedded picker selects the issue and action
+(issue list + cached preview, then agent/browser).
+Agent process launch after selection is still manual (next step below).`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return notImplemented(37)
+				return runWorkTUI(cmd, deps)
 			}
 			return runWork(cmd, deps, args[0])
 		},
@@ -309,22 +351,71 @@ auto-merge-disabled repos — exit 0 with the next step, not an error.`,
 	return root
 }
 
-// runWork implements `lead work <number>`: branch + optional worktree +
-// state record. Re-running with the same branch is idempotent.
+// runWorkTUI implements `lead work` without a number: embedded picker
+// (issue list + cached preview, then agent/browser action).
+func runWorkTUI(cmd *cobra.Command, deps Deps) error {
+	ctx := cmd.Context()
+	summaries, err := deps.gh().ListOpen(ctx)
+	if err != nil {
+		return fmt.Errorf("work: %w", err)
+	}
+	if len(summaries) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "no open issues")
+		return nil
+	}
+	items := make([]tui.IssueItem, len(summaries))
+	for i, s := range summaries {
+		items[i] = tui.IssueItem{Number: s.Number, Title: s.Title}
+	}
+	cache := &tui.Cache{Dir: tui.DefaultDir()}
+	sel, err := deps.selector().SelectIssue(ctx, items, tui.Previewer(deps.gh(), cache))
+	if err != nil {
+		return fmt.Errorf("work: %w", err)
+	}
+	if sel.Action == tui.ActionBrowse {
+		if err := deps.gh().BrowseIssue(ctx, sel.IssueNumber); err != nil {
+			return fmt.Errorf("work: browse #%d: %w", sel.IssueNumber, err)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "opened #%d in browser\n", sel.IssueNumber)
+		return nil
+	}
+	if flag := cmd.Flags().Lookup("agent"); flag != nil && !flag.Changed && sel.Agent != "" {
+		_ = flag.Value.Set(sel.Agent)
+	}
+	// The list already gave us the title; skip a second fetch.
+	title := ""
+	for _, s := range summaries {
+		if s.Number == sel.IssueNumber {
+			title = s.Title
+			break
+		}
+	}
+	return runWorkIssue(cmd, deps, ports.Issue{Number: sel.IssueNumber, Title: title})
+}
+
+// runWork implements `lead work <number>`: fetch the issue, then branch +
+// optional worktree + state record. Re-running is idempotent.
 func runWork(cmd *cobra.Command, deps Deps, raw string) error {
 	number, err := strconv.Atoi(raw)
 	if err != nil || number <= 0 {
 		return fmt.Errorf("invalid issue number %q", raw)
 	}
-	mode, _ := cmd.Flags().GetString("mode")
-	branchFlag, _ := cmd.Flags().GetString("branch")
-	part, _ := cmd.Flags().GetString("part")
-	wtFlag := cmd.Flags().Lookup("worktree")
-
 	iss, err := deps.gh().View(cmd.Context(), number)
 	if err != nil {
 		return fmt.Errorf("work #%d: %w", number, err)
 	}
+	return runWorkIssue(cmd, deps, iss)
+}
+
+// runWorkIssue implements the branch/worktree/state half of work given a
+// resolved issue (title sources: gh View, or the TUI list which already
+// fetched it — never fetch twice).
+func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
+	number := iss.Number
+	mode, _ := cmd.Flags().GetString("mode")
+	branchFlag, _ := cmd.Flags().GetString("branch")
+	part, _ := cmd.Flags().GetString("part")
+	wtFlag := cmd.Flags().Lookup("worktree")
 	cwd, err := deps.workDir()
 	if err != nil {
 		return fmt.Errorf("work #%d: working directory: %w", number, err)
@@ -404,7 +495,7 @@ func runWork(cmd *cobra.Command, deps Deps, raw string) error {
 		fmt.Fprintf(out, "  Worktree: %s", w.Worktree)
 	}
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Next: review the prompt, launch the agent (see #37), then `lead status`.")
+	fmt.Fprintln(out, "Next: review the prompt, launch the agent, then `lead status`.")
 	return nil
 }
 

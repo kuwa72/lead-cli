@@ -123,6 +123,7 @@ type FakeGhClient struct {
 	ApiUserErr   error
 	LatestTag    string
 	LatestErr    error
+	BrowseErr    error
 
 	ListCalls   int
 	ViewCalls   []int
@@ -130,6 +131,7 @@ type FakeGhClient struct {
 	PRCalls     []int
 	MergeCalls  []int
 	Closed      []int
+	Browsed     []int
 	Comments    []IssueComment
 }
 
@@ -219,6 +221,12 @@ func (f *FakeGhClient) ApiUser(ctx context.Context) (string, error) {
 // LatestReleaseTag returns the canned tag (or LatestErr).
 func (f *FakeGhClient) LatestReleaseTag(ctx context.Context, repo string) (string, error) {
 	return f.LatestTag, f.LatestErr
+}
+
+// BrowseIssue records the call (or returns BrowseErr).
+func (f *FakeGhClient) BrowseIssue(ctx context.Context, number int) error {
+	f.Browsed = append(f.Browsed, number)
+	return f.BrowseErr
 }
 
 // SplitCall records one FakeHerdrRunner.Split invocation.

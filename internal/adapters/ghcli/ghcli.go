@@ -194,6 +194,12 @@ func (c *Client) IssueComment(ctx context.Context, number int, body string) erro
 	return err
 }
 
+// BrowseIssue runs `gh issue view <n> --web`.
+func (c *Client) BrowseIssue(ctx context.Context, number int) error {
+	_, err := c.run(ctx, "issue", "view", strconv.Itoa(number), "--web")
+	return err
+}
+
 // AuthStatus runs `gh auth status` (exit 0 = authenticated).
 func (c *Client) AuthStatus(ctx context.Context) error {
 	_, err := c.run(ctx, "auth", "status")

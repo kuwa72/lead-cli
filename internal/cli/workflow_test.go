@@ -140,16 +140,16 @@ func TestWork_WithExplicitWorktree(t *testing.T) {
 	}
 }
 
-func TestWork_WithoutNumberNeedsTUI(t *testing.T) {
+func TestWork_WithoutNumberEmptyList(t *testing.T) {
 	repo := initRepo(t)
-	deps, _, _ := workflowDeps(t, repo)
+	deps, _, _ := workflowDeps(t, repo) // fake has no summaries
 
-	_, err := executeWith(t, deps, "work")
-	if err == nil {
-		t.Fatal("work without number = nil, want TUI-pending failure (#37)")
+	out, err := executeWith(t, deps, "work")
+	if err != nil {
+		t.Fatalf("work with empty list: %v", err)
 	}
-	if !strings.Contains(err.Error(), "#37") {
-		t.Errorf("work error = %q, want pointer to #37 TUI", err)
+	if !strings.Contains(out, "no open issues") {
+		t.Errorf("output = %q, want empty notice", out)
 	}
 }
 
