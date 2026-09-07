@@ -178,6 +178,7 @@ type Options struct {
 	NoKeybinding bool
 	Yes          bool // skip approval prompt (assume yes)
 	Stdin        io.Reader
+	Stdout       io.Writer
 	// GenCompletion renders the completion script for sh.
 	GenCompletion func(Shell) (string, error)
 }
@@ -216,18 +217,25 @@ func readFile(path string) string {
 // prompter asks yes/no questions over a single scanner: one reader must
 // not be wrapped in multiple bufio.Scanners (the first would buffer all).
 type prompter struct {
-	sc *bufio.Scanner
+	sc  *bufio.Scanner
+	out io.Writer
 }
 
-func newPrompter(stdin io.Reader) *prompter {
-	if stdin == nil {
-		return &prompter{}
+func newPrompter(stdin io.Reader, out io.Writer) *prompter {
+	if out == nil {
+		out = os.Stdout
 	}
-	return &prompter{sc: bufio.NewScanner(stdin)}
+	if stdin == nil {
+		return &prompter{out: out}
+	}
+	return &prompter{sc: bufio.NewScanner(stdin), out: out}
 }
 
 // ask prompts a yes/no question. Non-interactive stdin (nil/EOF) is a no.
 func (p *prompter) ask(question string) bool {
+	if p.out != nil {
+		fmt.Fprint(p.out, question)
+	}
 	if p.sc == nil {
 		return false
 	}
@@ -308,7 +316,7 @@ func runInstall(opts Options, paths Paths) (Report, error) {
 	}
 
 	// Keybinding is opt-in (RFC §6.1 principle 3): ask unless suppressed.
-	ask := newPrompter(opts.Stdin)
+	ask := newPrompter(opts.Stdin, opts.Stdout)
 	keybinding := false
 	if !opts.NoKeybinding && ask.ask("Enable Ctrl-G keybinding for `lead work`? [y/N] ") {
 		keybinding = true

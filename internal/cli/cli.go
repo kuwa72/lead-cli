@@ -645,6 +645,7 @@ func runSetup(cmd *cobra.Command, deps Deps, info VersionInfo) error {
 		NoKeybinding: noBinding,
 		Yes:          yes,
 		Stdin:        deps.stdin(),
+		Stdout:       out,
 		GenCompletion: func(s setup.Shell) (string, error) {
 			return genCompletion(cmd.Root(), string(s))
 		},
