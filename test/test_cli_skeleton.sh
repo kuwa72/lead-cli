@@ -41,8 +41,11 @@ bash_out="$("$tmp/lead" completion bash)" || fail "lead completion bash failed"
 echo "$bash_out" | bash -n || fail "generated bash completion fails syntax check"
 "$tmp/lead" completion csh >/dev/null 2>&1 && fail "unsupported shell exited 0"
 
-# 5. 未実装スタブは非ゼロ＋案内で終了すること (骨格段階の正直な振る舞い)
-stub_err="$("$tmp/lead" work 36 2>&1)" && fail "stub 'lead work 36' exited 0"
+# 5. 未実装スタブは非ゼロ＋案内で終了すること (骨格段階の正直な振る舞い)。
+# 番号付き work は test_workflow_state.sh の隔離環境で検証するため、
+# ここでは実リポジトリを汚さない範囲 (番号なし work・setup) のみ扱う。
+stub_err="$("$tmp/lead" work 2>&1)" && fail "bare 'lead work' exited 0"
 case "$stub_err" in *"not yet implemented"*) ;; *) fail "stub error missing pointer: $stub_err";; esac
+"$tmp/lead" setup >/dev/null 2>&1 && fail "stub 'lead setup' exited 0"
 
 echo "cli skeleton behavioral checks passed"
