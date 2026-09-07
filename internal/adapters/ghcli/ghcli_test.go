@@ -234,3 +234,18 @@ func TestLatestReleaseTag(t *testing.T) {
 		}
 	}
 }
+
+func TestBrowseIssue_OpensWebView(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", ":")
+	testutil.ClearLog(t, logPath)
+
+	if err := New().BrowseIssue(context.Background(), 36); err != nil {
+		t.Fatalf("BrowseIssue: %v", err)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<issue>", "<view>", "<36>", "<--web>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+}
