@@ -1,0 +1,41 @@
+あなたはGitHub Issueの分解担当です。
+
+## 親Issue
+- Repository: o/r
+- Number: #25
+- Title: flexible workflow
+- Body:
+support modes
+
+## リポジトリ規約
+TDD required; run ./test/run-tests.sh
+
+## 目的
+親Issueを、エージェントがTDDで1回の作業として完了できる子Issueへ分解してください。
+
+## 制約
+1. 各子Issueは、目的・対象範囲・受入条件・検証方法が1つのまとまりになっていること。
+2. 受入条件は実行結果、生成物、終了状態など検証可能な形で書くこと。
+3. 実装Issueでは、最初に追加する失敗テスト（Red）を明記すること。
+4. 調査・文書作成など、PRが不要な作業は明示すること。
+5. 子Issue間の依存関係を示し、並列実行できるものとできないものを分けること。
+6. 親Issueの要件を勝手に追加・削除しないこと。不明点は「要確認」として分離すること。
+7. 1つの子Issueに複数の独立した目的を詰め込まないこと。
+
+## 出力形式
+各候補を次の形式で出力してください。
+
+### 子Issue案: <具体的なタイトル>
+- Mode: implement | research | docs
+- Purpose: <このIssueで完了させること>
+- Scope: <変更対象と対象外>
+- Depends on: <子Issue番号またはnone>
+- Parallelizable: yes | no
+- Acceptance criteria:
+  - <実行可能または成果物で検証できる条件>
+- TDD first step: <最初に追加してRedを確認するテスト。該当しない場合は理由>
+- Expected output: PR | Issue comment | document | none
+- Open questions:
+  - <判断が必要な点。なければnone>
+
+最後に、分解漏れ、重複、親Issueに残すべき受入条件を列挙してください。
