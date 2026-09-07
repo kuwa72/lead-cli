@@ -12,15 +12,18 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -31,10 +34,12 @@ import (
 	"github.com/kuwa72/lead-cli/internal/doctor"
 	"github.com/kuwa72/lead-cli/internal/finish"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/server"
 	"github.com/kuwa72/lead-cli/internal/setup"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/tui"
 	"github.com/kuwa72/lead-cli/internal/update"
+	"github.com/kuwa72/lead-cli/internal/workflow"
 )
 
 // VersionInfo carries ldflags-injected build metadata from cmd/lead.
@@ -54,13 +59,8 @@ func notImplemented(issue int) error {
 
 // GitRunner abstracts the git operations `work`/`clean` need.
 // *git.Runner implements it; tests substitute fakes or temp repos.
-type GitRunner interface {
-	RepoRoot(dir string) (string, error)
-	CreateBranch(repoDir, branch string) error
-	WorktreeAdd(repoDir, path, branch string) error
-	WorktreeRemove(repoDir, path string, force bool) error
-	OriginURL(repoDir string) string
-}
+// (Alias of workflow.GitRunner so CLI and server share one contract.)
+type GitRunner = workflow.GitRunner
 
 // Deps injects external dependencies. Zero Deps means production defaults
 // (real gh CLI, real git, resolved state file, process working directory,
@@ -347,7 +347,55 @@ auto-merge-disabled repos — exit 0 with the next step, not an error.`,
 	finishCmd.Flags().Duration("timeout", 0, "CI wait cap (default 30m)")
 	finishCmd.Flags().Duration("poll-interval", 0, "CI poll interval (default 10s)")
 
-	root.AddCommand(versionCmd, workCmd, statusCmd, cleanCmd, finishCmd, setupCmd, completionCmd, doctorCmd, updateCmd)
+	serverCmd := &cobra.Command{
+		Use:   "server",
+		Short: "Run the headless socket API daemon (see design.md §7)",
+		Long: `Hold workflows state behind a unix socket (dir 0700, socket 0600).
+Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runServer(cmd, deps, info)
+		},
+	}
+	serverCmd.Flags().String("socket", "", "socket path (default: runtime dir or state dir)")
+	serverCmd.Flags().String("session", "", "named session (socket lead-<name>.sock)")
+
+	apiCmd := &cobra.Command{
+		Use:   "api",
+		Short: "Query the socket API (schema/snapshot/call)",
+	}
+	apiCmd.PersistentFlags().String("socket", "", "socket path")
+	apiCmd.PersistentFlags().String("session", "", "named session")
+
+	schemaCmd := &cobra.Command{
+		Use:   "schema",
+		Short: "Print the socket API definition",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Fprint(cmd.OutOrStdout(), server.Schema())
+			return nil
+		},
+	}
+	snapshotCmd := &cobra.Command{
+		Use:   "snapshot",
+		Short: "Print server state (workflows, staged prompts, notifications)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAPICall(cmd, deps, "snapshot", "")
+		},
+	}
+	callCmd := &cobra.Command{
+		Use:   "call <op>",
+		Short: "Call a socket API op with JSON args",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rawArgs, _ := cmd.Flags().GetString("args")
+			return runAPICall(cmd, deps, args[0], rawArgs)
+		},
+	}
+	callCmd.Flags().String("args", "", "JSON object args (default {})")
+	apiCmd.AddCommand(schemaCmd, snapshotCmd, callCmd)
+
+	root.AddCommand(versionCmd, workCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd)
 	return root
 }
 
@@ -410,89 +458,38 @@ func runWork(cmd *cobra.Command, deps Deps, raw string) error {
 // runWorkIssue implements the branch/worktree/state half of work given a
 // resolved issue (title sources: gh View, or the TUI list which already
 // fetched it — never fetch twice).
+// runWorkIssue implements the branch/worktree/state half of work given a
+// resolved issue (title sources: gh View, or the TUI list which already
+// fetched it — never fetch twice). The core lives in internal/workflow so
+// the #48 socket server produces identical records.
 func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
-	number := iss.Number
-	mode, _ := cmd.Flags().GetString("mode")
-	branchFlag, _ := cmd.Flags().GetString("branch")
-	part, _ := cmd.Flags().GetString("part")
-	wtFlag := cmd.Flags().Lookup("worktree")
+	flags := cmd.Flags()
+	mode, _ := flags.GetString("mode")
+	branchFlag, _ := flags.GetString("branch")
+	part, _ := flags.GetString("part")
+	worktreeOpt := ""
+	if wtFlag := flags.Lookup("worktree"); wtFlag != nil && wtFlag.Changed {
+		worktreeOpt = wtFlag.Value.String()
+		if worktreeOpt == "" {
+			worktreeOpt = "auto"
+		}
+	}
 	cwd, err := deps.workDir()
 	if err != nil {
-		return fmt.Errorf("work #%d: working directory: %w", number, err)
+		return fmt.Errorf("work #%d: working directory: %w", iss.Number, err)
 	}
-	g := deps.gitRunner()
-	repoRoot, err := g.RepoRoot(cwd)
+	res, err := workflow.Start(cmd.Context(), deps.gitRunner(), &state.Store{Path: deps.stateFile()}, workflow.StartOptions{
+		Issue: iss, Mode: mode, Branch: branchFlag, Part: part,
+		Worktree: worktreeOpt, WorkDir: cwd,
+	})
 	if err != nil {
-		return fmt.Errorf("work #%d: %w", number, err)
+		return err
 	}
-	branch := branchFlag
-	if branch == "" {
-		branch = git.BranchName(number, iss.Title)
-	}
-	wantWorktree := wtFlag != nil && wtFlag.Changed
-	if !wantWorktree {
-		if err := g.CreateBranch(repoRoot, branch); err != nil {
-			return fmt.Errorf("work #%d: branch %s: %w", number, branch, err)
-		}
-	}
-	worktree := ""
-	if wantWorktree {
-		// NOTE: create the branch inside the new worktree (`git worktree add
-		// -b`); checking it out in the main repo first would make the branch
-		// busy and the add would fail.
-		worktree = wtFlag.Value.String()
-		if worktree == "" || worktree == "auto" {
-			worktree = filepath.Join(repoRoot, ".worktrees", fmt.Sprintf("issue-%d", number))
-			if part != "" {
-				worktree += "-" + part
-			}
-		}
-		if err := g.WorktreeAdd(repoRoot, worktree, branch); err != nil {
-			return fmt.Errorf("work #%d: worktree %s: %w", number, worktree, err)
-		}
-	}
-
-	store := &state.Store{Path: deps.stateFile()}
-	existing, ok, err := store.Get(number, part)
-	if err != nil {
-		return fmt.Errorf("work #%d: %w", number, err)
-	}
-	repo := g.OriginURL(repoRoot)
-	if repo == "" {
-		repo = "local"
-	}
-	w := state.Workflow{
-		Repository: repo,
-		Issue:      number,
-		Mode:       mode,
-		Part:       part,
-		Branch:     branch,
-		Worktree:   worktree,
-		Status:     state.StatusInProgress,
-	}
-	if ok {
-		// Idempotent re-work: keep progress status and any fields the user
-		// did not re-specify (worktree stays unless --worktree given).
-		if err := state.CheckTransition(existing.Status, state.StatusInProgress); err != nil && existing.Status != state.StatusInProgress {
-			return fmt.Errorf("work #%d: %w", number, err)
-		}
-		w.Status = existing.Status
-		if worktree == "" {
-			w.Worktree = existing.Worktree
-		}
-		w.PullRequests = existing.PullRequests
-		w.MergePolicy = existing.MergePolicy
-		w.Artifacts = existing.Artifacts
-	}
-	if err := store.Upsert(w); err != nil {
-		return fmt.Errorf("work #%d: %w", number, err)
-	}
-
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "Issue #%d  %s  %s\n", number, mode, w.Status)
-	fmt.Fprintf(out, "Branch: %s", branch)
-	if w.Worktree != "" {
-		fmt.Fprintf(out, "  Worktree: %s", w.Worktree)
+	fmt.Fprintf(out, "Issue #%d  %s  %s\n", iss.Number, res.Mode, res.Status)
+	fmt.Fprintf(out, "Branch: %s", res.Branch)
+	if res.Worktree != "" {
+		fmt.Fprintf(out, "  Worktree: %s", res.Worktree)
 	}
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Next: review the prompt, launch the agent, then `lead status`.")
@@ -699,6 +696,90 @@ func promptConfirm(stdin io.Reader, question string) bool {
 	ans = strings.ToLower(strings.TrimSpace(ans))
 	return ans == "y" || ans == "yes"
 }
+
+// defaultSocketDir prefers the runtime dir, else the state file's dir.
+func defaultSocketDir(stateFile string) string {
+	if r := os.Getenv("XDG_RUNTIME_DIR"); r != "" {
+		return r
+	}
+	return filepath.Dir(stateFile)
+}
+
+// resolveSocket picks the socket path: --socket, --session
+// (lead-<session>.sock), or the default lead.sock.
+func resolveSocket(cmd *cobra.Command, deps Deps) (string, error) {
+	if sock, _ := cmd.Flags().GetString("socket"); sock != "" {
+		return sock, nil
+	}
+	session, _ := cmd.Flags().GetString("session")
+	name := "lead.sock"
+	if session != "" {
+		if strings.ContainsAny(session, "/\\") {
+			return "", fmt.Errorf("invalid session %q", session)
+		}
+		name = "lead-" + session + ".sock"
+	}
+	return filepath.Join(defaultSocketDir(deps.stateFile()), name), nil
+}
+
+// runServer implements `lead server`: listen until SIGINT/SIGTERM.
+func runServer(cmd *cobra.Command, deps Deps, info VersionInfo) error {
+	sock, err := resolveSocket(cmd, deps)
+	if err != nil {
+		return err
+	}
+	cwd, _ := deps.workDir()
+	srv, err := server.Listen(sock, server.Deps{
+		Gh: deps.gh(), Git: deps.gitRunner(), StateFile: deps.stateFile(),
+		WorkDir: cwd, Version: info.Version,
+	})
+	if err != nil {
+		return err
+	}
+	defer srv.Close()
+	fmt.Fprintf(cmd.OutOrStdout(), "serving on %s (Ctrl-C to stop)\n", sock)
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sig
+		srv.Close()
+	}()
+	if err := srv.Serve(); err != nil && !isClosedConn(err) {
+		return err
+	}
+	return nil
+}
+
+func isClosedConn(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "use of closed network connection")
+}
+
+// runAPICall implements `lead api snapshot|call`: thin client over the socket.
+func runAPICall(cmd *cobra.Command, deps Deps, op, rawArgs string) error {
+	sock, err := resolveSocket(cmd, deps)
+	if err != nil {
+		return err
+	}
+	var args any
+	if rawArgs != "" {
+		if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+			return fmt.Errorf("invalid --args JSON: %w", err)
+		}
+	}
+	data, err := server.Call(sock, op, args)
+	if err != nil {
+		return err
+	}
+	var pretty bytes.Buffer
+	out := cmd.OutOrStdout()
+	if err := json.Indent(&pretty, data, "", "  "); err != nil {
+		fmt.Fprintln(out, string(data))
+		return nil
+	}
+	fmt.Fprintln(out, pretty.String())
+	return nil
+}
+
 func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 	number, err := strconv.Atoi(raw)
 	if err != nil || number <= 0 {
