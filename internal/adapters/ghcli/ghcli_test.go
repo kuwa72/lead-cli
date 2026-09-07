@@ -2,72 +2,24 @@ package ghcli
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/testutil"
 )
 
-// mkDummyGh installs an executable dummy `gh` that logs "$@" and serves
-// canned JSON. It returns the temp bin dir (to prepend to PATH).
-func mkDummyGh(t *testing.T, exitCode int, stderrMsg string) (binDir, logPath string) {
-	t.Helper()
-	binDir = t.TempDir()
-	logPath = filepath.Join(binDir, "gh-args.log")
-	script := "#!/bin/sh\n" +
-		"printf '<%s>\\n' \"$@\" >> \"$GH_LOG\"\n" +
-		"if [ -n \"" + stderrMsg + "\" ]; then echo \"" + stderrMsg + "\" >&2; fi\n" +
-		"if [ \"" + itoa(exitCode) + "\" != \"0\" ]; then exit " + itoa(exitCode) + "; fi\n" +
-		"if [ \"$1 $2\" = \"issue list\" ]; then\n" +
-		"  printf '[{\"number\":50,\"title\":\"Tracking issue\"},{\"number\":36,\"title\":\"ports adapter\"}]'\n" +
-		"elif [ \"$1 $2\" = \"issue view\" ]; then\n" +
-		"  printf '{\"number\":36,\"title\":\"ports adapter\",\"body\":\"hello body\",\"state\":\"OPEN\"}'\n" +
-		"else\n" +
-		"  echo \"unexpected: $@\" >&2; exit 3\n" +
-		"fi\n"
-	if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GH_LOG", logPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return binDir, logPath
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [8]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
-}
-
-func readLog(t *testing.T, path string) string {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading dummy log: %v", err)
-	}
-	return string(b)
-}
+// ghServeBody serves canned issue JSON for list/view like the real `gh`.
+const ghServeBody = `if [ "$1 $2" = "issue list" ]; then
+  printf '[{"number":50,"title":"Tracking issue"},{"number":36,"title":"ports adapter"}]'
+elif [ "$1 $2" = "issue view" ]; then
+  printf '{"number":36,"title":"ports adapter","body":"hello body","state":"OPEN"}'
+else
+  echo "unexpected: $@" >&2; exit 3
+fi`
 
 func TestListOpen_CallsGhWithExpectedArgs(t *testing.T) {
-	_, logPath := mkDummyGh(t, 0, "")
+	logPath := testutil.InstallDummy(t, "gh", ghServeBody)
 
 	got, err := New().ListOpen(context.Background())
 	if err != nil {
@@ -78,7 +30,7 @@ func TestListOpen_CallsGhWithExpectedArgs(t *testing.T) {
 		t.Fatalf("ListOpen = %+v, want issues 50 and 36 with titles", got)
 	}
 
-	log := readLog(t, logPath)
+	log := testutil.LogText(t, logPath)
 	for _, want := range []string{
 		"<issue>", "<list>", "<--state>", "<open>",
 		"<--limit>", "<50>", "<--json>", "<number,title>",
@@ -90,7 +42,7 @@ func TestListOpen_CallsGhWithExpectedArgs(t *testing.T) {
 }
 
 func TestView_CallsGhViewWithJSONFields(t *testing.T) {
-	_, logPath := mkDummyGh(t, 0, "")
+	logPath := testutil.InstallDummy(t, "gh", ghServeBody)
 
 	got, err := New().View(context.Background(), 36)
 	if err != nil {
@@ -100,7 +52,7 @@ func TestView_CallsGhViewWithJSONFields(t *testing.T) {
 		t.Fatalf("View = %+v, want number/title/body/state", got)
 	}
 
-	log := readLog(t, logPath)
+	log := testutil.LogText(t, logPath)
 	for _, want := range []string{
 		"<issue>", "<view>", "<36>", "<--json>", "<number,title,body,state>",
 	} {
@@ -111,7 +63,7 @@ func TestView_CallsGhViewWithJSONFields(t *testing.T) {
 }
 
 func TestListOpen_MissingGhReturnsTypedError(t *testing.T) {
-	t.Setenv("PATH", t.TempDir()) // no gh on PATH
+	testutil.EmptyBin(t) // no gh on PATH
 
 	_, err := New().ListOpen(context.Background())
 	if err == nil {
@@ -123,7 +75,7 @@ func TestListOpen_MissingGhReturnsTypedError(t *testing.T) {
 }
 
 func TestView_PropagatesGhFailure(t *testing.T) {
-	mkDummyGh(t, 1, "issue not found")
+	testutil.InstallDummy(t, "gh", "echo \"issue not found\" >&2; exit 1")
 
 	_, err := New().View(context.Background(), 999)
 	if err == nil {

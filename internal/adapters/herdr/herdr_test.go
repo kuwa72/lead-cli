@@ -3,48 +3,22 @@ package herdr
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/testutil"
 )
 
-// mkDummyHerdr installs an executable dummy `herdr` logging each argv as
-// <arg> lines. splitJSON is served for `pane split`.
-func mkDummyHerdr(t *testing.T, splitJSON string) (binDir, logPath string) {
+// mkDummyHerdr installs a dummy `herdr` serving splitJSON for `pane split`.
+func mkDummyHerdr(t *testing.T, splitJSON string) string {
 	t.Helper()
-	binDir = t.TempDir()
-	logPath = filepath.Join(binDir, "herdr-args.log")
-	script := "#!/bin/sh\n" +
-		"printf '<%s>\\n' \"$@\" >> \"$HERDR_LOG\"\n" +
-		"if [ \"$1 $2\" = \"pane split\" ]; then\n" +
-		"  printf '%s' '" + splitJSON + "'\n" +
-		"elif [ \"$1 $2\" = \"pane send-text\" ]; then\n" +
-		"  :\n" +
-		"else\n" +
-		"  echo \"unexpected: $@\" >&2; exit 3\n" +
-		"fi\n"
-	if err := os.WriteFile(filepath.Join(binDir, "herdr"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HERDR_LOG", logPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return binDir, logPath
-}
-
-func readLog(t *testing.T, path string) string {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading dummy log: %v", err)
-	}
-	return string(b)
+	return testutil.InstallDummy(t, "herdr",
+		`if [ "$1 $2" = "pane split" ]; then printf '%s' '`+splitJSON+`'; elif [ "$1 $2" = "pane send-text" ]; then :; else echo "unexpected: $@" >&2; exit 3; fi`)
 }
 
 func TestSplit_CallsPaneSplitAndParsesPaneID(t *testing.T) {
-	_, logPath := mkDummyHerdr(t, `{"result":{"pane":{"pane_id":"pane-123"}}}`)
+	logPath := mkDummyHerdr(t, `{"result":{"pane":{"pane_id":"pane-123"}}}`)
 
 	got, err := New().Split(context.Background(), ports.DirectionRight, 0.5)
 	if err != nil {
@@ -54,7 +28,7 @@ func TestSplit_CallsPaneSplitAndParsesPaneID(t *testing.T) {
 		t.Fatalf("Split = %q, want pane-123 parsed from herdr JSON", got)
 	}
 
-	log := readLog(t, logPath)
+	log := testutil.LogText(t, logPath)
 	for _, want := range []string{
 		"<pane>", "<split>", "<--direction>", "<right>", "<--ratio>", "<0.5>",
 	} {
@@ -65,14 +39,14 @@ func TestSplit_CallsPaneSplitAndParsesPaneID(t *testing.T) {
 }
 
 func TestSendText_PreparesCommandWithoutAutoSend(t *testing.T) {
-	_, logPath := mkDummyHerdr(t, `{}`)
+	logPath := mkDummyHerdr(t, `{}`)
 
 	err := New().SendText(context.Background(), "pane-123", `agy -i "hello"`)
 	if err != nil {
 		t.Fatalf("SendText: %v", err)
 	}
 
-	log := readLog(t, logPath)
+	log := testutil.LogText(t, logPath)
 	for _, want := range []string{"<pane>", "<send-text>", "<pane-123>", "<agy -i \"hello\">"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("herdr args log missing %q, got:\n%s", want, log)
@@ -95,7 +69,7 @@ func TestSplit_EmptyPaneIDFails(t *testing.T) {
 }
 
 func TestSplit_MissingHerdrReturnsTypedError(t *testing.T) {
-	t.Setenv("PATH", t.TempDir()) // no herdr on PATH
+	testutil.EmptyBin(t) // no herdr on PATH
 
 	_, err := New().Split(context.Background(), ports.DirectionRight, 0.5)
 	if err == nil {
@@ -118,7 +92,7 @@ func TestNewRunner_SelectsInlineWhenHerdrEnvUnset(t *testing.T) {
 
 func TestNewRunner_SelectsInlineWhenHerdrMissing(t *testing.T) {
 	t.Setenv("HERDR_ENV", "1")
-	t.Setenv("PATH", t.TempDir()) // no herdr on PATH
+	testutil.EmptyBin(t) // no herdr on PATH
 
 	r := NewRunner()
 	if _, ok := r.(*InlineRunner); !ok {
