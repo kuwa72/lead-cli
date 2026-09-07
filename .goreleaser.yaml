@@ -1,0 +1,57 @@
+version: 2
+
+project_name: lead
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: lead
+    main: ./cmd/lead
+    binary: lead
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.Version={{.Version}} -X main.Commit={{.Commit}} -X main.Date={{.CommitDate}}
+
+# Asset naming is a contract with `lead update` (internal/update.AssetName):
+# unversioned lead_<os>_<arch>.tar.gz so update URLs stay stable.
+# (RFC-26 §4 sketch had a version infix; fixed at implementation time.)
+# Binary-only archives for now; LICENSE/completions bundling is follow-up.
+archives:
+  - id: lead-archives
+    name_template: "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Pushing the formula needs kuwa72/homebrew-tap plus TAP_GITHUB_TOKEN.
+# Snapshot builds skip this; the first real v-tag release needs the secret.
+brews:
+  - name: lead
+    repository:
+      owner: kuwa72
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/kuwa72/lead-cli
+    description: Issue-driven TDD workflow CLI with multi-agent orchestration
+    directory: Formula
+
+changelog:
+  sort: asc
+  use: github
+
+release:
+  draft: false
+  prerelease: auto
