@@ -85,7 +85,7 @@ func TestVersionPrintsStampedFields(t *testing.T) {
 
 func TestStubsReportNotImplemented(t *testing.T) {
 	for _, args := range [][]string{
-		{"work", "36"}, {"setup"}, {"doctor"}, {"update"},
+		{"work"}, {"setup"}, {"doctor"}, {"update"},
 	} {
 		_, _, err := execute(t, args...)
 		if err == nil {
