@@ -33,7 +33,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/doctor"
 	"github.com/kuwa72/lead-cli/internal/finish"
-	"github.com/kuwa72/lead-cli/internal/install"
+	"github.com/kuwa72/lead-cli/internal/projinit"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/server"
 	"github.com/kuwa72/lead-cli/internal/setup"
@@ -307,20 +307,20 @@ atomic swap). Brew-managed installs print ` + "`brew upgrade` guidance instead."
 	updateCmd.Flags().Bool("yes", false, "skip the replacement approval prompt")
 	updateCmd.Flags().String("version", "", "install a specific tag (default: latest)")
 
-	installCmd := &cobra.Command{
-		Use:   "install",
-		Short: "Install project-oriented agent configuration (lead-flow skill)",
+	initCmd := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize this project for the lead workflow (lead-flow skill)",
 		Long: `Install the /lead-flow skill and update AGENTS.md so a coding agent
 in this project can run the lead issue-driven TDD workflow.
 Dry-run by default; --write applies after approval.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runProjectInstall(cmd, deps)
+			return runProjectInit(cmd, deps)
 		},
 	}
-	installCmd.Flags().Bool("write", false, "write changes after approval")
-	installCmd.Flags().Bool("check", false, "verify installation only (no changes)")
-	installCmd.Flags().Bool("uninstall", false, "remove the managed skill files and AGENTS.md block")
-	installCmd.Flags().Bool("yes", false, "assume yes to approval prompts")
+	initCmd.Flags().Bool("write", false, "write changes after approval")
+	initCmd.Flags().Bool("check", false, "verify installation only (no changes)")
+	initCmd.Flags().Bool("uninstall", false, "remove the managed skill files and AGENTS.md block")
+	initCmd.Flags().Bool("yes", false, "assume yes to approval prompts")
 
 	statusCmd := &cobra.Command{
 		Use:   "status",
@@ -411,7 +411,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 	callCmd.Flags().String("args", "", "JSON object args (default {})")
 	apiCmd.AddCommand(schemaCmd, snapshotCmd, callCmd)
 
-	root.AddCommand(versionCmd, workCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, installCmd)
+	root.AddCommand(versionCmd, workCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, initCmd)
 	return root
 }
 
@@ -861,10 +861,10 @@ func runClean(cmd *cobra.Command, deps Deps, raw string) error {
 	return nil
 }
 
-// runProjectInstall implements `lead install`: project-oriented agent
+// runProjectInit implements `lead init`: project-oriented agent
 // configuration (lead-flow skill + AGENTS.md managed block). Dry-run by
 // default; --write applies after approval.
-func runProjectInstall(cmd *cobra.Command, deps Deps) error {
+func runProjectInit(cmd *cobra.Command, deps Deps) error {
 	flags := cmd.Flags()
 	write, _ := flags.GetBool("write")
 	check, _ := flags.GetBool("check")
@@ -873,14 +873,14 @@ func runProjectInstall(cmd *cobra.Command, deps Deps) error {
 
 	cwd, err := deps.workDir()
 	if err != nil {
-		return fmt.Errorf("install: %w", err)
+		return fmt.Errorf("init: %w", err)
 	}
 	repoRoot, err := deps.gitRunner().RepoRoot(cwd)
 	if err != nil {
-		return fmt.Errorf("install: project root: %w", err)
+		return fmt.Errorf("init: project root: %w", err)
 	}
 
-	rep, err := install.Run(install.Options{
+	rep, err := projinit.Run(projinit.Options{
 		Root:      repoRoot,
 		Write:     write,
 		Check:     check,
