@@ -88,3 +88,103 @@ func TestView_PropagatesGhFailure(t *testing.T) {
 		t.Errorf("View error = %q, want gh stderr surfaced", err)
 	}
 }
+
+// prServeBody serves canned PR/CI JSON like the real `gh`.
+const prServeBody = `if [ "$1 $2" = "pr checks" ]; then
+  printf '[{"bucket":"pass","name":"test","state":"SUCCESS"},{"bucket":"pending","name":"lint","state":"PENDING"}]'
+elif [ "$1 $2" = "pr view" ]; then
+  printf '{"number":7,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}'
+elif [ "$1 $2" = "pr merge" ]; then
+  printf '{"number":7,"state":"MERGED"}'
+elif [ "$1 $2" = "issue close" ]; then
+  :
+elif [ "$1 $2" = "issue comment" ]; then
+  :
+elif [ "$1" = "api" ]; then
+  printf 'true'
+else
+  echo "unexpected: $@" >&2; exit 3
+fi`
+
+func TestPrChecks_CallsGhWithExpectedArgs(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", prServeBody)
+
+	got, err := New().PrChecks(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("PrChecks: %v", err)
+	}
+	if len(got) != 2 || got[0].Name != "test" || got[0].Bucket != "pass" ||
+		got[1].Name != "lint" || got[1].Bucket != "pending" {
+		t.Fatalf("PrChecks = %+v, want parsed buckets", got)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<pr>", "<checks>", "<7>", "<--json>", "<bucket,name,state>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+}
+
+func TestPrInfo_CallsGhPrView(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", prServeBody)
+
+	got, err := New().PrInfo(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("PrInfo: %v", err)
+	}
+	if got.Number != 7 || got.State != "OPEN" || got.Mergeable != "MERGEABLE" {
+		t.Fatalf("PrInfo = %+v, want number/state/mergeable", got)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<pr>", "<view>", "<7>", "<--json>", "<number,state,mergeable,mergeStateStatus>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+}
+
+func TestPrMerge_UsesSquashAndDeleteBranch(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", prServeBody)
+
+	if err := New().PrMerge(context.Background(), 7); err != nil {
+		t.Fatalf("PrMerge: %v", err)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<pr>", "<merge>", "<7>", "<--squash>", "<--delete-branch>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+}
+
+func TestRepoAllowsAutoMerge_ParsesAPIBoolean(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", prServeBody)
+
+	ok, err := New().RepoAllowsAutoMerge(context.Background(), "o/r")
+	if err != nil || !ok {
+		t.Fatalf("RepoAllowsAutoMerge = %v, %v; want true, nil", ok, err)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<api>", "<repos/o/r>", "<--jq>", "<.allow_auto_merge>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+}
+
+func TestIssueClose_AndComment(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", prServeBody)
+
+	if err := New().IssueClose(context.Background(), 36); err != nil {
+		t.Fatalf("IssueClose: %v", err)
+	}
+	if err := New().IssueComment(context.Background(), 36, "done"); err != nil {
+		t.Fatalf("IssueComment: %v", err)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<issue>", "<close>", "<36>", "<comment>", "<--body>", "<done>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+}

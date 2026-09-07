@@ -87,6 +87,12 @@ func LogLines(t *testing.T, logPath string) []string {
 	return strings.Split(text, "\n")
 }
 
+// IssueComment records one FakeGhClient.IssueComment call.
+type IssueComment struct {
+	Number int
+	Body   string
+}
+
 // FakeGhClient is an in-memory ports.GhClient for core-logic unit tests.
 type FakeGhClient struct {
 	Summaries []ports.IssueSummary
@@ -94,8 +100,31 @@ type FakeGhClient struct {
 	ListErr   error
 	ViewErr   error
 
-	ListCalls int
-	ViewCalls []int
+	// Checks is returned by every PrChecks call; ChecksSeq (when non-empty)
+	// returns ChecksSeq[min(call,last)] to model pending→pass transitions.
+	Checks    []ports.PRCheck
+	ChecksSeq [][]ports.PRCheck
+	ChecksErr error
+
+	PR    ports.PRInfo
+	PRErr error
+
+	MergeErr error
+
+	// AutoMergeAllowed gates policy auto (repo setting).
+	AutoMergeAllowed bool
+	AutoMergeErr     error
+
+	CloseErr   error
+	CommentErr error
+
+	ListCalls   int
+	ViewCalls   []int
+	ChecksCalls int
+	PRCalls     []int
+	MergeCalls  []int
+	Closed      []int
+	Comments    []IssueComment
 }
 
 var _ ports.GhClient = (*FakeGhClient)(nil)
@@ -121,6 +150,54 @@ func (f *FakeGhClient) View(ctx context.Context, number int) (ports.Issue, error
 		return ports.Issue{}, fmt.Errorf("fake gh: issue #%d not found", number)
 	}
 	return iss, nil
+}
+
+// PrChecks returns the sequenced or static checks and records the call.
+func (f *FakeGhClient) PrChecks(ctx context.Context, pr int) ([]ports.PRCheck, error) {
+	call := f.ChecksCalls
+	f.ChecksCalls++
+	if f.ChecksErr != nil {
+		return nil, f.ChecksErr
+	}
+	if len(f.ChecksSeq) > 0 {
+		if call >= len(f.ChecksSeq) {
+			call = len(f.ChecksSeq) - 1
+		}
+		return f.ChecksSeq[call], nil
+	}
+	return f.Checks, nil
+}
+
+// PrInfo returns the canned PR and records the call.
+func (f *FakeGhClient) PrInfo(ctx context.Context, pr int) (ports.PRInfo, error) {
+	f.PRCalls = append(f.PRCalls, pr)
+	if f.PRErr != nil {
+		return ports.PRInfo{}, f.PRErr
+	}
+	return f.PR, nil
+}
+
+// PrMerge records the call (or returns MergeErr).
+func (f *FakeGhClient) PrMerge(ctx context.Context, pr int) error {
+	f.MergeCalls = append(f.MergeCalls, pr)
+	return f.MergeErr
+}
+
+// RepoAllowsAutoMerge returns the canned repo setting.
+func (f *FakeGhClient) RepoAllowsAutoMerge(ctx context.Context, repo string) (bool, error) {
+	return f.AutoMergeAllowed, f.AutoMergeErr
+}
+
+// IssueClose records the call (or returns CloseErr).
+func (f *FakeGhClient) IssueClose(ctx context.Context, number int) error {
+	f.Closed = append(f.Closed, number)
+	return f.CloseErr
+}
+
+// IssueComment records the call (or returns CommentErr).
+func (f *FakeGhClient) IssueComment(ctx context.Context, number int, body string) error {
+	f.Comments = append(f.Comments, IssueComment{Number: number, Body: body})
+	return f.CommentErr
 }
 
 // SplitCall records one FakeHerdrRunner.Split invocation.

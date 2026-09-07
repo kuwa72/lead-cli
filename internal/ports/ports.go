@@ -22,10 +22,38 @@ type Issue struct {
 	State  string
 }
 
-// GhClient abstracts `gh issue list/view` (transparent auth via gh CLI).
+// GhClient abstracts `gh issue list/view` (transparent auth via gh CLI)
+// plus the PR/CI operations `finish` needs (issue #41).
 type GhClient interface {
 	ListOpen(ctx context.Context) ([]IssueSummary, error)
 	View(ctx context.Context, number int) (Issue, error)
+	// PrChecks mirrors `gh pr checks <pr> --json bucket,name,state`.
+	PrChecks(ctx context.Context, pr int) ([]PRCheck, error)
+	// PrInfo mirrors `gh pr view <pr> --json number,state,mergeable,mergeStateStatus`.
+	PrInfo(ctx context.Context, pr int) (PRInfo, error)
+	// PrMerge mirrors `gh pr merge <pr> --squash --delete-branch`.
+	PrMerge(ctx context.Context, pr int) error
+	// RepoAllowsAutoMerge mirrors `gh api repos/<owner>/<repo> --jq .allow_auto_merge`.
+	RepoAllowsAutoMerge(ctx context.Context, repo string) (bool, error)
+	// IssueClose mirrors `gh issue close <n>`.
+	IssueClose(ctx context.Context, number int) error
+	// IssueComment mirrors `gh issue comment <n> --body <body>`.
+	IssueComment(ctx context.Context, number int, body string) error
+}
+
+// PRCheck is one CI check row. Bucket is pass/fail/pending/skipping/cancel.
+type PRCheck struct {
+	Name   string
+	Bucket string
+	State  string
+}
+
+// PRInfo is the subset of `gh pr view` finish needs.
+type PRInfo struct {
+	Number           int
+	State            string
+	Mergeable        string
+	MergeStateStatus string
 }
 
 // Direction is the herdr pane split direction.
