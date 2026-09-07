@@ -1,10 +1,11 @@
-// Package install implements `lead install`: project-oriented agent
-// configuration (lead-flow skill) and an AGENTS.md managed block (issue #68).
+// Package projinit implements `lead init`: project-oriented agent
+// configuration (lead-flow skill) and an AGENTS.md managed block
+// (issue #68, renamed from `lead install` in #79).
 //
 // Principles: dry-run by default, approval before writes, idempotent re-runs,
 // safe no-ops on non-interactive stdin, and conservative uninstall that
 // preserves foreign files.
-package install
+package projinit
 
 import (
 	"bufio"
@@ -31,7 +32,7 @@ const (
 
 const (
 	// BlockStart/BlockEnd fence the managed AGENTS.md section (idempotency markers).
-	BlockStart = "<!-- lead-flow begin (managed by `lead install`; do not edit) -->"
+	BlockStart = "<!-- lead-flow begin (managed by `lead init`; do not edit) -->"
 	BlockEnd   = "<!-- lead-flow end -->"
 )
 
@@ -76,14 +77,14 @@ type Report struct {
 // Run executes install/uninstall/check per Options.
 func Run(opts Options) (Report, error) {
 	if opts.Root == "" {
-		return Report{}, fmt.Errorf("install: project root is required")
+		return Report{}, fmt.Errorf("init: project root is required")
 	}
 	fi, err := os.Stat(opts.Root)
 	if err != nil {
-		return Report{}, fmt.Errorf("install: %w", err)
+		return Report{}, fmt.Errorf("init: %w", err)
 	}
 	if !fi.IsDir() {
-		return Report{}, fmt.Errorf("install: %s is not a directory", opts.Root)
+		return Report{}, fmt.Errorf("init: %s is not a directory", opts.Root)
 	}
 
 	skill := opts.SkillContent
@@ -240,7 +241,7 @@ func runCheck(root string, wantSkill, wantAgents []byte) (Report, error) {
 	}
 
 	if !rep.Complete {
-		rep.Lines = append(rep.Lines, "Next: run `lead install --write`")
+		rep.Lines = append(rep.Lines, "Next: run `lead init --write`")
 	}
 	return rep, nil
 }
