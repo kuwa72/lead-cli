@@ -33,6 +33,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/doctor"
 	"github.com/kuwa72/lead-cli/internal/finish"
+	"github.com/kuwa72/lead-cli/internal/install"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/server"
 	"github.com/kuwa72/lead-cli/internal/setup"
@@ -306,6 +307,21 @@ atomic swap). Brew-managed installs print ` + "`brew upgrade` guidance instead."
 	updateCmd.Flags().Bool("yes", false, "skip the replacement approval prompt")
 	updateCmd.Flags().String("version", "", "install a specific tag (default: latest)")
 
+	installCmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install project-oriented agent configuration (lead-flow skill)",
+		Long: `Install the /lead-flow skill and update AGENTS.md so a coding agent
+in this project can run the lead issue-driven TDD workflow.
+Dry-run by default; --write applies after approval.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProjectInstall(cmd, deps)
+		},
+	}
+	installCmd.Flags().Bool("write", false, "write changes after approval")
+	installCmd.Flags().Bool("check", false, "verify installation only (no changes)")
+	installCmd.Flags().Bool("uninstall", false, "remove the managed skill files and AGENTS.md block")
+	installCmd.Flags().Bool("yes", false, "assume yes to approval prompts")
+
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show recorded workflows (Issue/Branch/Worktree/state)",
@@ -395,7 +411,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 	callCmd.Flags().String("args", "", "JSON object args (default {})")
 	apiCmd.AddCommand(schemaCmd, snapshotCmd, callCmd)
 
-	root.AddCommand(versionCmd, workCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd)
+	root.AddCommand(versionCmd, workCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, installCmd)
 	return root
 }
 
@@ -842,5 +858,45 @@ func runClean(cmd *cobra.Command, deps Deps, raw string) error {
 		return fmt.Errorf("clean #%d: %w", number, err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "cleaned #%d (%s)\n", number, w.Branch)
+	return nil
+}
+
+// runProjectInstall implements `lead install`: project-oriented agent
+// configuration (lead-flow skill + AGENTS.md managed block). Dry-run by
+// default; --write applies after approval.
+func runProjectInstall(cmd *cobra.Command, deps Deps) error {
+	flags := cmd.Flags()
+	write, _ := flags.GetBool("write")
+	check, _ := flags.GetBool("check")
+	uninstall, _ := flags.GetBool("uninstall")
+	yes, _ := flags.GetBool("yes")
+
+	cwd, err := deps.workDir()
+	if err != nil {
+		return fmt.Errorf("install: %w", err)
+	}
+	repoRoot, err := deps.gitRunner().RepoRoot(cwd)
+	if err != nil {
+		return fmt.Errorf("install: project root: %w", err)
+	}
+
+	rep, err := install.Run(install.Options{
+		Root:      repoRoot,
+		Write:     write,
+		Check:     check,
+		Uninstall: uninstall,
+		Yes:       yes,
+		Stdin:     deps.stdin(),
+	})
+	if err != nil {
+		return err
+	}
+	out := cmd.OutOrStdout()
+	for _, line := range rep.Lines {
+		fmt.Fprintln(out, line)
+	}
+	if check && !rep.Complete {
+		return errors.New("lead-flow not installed")
+	}
 	return nil
 }
