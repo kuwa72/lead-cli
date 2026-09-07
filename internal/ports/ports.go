@@ -45,6 +45,8 @@ type GhClient interface {
 	ApiUser(ctx context.Context) (string, error)
 	// LatestReleaseTag mirrors `gh api repos/<repo>/releases/latest --jq .tag_name`.
 	LatestReleaseTag(ctx context.Context, repo string) (string, error)
+	// BrowseIssue mirrors `gh issue view <n> --web`.
+	BrowseIssue(ctx context.Context, number int) error
 }
 
 // PRCheck is one CI check row. Bucket is pass/fail/pending/skipping/cancel.
