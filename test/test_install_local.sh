@@ -34,4 +34,17 @@ fi
 LEAD_LOCAL_DIR="$tmp/bin" sh bin/install-local >/dev/null || fail "reinstall exited non-zero"
 [ -x "$tmp/bin/lead" ] || fail "lead missing after reinstall"
 
+# 6. 既定配置先は $HOME/.local/bin (LEAD_LOCAL_DIR 未指定時, issue #77)。
+#    一時 HOME で検証。Go キャッシュは実パスを維持する。
+REAL_GOPATH="$(go env GOPATH)"
+REAL_GOCACHE="$(go env GOCACHE)"
+(
+  export HOME="$tmp/home" GOPATH="$REAL_GOPATH" GOCACHE="$REAL_GOCACHE"
+  unset LEAD_LOCAL_DIR || true
+  mkdir -p "$HOME"
+  sh "$ROOT/bin/install-local" >/dev/null
+) || fail "default-dir install exited non-zero"
+[ -x "$tmp/home/.local/bin/lead" ] || fail "default install did not place lead in \$HOME/.local/bin"
+[ ! -e "$tmp/home/local/bin/lead" ] || fail "lead installed to \$HOME/local/bin (non-dot dir)"
+
 echo "install-local behavioral checks passed"
