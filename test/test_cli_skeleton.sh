@@ -17,12 +17,12 @@ CGO_ENABLED=0 go build \
   -o "$tmp/lead-stamped" ./cmd/lead || fail "stamped build failed"
 
 # 1. 各コマンド --help が終了状態 0 で用法を表示すること
-for cmd in version work setup completion doctor update; do
+for cmd in version work setup completion doctor update install; do
   out="$("$tmp/lead" "$cmd" --help)" || fail "lead $cmd --help exited non-zero"
   case "$out" in *"lead $cmd"*) ;; *) fail "lead $cmd --help missing usage header";; esac
 done
 root_help="$("$tmp/lead" --help)" || fail "lead --help exited non-zero"
-for cmd in work setup completion doctor update version; do
+for cmd in work setup completion doctor update install version; do
   case "$root_help" in *"$cmd"*) ;; *) fail "lead --help missing command $cmd";; esac
 done
 
