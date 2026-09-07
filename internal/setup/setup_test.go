@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,6 +93,25 @@ func TestBlockUpsertRemoveRoundTrip(t *testing.T) {
 func fakeGen(t *testing.T) func(Shell) (string, error) {
 	t.Helper()
 	return func(sh Shell) (string, error) { return "# completion for lead (" + string(sh) + ")\n", nil }
+}
+
+func TestSetupPromptsAreWritten(t *testing.T) {
+	home := t.TempDir()
+	var out bytes.Buffer
+	_, err := Run(Options{
+		Home: home, Sh: ShellBash, Write: true,
+		Stdin: strings.NewReader("n\nn\n"), Stdout: &out,
+		GenCompletion: fakeGen(t),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(out.String(), "Enable Ctrl-G keybinding") {
+		t.Errorf("keybinding prompt not written, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "Proceed?") {
+		t.Errorf("approval prompt not written, got:\n%s", out.String())
+	}
 }
 
 func TestRunDryRunWritesNothing(t *testing.T) {
