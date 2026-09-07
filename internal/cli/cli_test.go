@@ -83,18 +83,13 @@ func TestVersionPrintsStampedFields(t *testing.T) {
 	}
 }
 
-func TestStubsReportNotImplemented(t *testing.T) {
-	for _, args := range [][]string{
-		{"work"}, {"setup"}, {"doctor"}, {"update"},
-	} {
-		_, _, err := execute(t, args...)
-		if err == nil {
-			t.Errorf("lead %v = nil error, want not-implemented failure (skeleton)", args)
-			continue
-		}
-		if !strings.Contains(err.Error(), "not yet implemented") {
-			t.Errorf("lead %v error = %q, want 'not yet implemented' pointer", args, err)
-		}
+func TestWorkWithoutNumberNeedsTUI(t *testing.T) {
+	_, _, err := execute(t, "work")
+	if err == nil {
+		t.Fatal("bare `lead work` = nil error, want TUI-pending failure (#37)")
+	}
+	if !strings.Contains(err.Error(), "not yet implemented") {
+		t.Errorf("work error = %q, want 'not yet implemented' pointer", err)
 	}
 }
 
