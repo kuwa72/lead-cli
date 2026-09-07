@@ -193,3 +193,27 @@ func (c *Client) IssueComment(ctx context.Context, number int, body string) erro
 	_, err := c.run(ctx, "issue", "comment", strconv.Itoa(number), "--body", body)
 	return err
 }
+
+// AuthStatus runs `gh auth status` (exit 0 = authenticated).
+func (c *Client) AuthStatus(ctx context.Context) error {
+	_, err := c.run(ctx, "auth", "status")
+	return err
+}
+
+// ApiUser runs `gh api user --jq .login`.
+func (c *Client) ApiUser(ctx context.Context) (string, error) {
+	out, err := c.run(ctx, "api", "user", "--jq", ".login")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// LatestReleaseTag runs `gh api repos/<repo>/releases/latest --jq .tag_name`.
+func (c *Client) LatestReleaseTag(ctx context.Context, repo string) (string, error) {
+	out, err := c.run(ctx, "api", "repos/"+repo+"/releases/latest", "--jq", ".tag_name")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}

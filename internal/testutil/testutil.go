@@ -118,6 +118,12 @@ type FakeGhClient struct {
 	CloseErr   error
 	CommentErr error
 
+	AuthErr      error
+	ApiUserLogin string
+	ApiUserErr   error
+	LatestTag    string
+	LatestErr    error
+
 	ListCalls   int
 	ViewCalls   []int
 	ChecksCalls int
@@ -198,6 +204,21 @@ func (f *FakeGhClient) IssueClose(ctx context.Context, number int) error {
 func (f *FakeGhClient) IssueComment(ctx context.Context, number int, body string) error {
 	f.Comments = append(f.Comments, IssueComment{Number: number, Body: body})
 	return f.CommentErr
+}
+
+// AuthStatus returns AuthErr (nil = authenticated).
+func (f *FakeGhClient) AuthStatus(ctx context.Context) error {
+	return f.AuthErr
+}
+
+// ApiUser returns the canned login (or ApiUserErr).
+func (f *FakeGhClient) ApiUser(ctx context.Context) (string, error) {
+	return f.ApiUserLogin, f.ApiUserErr
+}
+
+// LatestReleaseTag returns the canned tag (or LatestErr).
+func (f *FakeGhClient) LatestReleaseTag(ctx context.Context, repo string) (string, error) {
+	return f.LatestTag, f.LatestErr
 }
 
 // SplitCall records one FakeHerdrRunner.Split invocation.

@@ -13,18 +13,25 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/ghcli"
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
+	"github.com/kuwa72/lead-cli/internal/doctor"
 	"github.com/kuwa72/lead-cli/internal/finish"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/setup"
 	"github.com/kuwa72/lead-cli/internal/state"
+	"github.com/kuwa72/lead-cli/internal/update"
 )
 
 // VersionInfo carries ldflags-injected build metadata from cmd/lead.
@@ -53,12 +60,18 @@ type GitRunner interface {
 }
 
 // Deps injects external dependencies. Zero Deps means production defaults
-// (real gh CLI, real git, resolved state file, process working directory).
+// (real gh CLI, real git, resolved state file, process working directory,
+// user home, stdin, and the running binary path).
 type Deps struct {
-	Gh        ports.GhClient
-	Git       GitRunner
-	StateFile string
-	WorkDir   string
+	Gh         ports.GhClient
+	Git        GitRunner
+	StateFile  string
+	WorkDir    string
+	Home       string
+	Stdin      io.Reader
+	ExePath    string
+	LookPath   func(string) (string, error)
+	BrewPrefix func() (string, error)
 }
 
 func (d Deps) gh() ports.GhClient {
@@ -87,6 +100,42 @@ func (d Deps) workDir() (string, error) {
 		return d.WorkDir, nil
 	}
 	return os.Getwd()
+}
+
+func (d Deps) home() string {
+	if d.Home != "" {
+		return d.Home
+	}
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return h
+}
+
+func (d Deps) stdin() io.Reader {
+	if d.Stdin != nil {
+		return d.Stdin
+	}
+	return os.Stdin
+}
+
+func (d Deps) exePath() string {
+	if d.ExePath != "" {
+		return d.ExePath
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return os.Args[0]
+	}
+	return exe
+}
+
+func (d Deps) lookPath() func(string) (string, error) {
+	if d.LookPath != nil {
+		return d.LookPath
+	}
+	return exec.LookPath
 }
 
 // NewRootCmd builds the lead command tree with production defaults.
@@ -155,11 +204,20 @@ Agent dispatch lands in #37; this command prints the next steps.`,
 
 	setupCmd := &cobra.Command{
 		Use:   "setup",
-		Short: "Interactive environment setup (completions, config)",
+		Short: "Interactive environment setup (completions, keybinding)",
+		Long: `Detect the shell, place the completion script, and manage the
+marker-fenced rc block. Dry-run by default; --write applies after approval.
+Finishes with a doctor summary.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return notImplemented(44)
+			return runSetup(cmd, deps, info)
 		},
 	}
+	setupCmd.Flags().Bool("write", false, "write changes after approval")
+	setupCmd.Flags().String("shell", "", "target shell (bash|zsh|fish; default: detect $SHELL)")
+	setupCmd.Flags().Bool("no-keybinding", false, "never ask for the Ctrl-G keybinding")
+	setupCmd.Flags().Bool("check", false, "verify placement only (no changes)")
+	setupCmd.Flags().Bool("uninstall", false, "remove the managed block and completion files")
+	setupCmd.Flags().Bool("yes", false, "assume yes to approval prompts")
 
 	completionCmd := &cobra.Command{
 		Use:   "completion <bash|zsh|fish|powershell>",
@@ -183,19 +241,28 @@ Agent dispatch lands in #37; this command prints the next steps.`,
 
 	doctorCmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Diagnose environment (gh auth, herdr, agents)",
+		Short: "Diagnose environment (gh auth, herdr, agents, shell integration)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return notImplemented(44)
+			return runDoctor(cmd, deps, info)
 		},
 	}
+	doctorCmd.Flags().Bool("offline", false, "skip network probes")
+	doctorCmd.Flags().Bool("json", false, "machine-readable output")
+	doctorCmd.Flags().String("shell", "", "target shell for integration checks (default: detect $SHELL)")
 
 	updateCmd := &cobra.Command{
 		Use:   "update",
-		Short: "Update lead to the latest release",
+		Short: "Update lead to the latest release (direct installs only)",
+		Long: `Checks releases/latest and replaces this binary (sha256-verified,
+atomic swap). Brew-managed installs print ` + "`brew upgrade` guidance instead." + `
+--check exits 0 when up-to-date, 1 when an update is available.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return notImplemented(44)
+			return runUpdate(cmd, deps, info)
 		},
 	}
+	updateCmd.Flags().Bool("check", false, "report availability only (no download)")
+	updateCmd.Flags().Bool("yes", false, "skip the replacement approval prompt")
+	updateCmd.Flags().String("version", "", "install a specific tag (default: latest)")
 
 	statusCmd := &cobra.Command{
 		Use:   "status",
@@ -375,7 +442,172 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 	return nil
 }
 
-// runFinish implements `lead finish <number>`.
+// genCompletion renders the cobra completion script for a setup shell name.
+func genCompletion(root *cobra.Command, shell string) (string, error) {
+	var sb strings.Builder
+	var err error
+	switch shell {
+	case "bash":
+		err = root.GenBashCompletion(&sb)
+	case "zsh":
+		err = root.GenZshCompletion(&sb)
+	case "fish":
+		err = root.GenFishCompletion(&sb, true)
+	default:
+		return "", fmt.Errorf("unsupported shell %q", shell)
+	}
+	return sb.String(), err
+}
+
+// runSetup implements `lead setup` (RFC §6.2): dry-run preview by default,
+// approved writes with --write, verification with --check.
+func runSetup(cmd *cobra.Command, deps Deps, info VersionInfo) error {
+	flags := cmd.Flags()
+	shellFlag, _ := flags.GetString("shell")
+	write, _ := flags.GetBool("write")
+	check, _ := flags.GetBool("check")
+	uninstall, _ := flags.GetBool("uninstall")
+	noBinding, _ := flags.GetBool("no-keybinding")
+	yes, _ := flags.GetBool("yes")
+
+	sh, err := setup.DetectShell(shellFlag)
+	if err != nil {
+		return err
+	}
+	out := cmd.OutOrStdout()
+	rep, err := setup.Run(setup.Options{
+		Home:         deps.home(),
+		Sh:           sh,
+		Write:        write,
+		Check:        check,
+		Uninstall:    uninstall,
+		NoKeybinding: noBinding,
+		Yes:          yes,
+		Stdin:        deps.stdin(),
+		GenCompletion: func(s setup.Shell) (string, error) {
+			return genCompletion(cmd.Root(), string(s))
+		},
+	})
+	if err != nil {
+		return err
+	}
+	for _, line := range rep.Lines {
+		fmt.Fprintln(out, line)
+	}
+	if check && !rep.Complete {
+		return errors.New("setup incomplete")
+	}
+	if write && rep.Changed {
+		// RFC §6.2: setup finishes by running the diagnosis.
+		rep2 := doctor.Run(doctor.Deps{
+			Gh: deps.gh(), Home: deps.home(), Shell: string(sh),
+			Version: info.Version, GenCompletion: func(shell string) (string, error) {
+				return genCompletion(cmd.Root(), shell)
+			},
+		})
+		ok, total := 0, 0
+		for _, c := range rep2.Checks {
+			if c.Required {
+				total++
+				if c.OK {
+					ok++
+				}
+			}
+		}
+		fmt.Fprintf(out, "doctor: %d/%d required checks pass\n", ok, total)
+	}
+	return nil
+}
+
+// runDoctor implements `lead doctor` (RFC §6.6). Exit status reflects
+// required checks only.
+func runDoctor(cmd *cobra.Command, deps Deps, info VersionInfo) error {
+	flags := cmd.Flags()
+	offline, _ := flags.GetBool("offline")
+	asJSON, _ := flags.GetBool("json")
+	shellFlag, _ := flags.GetString("shell")
+
+	rep := doctor.Run(doctor.Deps{
+		Gh: deps.gh(), Home: deps.home(), Shell: shellFlag,
+		Version: info.Version, Offline: offline,
+		GenCompletion: func(shell string) (string, error) {
+			return genCompletion(cmd.Root(), shell)
+		},
+	})
+	out := cmd.OutOrStdout()
+	if asJSON {
+		fmt.Fprint(out, rep.JSON())
+	} else {
+		for _, c := range rep.Checks {
+			fmt.Fprintf(out, "%s %s: %s\n", c.Mark(), c.Name, c.Detail)
+		}
+	}
+	if !rep.OK() {
+		return errors.New("doctor: required checks failed")
+	}
+	return nil
+}
+
+// runUpdate implements `lead update` (RFC §7).
+func runUpdate(cmd *cobra.Command, deps Deps, info VersionInfo) error {
+	flags := cmd.Flags()
+	check, _ := flags.GetBool("check")
+	yes, _ := flags.GetBool("yes")
+	version, _ := flags.GetString("version")
+	out := cmd.OutOrStdout()
+
+	exe := deps.exePath()
+	if update.BrewManaged(exe, deps.lookPath(), deps.BrewPrefix) {
+		fmt.Fprintln(out, "lead is brew-managed; run: brew upgrade kuwa72/tap/lead")
+		return nil
+	}
+
+	ctx := cmd.Context()
+	if version == "" {
+		latest, err := deps.gh().LatestReleaseTag(ctx, update.UpstreamRepo)
+		if err != nil {
+			return fmt.Errorf("latest release: %w", err)
+		}
+		version = latest
+	}
+	avail := update.CompareVersions(info.Version, version) < 0
+	if check {
+		if avail {
+			fmt.Fprintf(out, "Update available: %s -> %s\n", info.Version, version)
+			return errUpdateAvailable
+		}
+		fmt.Fprintf(out, "up to date: %s\n", info.Version)
+		return nil
+	}
+	if !avail {
+		fmt.Fprintf(out, "up to date: %s\n", info.Version)
+		return nil
+	}
+	fmt.Fprintf(out, "Updating lead %s -> %s ...\n", info.Version, version)
+	if !yes && !promptConfirm(deps.stdin(), fmt.Sprintf("Replace %s with %s? [y/N] ", exe, version)) {
+		fmt.Fprintln(out, "aborted: no changes")
+		return nil
+	}
+	if err := update.Replace(cmd.Context(), update.Options{Version: version, ExePath: exe}); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Installed lead %s to %s\n", version, exe)
+	return nil
+}
+
+var errUpdateAvailable = errors.New("update available")
+
+func promptConfirm(stdin io.Reader, question string) bool {
+	if stdin == nil {
+		return false
+	}
+	var ans string
+	if _, err := fmt.Fscanln(stdin, &ans); err != nil {
+		return false
+	}
+	ans = strings.ToLower(strings.TrimSpace(ans))
+	return ans == "y" || ans == "yes"
+}
 func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 	number, err := strconv.Atoi(raw)
 	if err != nil || number <= 0 {

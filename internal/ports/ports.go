@@ -39,6 +39,12 @@ type GhClient interface {
 	IssueClose(ctx context.Context, number int) error
 	// IssueComment mirrors `gh issue comment <n> --body <body>`.
 	IssueComment(ctx context.Context, number int, body string) error
+	// AuthStatus mirrors `gh auth status` (exit 0 = authenticated).
+	AuthStatus(ctx context.Context) error
+	// ApiUser mirrors `gh api user --jq .login` (reachability probe).
+	ApiUser(ctx context.Context) (string, error)
+	// LatestReleaseTag mirrors `gh api repos/<repo>/releases/latest --jq .tag_name`.
+	LatestReleaseTag(ctx context.Context, repo string) (string, error)
 }
 
 // PRCheck is one CI check row. Bucket is pass/fail/pending/skipping/cancel.
