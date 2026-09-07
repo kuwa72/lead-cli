@@ -188,3 +188,49 @@ func TestIssueClose_AndComment(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthStatus_AndApiUser(t *testing.T) {
+	body := "if [ \"$1 $2\" = \"auth status\" ]; then :\n" +
+		"elif [ \"$1 $2\" = \"api user\" ]; then printf 'octocat'\n" +
+		"else echo \"unexpected: $@\" >&2; exit 3\nfi"
+	logPath := testutil.InstallDummy(t, "gh", body)
+
+	if err := New().AuthStatus(context.Background()); err != nil {
+		t.Fatalf("AuthStatus: %v", err)
+	}
+	login, err := New().ApiUser(context.Background())
+	if err != nil || login != "octocat" {
+		t.Fatalf("ApiUser = %q, %v; want octocat, nil", login, err)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<auth>", "<status>", "<api>", "<user>", "<--jq>", "<.login>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+}
+
+func TestAuthStatus_PropagatesFailure(t *testing.T) {
+	testutil.InstallDummy(t, "gh", "echo 'not logged in' >&2; exit 1")
+
+	if err := New().AuthStatus(context.Background()); err == nil {
+		t.Fatal("AuthStatus on failing gh = nil, want error")
+	}
+}
+
+func TestLatestReleaseTag(t *testing.T) {
+	body := "if [ \"$1\" = \"api\" ]; then printf 'v0.2.0'\n" +
+		"else echo \"unexpected: $@\" >&2; exit 3\nfi"
+	logPath := testutil.InstallDummy(t, "gh", body)
+
+	got, err := New().LatestReleaseTag(context.Background(), "o/r")
+	if err != nil || got != "v0.2.0" {
+		t.Fatalf("LatestReleaseTag = %q, %v; want v0.2.0, nil", got, err)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<api>", "<repos/o/r/releases/latest>", "<--jq>", "<.tag_name>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+}
