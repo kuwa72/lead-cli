@@ -2,69 +2,27 @@ package agent
 
 import (
 	"context"
-	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/testutil"
 )
 
-// mkDummyAgent installs an executable dummy agent logging each argv as
-// <arg> lines and exiting with exitCode.
-func mkDummyAgent(t *testing.T, name string, exitCode int) (binDir, logPath string) {
+// mkDummyAgent installs a dummy agent exiting with exitCode.
+func mkDummyAgent(t *testing.T, name string, exitCode int) string {
 	t.Helper()
-	binDir = t.TempDir()
-	logPath = filepath.Join(binDir, name+"-args.log")
-	script := "#!/bin/sh\n" +
-		"printf '<%s>\\n' \"$@\" >> \"$AGENT_LOG\"\n" +
-		"exit " + itoa(exitCode) + "\n"
-	if err := os.WriteFile(filepath.Join(binDir, name), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("AGENT_LOG", logPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return binDir, logPath
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [8]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
-}
-
-func readLog(t *testing.T, path string) string {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading dummy log: %v", err)
-	}
-	return string(b)
+	return testutil.InstallDummy(t, name, "exit "+strconv.Itoa(exitCode))
 }
 
 func TestLaunch_AgyUsesInteractiveFlag(t *testing.T) {
-	_, logPath := mkDummyAgent(t, "agy", 0)
+	logPath := mkDummyAgent(t, "agy", 0)
 
 	if err := New().Launch(context.Background(), "agy", "do stuff"); err != nil {
 		t.Fatalf("Launch agy: %v", err)
 	}
-	log := readLog(t, logPath)
+	log := testutil.LogText(t, logPath)
 	if !strings.Contains(log, "<-i>") {
 		t.Errorf("agy argv missing -i/--prompt-interactive flag, got:\n%s", log)
 	}
@@ -75,12 +33,12 @@ func TestLaunch_AgyUsesInteractiveFlag(t *testing.T) {
 
 func TestLaunch_OtherAgentUsesPositionalPrompt(t *testing.T) {
 	for _, name := range []string{"devin", "opencode", "claude"} {
-		_, logPath := mkDummyAgent(t, name, 0)
+		logPath := mkDummyAgent(t, name, 0)
 
 		if err := New().Launch(context.Background(), name, "do stuff"); err != nil {
 			t.Fatalf("Launch %s: %v", name, err)
 		}
-		log := readLog(t, logPath)
+		log := testutil.LogText(t, logPath)
 		if !strings.Contains(log, "<do stuff>") {
 			t.Errorf("Launch %s argv missing positional prompt, got:\n%s", name, log)
 		}
@@ -91,19 +49,19 @@ func TestLaunch_OtherAgentUsesPositionalPrompt(t *testing.T) {
 }
 
 func TestLaunch_EmptyAgentDefaultsToAgy(t *testing.T) {
-	_, logPath := mkDummyAgent(t, "agy", 0)
+	logPath := mkDummyAgent(t, "agy", 0)
 
 	if err := New().Launch(context.Background(), "", "do stuff"); err != nil {
 		t.Fatalf("Launch default: %v", err)
 	}
-	log := readLog(t, logPath)
+	log := testutil.LogText(t, logPath)
 	if !strings.Contains(log, "<-i>") || !strings.Contains(log, "<do stuff>") {
 		t.Errorf("default agent argv = \n%s, want agy -i <prompt>", log)
 	}
 }
 
 func TestLaunch_MissingAgentReturnsTypedError(t *testing.T) {
-	t.Setenv("PATH", t.TempDir()) // no agent binaries on PATH
+	testutil.EmptyBin(t) // no agent binaries on PATH
 
 	err := New().Launch(context.Background(), "agy", "do stuff")
 	if err == nil {
