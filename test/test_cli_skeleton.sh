@@ -9,6 +9,8 @@ cd "$ROOT"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+unset HERDR_ENV || true
+
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build ./cmd/lead failed"

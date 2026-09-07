@@ -13,6 +13,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/adapters/fzf"
+	"github.com/kuwa72/lead-cli/internal/adapters/herdr"
 	"github.com/kuwa72/lead-cli/internal/adapters/ghcli"
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/doctor"
@@ -76,6 +78,7 @@ type Deps struct {
 	ExePath    string
 	LookPath   func(string) (string, error)
 	BrewPrefix func() (string, error)
+	Herdr      ports.HerdrRunner
 	// Selector picks issues when `work` has no number.
 	// Nil means the embedded go-fzf picker (or LEAD_TEST_SELECTION below).
 	Selector tui.Selector
@@ -143,6 +146,13 @@ func (d Deps) lookPath() func(string) (string, error) {
 		return d.LookPath
 	}
 	return exec.LookPath
+}
+
+func (d Deps) herdrRunner() ports.HerdrRunner {
+	if d.Herdr != nil {
+		return d.Herdr
+	}
+	return herdr.NewRunner()
 }
 
 // selector resolves the issue picker: explicit Deps first, then the
@@ -494,13 +504,15 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 	if err != nil {
 		return fmt.Errorf("work #%d: working directory: %w", iss.Number, err)
 	}
-	res, err := workflow.Start(cmd.Context(), deps.gitRunner(), &state.Store{Path: deps.stateFile()}, workflow.StartOptions{
+	store := &state.Store{Path: deps.stateFile()}
+	res, err := workflow.Start(cmd.Context(), deps.gitRunner(), store, workflow.StartOptions{
 		Issue: iss, Mode: mode, Branch: branchFlag, Part: part,
 		Worktree: worktreeOpt, WorkDir: cwd,
 	})
 	if err != nil {
 		return err
 	}
+
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Issue #%d  %s  %s\n", iss.Number, res.Mode, res.Status)
 	fmt.Fprintf(out, "Branch: %s", res.Branch)
@@ -508,8 +520,53 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 		fmt.Fprintf(out, "  Worktree: %s", res.Worktree)
 	}
 	fmt.Fprintln(out)
+
+	agentName, _ := flags.GetString("agent")
+	if res.Pane != "" {
+		fmt.Fprintf(out, "Agent already prepared in pane %s\n", res.Pane)
+	} else {
+		pane, err := launchAgent(cmd.Context(), out, deps, res, agentName, iss)
+		if err != nil {
+			return err
+		}
+		if w, ok, err := store.Get(iss.Number, part); err == nil && ok {
+			w.Pane = pane
+			_ = store.Upsert(w)
+		}
+	}
+
 	fmt.Fprintln(out, "Next: review the prompt, launch the agent, then `lead status`.")
 	return nil
+}
+
+func buildPrompt(iss ports.Issue) string {
+	prompt := fmt.Sprintf("Issue #%d: %s", iss.Number, iss.Title)
+	if body := strings.TrimSpace(iss.Body); body != "" {
+		prompt += "\n\n" + body
+	}
+	return prompt
+}
+
+func launchAgent(ctx context.Context, out io.Writer, deps Deps, res workflow.StartResult, agentName string, iss ports.Issue) (string, error) {
+	launchDir := res.RepoRoot
+	if res.Worktree != "" {
+		launchDir = res.Worktree
+	}
+	command := agent.CommandString(agentName, buildPrompt(iss))
+	prepared := "cd " + strconv.Quote(launchDir) + " && " + command
+
+	h := deps.herdrRunner()
+	if ir, ok := h.(*herdr.InlineRunner); ok && ir.Out == nil {
+		ir.Out = out
+	}
+	pane, err := h.Split(ctx, ports.DirectionRight, 0.5)
+	if err != nil {
+		return "", fmt.Errorf("work #%d: split pane: %w", iss.Number, err)
+	}
+	if err := h.SendText(ctx, pane, prepared); err != nil {
+		return "", fmt.Errorf("work #%d: send agent command: %w", iss.Number, err)
+	}
+	return pane, nil
 }
 
 // runStatus implements `lead status`: local workflow records (RFC §5.3).

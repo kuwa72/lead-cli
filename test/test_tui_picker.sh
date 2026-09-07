@@ -19,6 +19,7 @@ export GOPATH="$REAL_GOPATH" GOCACHE="$REAL_GOCACHE"
 export XDG_CACHE_HOME="$tmp/cache"
 unset LEAD_STATE_FILE || true
 unset LEAD_TEST_SELECTION || true
+unset HERDR_ENV || true
 mkdir -p "$HOME" "$XDG_CACHE_HOME"
 command -v git >/dev/null || fail "git not available"
 

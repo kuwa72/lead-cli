@@ -48,6 +48,7 @@ type Workflow struct {
 	Part         string    `json:"part,omitempty"`
 	Branch       string    `json:"branch"`
 	Worktree     string    `json:"worktree,omitempty"`
+	Pane         string    `json:"pane,omitempty"`
 	PullRequests []PRRef   `json:"pull_requests,omitempty"`
 	Status       Status    `json:"status"`
 	MergePolicy  string    `json:"merge_policy,omitempty"`
