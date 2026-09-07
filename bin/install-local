@@ -1,0 +1,59 @@
+#!/bin/sh
+# bin/install-local - build lead from the working tree and place it in
+# ~/local/bin for local verification (issue #75).
+# Unlike install.sh (which fetches release assets), this builds ./cmd/lead
+# directly and stamps it with dev version info via the same -X ldflags
+# wiring as .goreleaser.yaml.
+#
+# Usage: bin/install-local [--help]
+#
+# Test seam (env): LEAD_LOCAL_DIR overrides the install directory
+# (default: $HOME/local/bin).
+set -eu
+
+usage() {
+  cat <<'EOF'
+Usage: bin/install-local [--help]
+
+  Build ./cmd/lead from the working tree and install to
+  ${LEAD_LOCAL_DIR:-$HOME/local/bin}/lead with dev version stamping.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --help|-h) usage; exit 0 ;;
+    *) echo "error: unknown argument: $1" >&2; usage >&2; exit 1 ;;
+  esac
+done
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+DIR="${LEAD_LOCAL_DIR:-$HOME/local/bin}"
+
+COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo none)"
+if [ "$COMMIT" = "none" ]; then
+  VERSION="dev"
+else
+  VERSION="dev-$COMMIT"
+fi
+DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+mkdir -p "$DIR" || { echo "error: cannot create $DIR" >&2; exit 2; }
+
+echo "Building lead ($VERSION)..."
+CGO_ENABLED=0 go build \
+  -ldflags "-s -w -X main.Version=$VERSION -X main.Commit=$COMMIT -X main.Date=$DATE" \
+  -o "$DIR/lead" ./cmd/lead \
+  || { echo "error: go build failed" >&2; exit 2; }
+chmod 755 "$DIR/lead"
+
+"$DIR/lead" version >/dev/null 2>&1 \
+  || { echo "error: installed binary fails version smoke test" >&2; rm -f "$DIR/lead"; exit 2; }
+
+echo "Installed $DIR/lead ($VERSION)"
+case ":$PATH:" in
+  *":$DIR:"*) ;;
+  *) echo "note: $DIR is not on PATH" ;;
+esac
