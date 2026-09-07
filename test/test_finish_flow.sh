@@ -17,6 +17,7 @@ REAL_GOCACHE="$(go env GOCACHE)"
 export HOME="$tmp/home"
 export GOPATH="$REAL_GOPATH" GOCACHE="$REAL_GOCACHE"
 unset XDG_STATE_HOME || true
+unset HERDR_ENV || true
 mkdir -p "$HOME"
 command -v git >/dev/null || fail "git not available"
 

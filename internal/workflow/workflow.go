@@ -40,6 +40,8 @@ type StartResult struct {
 	Status     state.Status
 	Repository string
 	Mode       string
+	RepoRoot   string
+	Pane       string
 }
 
 // Start creates/checks out the branch, optionally creates a worktree, and
@@ -114,6 +116,7 @@ func Start(ctx context.Context, g GitRunner, store *state.Store, opts StartOptio
 		if worktree == "" {
 			w.Worktree = existing.Worktree
 		}
+		w.Pane = existing.Pane
 		w.PullRequests = existing.PullRequests
 		w.MergePolicy = existing.MergePolicy
 		w.Artifacts = existing.Artifacts
@@ -123,6 +126,6 @@ func Start(ctx context.Context, g GitRunner, store *state.Store, opts StartOptio
 	}
 	return StartResult{
 		Branch: branch, Worktree: w.Worktree, Status: w.Status,
-		Repository: repo, Mode: mode,
+		Repository: repo, Mode: mode, RepoRoot: repoRoot, Pane: w.Pane,
 	}, nil
 }
