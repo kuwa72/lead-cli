@@ -46,9 +46,21 @@ case "$1 $2" in
 esac
 EOF
 chmod +x "$tmp/bin/gh"
+cat > "$tmp/bin/herdr" <<'EOF'
+#!/bin/sh
+echo "HERDR $@" >> "$HERDR_LOG"
+case "$1 $2" in
+  "pane split") printf '{"result":{"pane":{"pane_id":"test-pane"}}}' ;;
+  "pane send-text") : ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$tmp/bin/herdr"
 export PATH="$tmp/bin:$PATH"
 export GH_ARGS_LOG="$tmp/gh-args.log"
+export HERDR_LOG="$tmp/herdr.log"
 : > "$GH_ARGS_LOG"
+: > "$HERDR_LOG"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 cd "$repo"
