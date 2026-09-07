@@ -2,10 +2,22 @@
 set -euo pipefail
 
 # tools/ci-wait.sh 互換の堅牢な CI 待機スクリプト
+#
+# 全 gh 呼び出しは gh_run 経由で timeout 付き (issue #61)。
+# 停滞 (exit 124) は呼び出し側で再試行・継続・明示終了のいずれかに畳む。
+GH_TIMEOUT="${CI_WAIT_GH_TIMEOUT:-60}"
+gh_run() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$GH_TIMEOUT" gh "$@"
+  else
+    gh "$@"
+  fi
+}
+
 pr=${1:-}
 if [ -z "$pr" ]; then
-  pr=$(gh pr view --json number -q .number 2>/dev/null) || {
-    echo "ci-wait: このブランチに PR がありません。番号を指定してください。" >&2
+  pr=$(gh_run pr view --json number -q .number 2>/dev/null) || {
+    echo "ci-wait: このブランチに PR がありません。番号を指定してください。(gh 応答なしの場合も同様)" >&2
     exit 2
   }
 fi
@@ -14,18 +26,21 @@ limit=${CI_WAIT_TIMEOUT:-1800}
 echo "ci-wait: PR #${pr} のチェックを待機します (最大 ${limit}s)"
 
 no_checks_p() {
-  gh pr checks "$pr" 2>&1 | grep -q 'no checks reported'
+  # 停滞時は「不明」として継続 (後段の watch が期限付きで再確認する)。
+  gh_run pr checks "$pr" 2>&1 | grep -q 'no checks reported'
 }
 
 failed_checks() {
-  gh pr checks "$pr" --json bucket,name \
+  # 停滞時は空 (失敗不明) として継続。watch --fail-fast が到達時に検出する。
+  gh_run pr checks "$pr" --json bucket,name \
     -q '.[] | select(.bucket == "fail" or .bucket == "cancel") | .name' 2>/dev/null
 }
 
 # 衝突チェック (GitHub の非同期判定待ち考慮)
+# 停滞時は空文字→ UNKNOWN 扱いで再試行 (6回で打切り)。
 mergeable=""
 for _ in {1..6}; do
-  mergeable=$(gh pr view "$pr" --json mergeable -q .mergeable 2>/dev/null || true)
+  mergeable=$(gh_run pr view "$pr" --json mergeable -q .mergeable 2>/dev/null || true)
   case "$mergeable" in
     MERGEABLE) break ;;
     CONFLICTING|UNKNOWN|"") sleep 5 ;;
@@ -76,13 +91,13 @@ done
 
 if [ "$rc" -eq 124 ]; then
   echo "ci-wait: タイムアウト (${limit}s)"
-  gh pr checks "$pr" || true
+  gh_run pr checks "$pr" || true
   exit 2
 fi
 
 echo ""
 echo "===== CI チェック結果 ====="
-gh pr checks "$pr" || true
+gh_run pr checks "$pr" || true
 
 if [ "$rc" -eq 0 ]; then
   echo "ci-wait: 全チェック成功。"
