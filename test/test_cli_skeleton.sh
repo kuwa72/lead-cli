@@ -47,5 +47,8 @@ echo "$bash_out" | bash -n || fail "generated bash completion fails syntax check
 # bare `lead work` は実 picker を開くため、非TTY環境では
 # TTY エラーで非ゼロ終了する (正常系は test_tui_picker.sh で検証)。
 "$tmp/lead" run >/dev/null 2>&1 && fail "bare 'lead run' exited 0"
+# bare `lead` は受信箱 TUI (issue #91)。非TTY では非ゼロ終了し --help を案内する
+# (正常系は test_inbox.sh で検証)。
+"$tmp/lead" </dev/null >/dev/null 2>&1 && fail "bare 'lead' on non-TTY exited 0"
 
 echo "cli skeleton behavioral checks passed"

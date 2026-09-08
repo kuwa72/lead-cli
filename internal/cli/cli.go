@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/adapters/fzf"
@@ -37,6 +38,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/dispatch"
 	"github.com/kuwa72/lead-cli/internal/doctor"
 	"github.com/kuwa72/lead-cli/internal/finish"
+	"github.com/kuwa72/lead-cli/internal/inbox"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/projinit"
 	"github.com/kuwa72/lead-cli/internal/server"
@@ -215,7 +217,12 @@ func NewRootCmdWithDeps(version, commit, date string, deps Deps) *cobra.Command 
 		Use:   "lead",
 		Short: "GitHub Issue–triggered multi-agent orchestrator",
 		Long: `lead drives Issues to completion: select an issue, branch, launch a
-coding agent (Herdr side-pane or inline), then wait CI and merge.`,
+coding agent (Herdr side-pane or inline), then wait CI and merge.
+
+Without a subcommand lead opens the inbox (docs/rfc-inbox-ux.md §5): the
+needs-review / blocked issues plus locally derived merged/running sections,
+with single-key approve (a), edit-and-approve (e), reject (x), comment (t).
+It needs an interactive terminal; use --help for the subcommand list.`,
 		SilenceUsage: true, // runtime/stub errors print the error, not full usage
 		// Historical #35 behavior: bare `lead --version`/`-v` prints the same
 		// stamped string as `lead version` (cobra's built-in --version flag
@@ -225,7 +232,7 @@ coding agent (Herdr side-pane or inline), then wait CI and merge.`,
 				fmt.Fprintln(cmd.OutOrStdout(), info.String())
 				return nil
 			}
-			return cmd.Help()
+			return runInbox(cmd, deps)
 		},
 	}
 	root.PersistentFlags().BoolP("version", "v", false, "print version information and exit")
@@ -464,6 +471,40 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 
 	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, initCmd)
 	return root
+}
+
+// runInbox implements bare `lead` (issue #91): the inbox TUI. Without a TTY it
+// exits non-zero with a hint (#81 requirement), unless LEAD_TEST_INBOX_KEYS
+// replays keys headlessly for shell tests (same idea as LEAD_TEST_SELECTION).
+func runInbox(cmd *cobra.Command, deps Deps) error {
+	cwd, err := deps.workDir()
+	if err != nil {
+		return fmt.Errorf("inbox: working directory: %w", err)
+	}
+	root := cwd
+	if r, err := deps.gitRunner().RepoRoot(cwd); err == nil && r != "" {
+		root = r
+	}
+	opts := inbox.Options{
+		Gh:         deps.gh(),
+		Store:      &state.Store{Path: deps.stateFile()},
+		Editor:     os.Getenv("EDITOR"),
+		AgentsPath: filepath.Join(root, "AGENTS.md"),
+		Repo:       inbox.RepoSlug(deps.gitRunner().OriginURL(root)),
+	}
+	if keys := os.Getenv("LEAD_TEST_INBOX_KEYS"); keys != "" {
+		opts.Shell = inbox.SyncShell{}
+		return inbox.RunHeadless(inbox.New(opts), strings.Split(keys, ","), cmd.OutOrStdout())
+	}
+	if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
+		return errors.New("lead: the inbox needs an interactive terminal (stdin/stdout are not a TTY); run `lead --help` for subcommands")
+	}
+	opts.Refresh = 30 * time.Second
+	return inbox.Run(inbox.New(opts))
+}
+
+func isTerminal(f *os.File) bool {
+	return term.IsTerminal(int(f.Fd()))
 }
 
 // runWorkTUI implements `lead work` without a number: embedded picker

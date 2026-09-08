@@ -141,6 +141,21 @@ type FakeGhClient struct {
 	LabelErr       error
 	AddedLabels    []LabelCall
 	RemovedLabels  []LabelCall
+
+	EditBodyErr  error
+	EditedBodies []BodyEdit
+}
+
+// BodyEdit records one IssueEditBody invocation.
+type BodyEdit struct {
+	Number int
+	Body   string
+}
+
+// IssueEditBody records the call (or returns EditBodyErr).
+func (f *FakeGhClient) IssueEditBody(ctx context.Context, number int, body string) error {
+	f.EditedBodies = append(f.EditedBodies, BodyEdit{Number: number, Body: body})
+	return f.EditBodyErr
 }
 
 // LabelCall records one IssueAddLabel / IssueRemoveLabel invocation.
