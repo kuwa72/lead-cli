@@ -41,6 +41,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/projinit"
 	"github.com/kuwa72/lead-cli/internal/server"
 	"github.com/kuwa72/lead-cli/internal/setup"
+	"github.com/kuwa72/lead-cli/internal/spec"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/tui"
 	"github.com/kuwa72/lead-cli/internal/update"
@@ -86,6 +87,15 @@ type Deps struct {
 	Selector tui.Selector
 	// Launcher starts headless agents for `dispatch`. Nil means real processes.
 	Launcher dispatch.Launcher
+	// SpecAgent runs the headless spec agent for `say`. Nil means real processes.
+	SpecAgent spec.AgentRunner
+}
+
+func (d Deps) specAgent() spec.AgentRunner {
+	if d.SpecAgent != nil {
+		return d.SpecAgent
+	}
+	return &spec.ExecRunner{LookPath: d.LookPath}
 }
 
 func (d Deps) launcher() dispatch.Launcher {
@@ -311,6 +321,28 @@ agents are not killed on exit.`,
 	dispatchCmd.Flags().String("agent", "", "headless implementation agent (default: agy)")
 	dispatchCmd.Flags().Bool("skip-protection-check", false, "start even if the default branch lacks protection / required checks (warns)")
 
+	sayCmd := &cobra.Command{
+		Use:   "say <one-liner>",
+		Short: "Turn a one-liner into needs-review issues via the spec agent",
+		Long: `Spec AI (docs/rfc-inbox-ux.md §8). Runs the spec agent headlessly with
+the one-liner, this repository's AGENTS.md and (with --follow-up) the
+original issue, then files the drafts it returns with
+` + "`gh issue create --label needs-review`" + ` (titles are linted, siblings
+cross-reference each other). --redraft <n> rewrites issue n's body instead
+and posts a comment describing the change. --dry-run prints the would-be
+issues and touches nothing on GitHub. The agent's output is logged under
+the state directory (logs/say-*.log). Agent: --agent, else $LEAD_SPEC_AGENT,
+else agy.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSay(cmd, deps, args[0])
+		},
+	}
+	sayCmd.Flags().String("agent", "", "headless spec agent (default: $LEAD_SPEC_AGENT, then agy)")
+	sayCmd.Flags().Bool("dry-run", false, "print the would-be issues; no gh mutation")
+	sayCmd.Flags().Int("follow-up", 0, "file follow-up issue(s) for issue <n> (実機 NG); body references #<n>")
+	sayCmd.Flags().Int("redraft", 0, "rewrite issue <n>'s title/body from the one-liner and comment the change")
+
 	setupCmd := &cobra.Command{
 		Use:   "setup",
 		Short: "Interactive environment setup (completions, keybinding)",
@@ -478,7 +510,42 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 	apiCmd.AddCommand(schemaCmd, snapshotCmd, callCmd)
 
 	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, initCmd)
+	root.AddCommand(sayCmd)
 	return root
+}
+
+// runSay implements `lead say` (RFC inbox §8, issue #94).
+func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
+	flags := cmd.Flags()
+	agentName, _ := flags.GetString("agent")
+	if agentName == "" {
+		agentName = os.Getenv("LEAD_SPEC_AGENT")
+	}
+	dryRun, _ := flags.GetBool("dry-run")
+	followUp, _ := flags.GetInt("follow-up")
+	redraft, _ := flags.GetInt("redraft")
+
+	cwd, err := deps.workDir()
+	if err != nil {
+		return fmt.Errorf("say: working directory: %w", err)
+	}
+	repo := deps.gitRunner().OriginURL(cwd)
+	r := &spec.Runner{
+		Gh:    deps.gh(),
+		Agent: deps.specAgent(),
+		Out:   cmd.OutOrStdout(),
+		Opts: spec.Options{
+			Agent:      agentName,
+			LogDir:     filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
+			WorkDir:    cwd,
+			Repository: repo,
+			DryRun:     dryRun,
+			FollowUp:   followUp,
+			Redraft:    redraft,
+		},
+	}
+	_, err = r.Say(cmd.Context(), oneLiner)
+	return err
 }
 
 // runWorkTUI implements `lead work` without a number: embedded picker

@@ -63,6 +63,14 @@ type GhClient interface {
 	// (404 = no classic protection) merged with the rulesets that apply to the
 	// branch (`gh api repos/<repo>/rules/branches/<branch>`). Issue #67.
 	BranchProtection(ctx context.Context, repo, branch string) (BranchProtection, error)
+	// IssueCreate mirrors `gh issue create --title <t> --body <b> --label <l>...`
+	// and returns the created issue (number parsed from the printed URL).
+	// Spec AI: docs/rfc-inbox-ux.md §8.
+	IssueCreate(ctx context.Context, title, body string, labels []string) (IssueRef, error)
+	// IssueComments mirrors `gh issue view <n> --json comments`.
+	IssueComments(ctx context.Context, number int) ([]Comment, error)
+	// IssueEdit mirrors `gh issue edit <n> --title <t> --body-file <f>`.
+	IssueEdit(ctx context.Context, number int, title, body string) error
 }
 
 // BranchProtection is what `lead doctor` / `lead dispatch` need to know
@@ -76,6 +84,19 @@ type BranchProtection struct {
 	RequiredChecks []string
 	// RequiresPR is true when direct pushes are blocked (PR required).
 	RequiresPR bool
+}
+
+// IssueRef identifies a created issue.
+type IssueRef struct {
+	Number int
+	URL    string
+}
+
+// Comment is one row of `gh issue view --json comments`.
+type Comment struct {
+	Author    string
+	Body      string
+	CreatedAt string
 }
 
 // PRCheck is one CI check row. Bucket is pass/fail/pending/skipping/cancel.

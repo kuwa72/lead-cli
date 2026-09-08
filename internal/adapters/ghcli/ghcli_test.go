@@ -2,6 +2,8 @@ package ghcli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,6 +11,83 @@ import (
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/testutil"
 )
+
+// specServeBody answers the spec-AI calls (issue #94).
+const specServeBody = `if [ "$1 $2" = "issue create" ]; then
+  echo "Creating issue in o/r"; echo "https://github.com/o/r/issues/123"
+elif [ "$1 $2" = "issue view" ] && [ "$5" = "comments" ]; then
+  printf '{"comments":[{"author":{"login":"kuwa72"},"body":"first","createdAt":"2026-09-08T00:00:00Z"},{"author":{"login":"bot"},"body":"second","createdAt":"2026-09-08T01:00:00Z"}]}'
+elif [ "$1 $2" = "issue edit" ]; then
+  cat "$7" > "$(dirname "$0")/edit-body.txt"
+else
+  echo "unexpected: $@" >&2; exit 3
+fi`
+
+func TestIssueCreate_ParsesNumberFromURL(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", specServeBody)
+	ref, err := New().IssueCreate(context.Background(), "feat: t", "line1\nline2", []string{"needs-review"})
+	if err != nil {
+		t.Fatalf("IssueCreate: %v", err)
+	}
+	if ref.Number != 123 || ref.URL != "https://github.com/o/r/issues/123" {
+		t.Errorf("ref = %+v", ref)
+	}
+	want := []string{"<issue>", "<create>", "<--title>", "<feat: t>", "<--body>", "<line1", "line2>", "<--label>", "<needs-review>"}
+	got := testutil.LogLines(t, logPath)
+	if len(got) != len(want) {
+		t.Fatalf("argv lines = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("argv[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIssueCreate_RejectsUnparseableOutput(t *testing.T) {
+	testutil.InstallDummy(t, "gh", `echo "no url here"`)
+	if _, err := New().IssueCreate(context.Background(), "t", "b", nil); err == nil {
+		t.Error("unparseable output accepted")
+	}
+}
+
+func TestIssueComments_DecodesAuthorBodyCreatedAt(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", specServeBody)
+	got, err := New().IssueComments(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("IssueComments: %v", err)
+	}
+	if len(got) != 2 || got[0].Author != "kuwa72" || got[0].Body != "first" || got[0].CreatedAt != "2026-09-08T00:00:00Z" || got[1].Author != "bot" {
+		t.Errorf("comments = %+v", got)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<issue>", "<view>", "<7>", "<--json>", "<comments>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+}
+
+func TestIssueEdit_UsesBodyFile(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", specServeBody)
+	if err := New().IssueEdit(context.Background(), 7, "new title", "new\nbody"); err != nil {
+		t.Fatalf("IssueEdit: %v", err)
+	}
+	got := testutil.LogLines(t, logPath)
+	if len(got) != 7 || got[0] != "<issue>" || got[1] != "<edit>" || got[2] != "<7>" || got[3] != "<--title>" || got[4] != "<new title>" || got[5] != "<--body-file>" {
+		t.Fatalf("argv = %q", got)
+	}
+	captured, err := os.ReadFile(filepath.Join(filepath.Dir(logPath), "edit-body.txt"))
+	if err != nil {
+		t.Fatalf("dummy did not capture body file: %v", err)
+	}
+	if string(captured) != "new\nbody" {
+		t.Errorf("body file = %q", captured)
+	}
+	if _, err := os.Stat(strings.Trim(got[6], "<>")); !os.IsNotExist(err) {
+		t.Errorf("temp body file not removed: %v", err)
+	}
+}
 
 // ghServeBody serves canned issue JSON for list/view like the real `gh`.
 const ghServeBody = `if [ "$1 $2" = "issue list" ]; then
