@@ -25,18 +25,20 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/adapters/fzf"
-	"github.com/kuwa72/lead-cli/internal/adapters/herdr"
 	"github.com/kuwa72/lead-cli/internal/adapters/ghcli"
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
+	"github.com/kuwa72/lead-cli/internal/adapters/herdr"
+	"github.com/kuwa72/lead-cli/internal/dispatch"
 	"github.com/kuwa72/lead-cli/internal/doctor"
 	"github.com/kuwa72/lead-cli/internal/finish"
-	"github.com/kuwa72/lead-cli/internal/projinit"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/projinit"
 	"github.com/kuwa72/lead-cli/internal/server"
 	"github.com/kuwa72/lead-cli/internal/setup"
 	"github.com/kuwa72/lead-cli/internal/state"
@@ -79,9 +81,18 @@ type Deps struct {
 	LookPath   func(string) (string, error)
 	BrewPrefix func() (string, error)
 	Herdr      ports.HerdrRunner
-	// Selector picks issues when `work` has no number.
+	// Selector picks issues when `run` has no number.
 	// Nil means the embedded go-fzf picker (or LEAD_TEST_SELECTION below).
 	Selector tui.Selector
+	// Launcher starts headless agents for `dispatch`. Nil means real processes.
+	Launcher dispatch.Launcher
+}
+
+func (d Deps) launcher() dispatch.Launcher {
+	if d.Launcher != nil {
+		return d.Launcher
+	}
+	return &dispatch.ExecLauncher{LookPath: d.LookPath}
 }
 
 func (d Deps) gh() ports.GhClient {
@@ -228,32 +239,62 @@ coding agent (Herdr side-pane or inline), then wait CI and merge.`,
 		},
 	}
 
-	workCmd := &cobra.Command{
-		Use:   "work [issue-number]",
-		Short: "Start working on an issue (branch + worktree + state)",
-		Long: `With an issue number: fetch the issue, create/check out the working
-branch, optionally create a worktree, and record the workflow state.
-Without a number, the embedded picker selects the issue and action
-(issue list + cached preview, then agent/browser).
-Agent process launch after selection is still manual (next step below).`,
-		Args: cobra.MaximumNArgs(1),
+	// `run` is the manual override of the inbox flow (docs/rfc-inbox-ux.md §6);
+	// `work` stays as a hidden alias for scripts written before the rename.
+	newRunCmd := func(use string, hidden bool) *cobra.Command {
+		c := &cobra.Command{
+			Use:    use + " [issue-number]",
+			Short:  "Manually start one issue (branch + worktree + interactive agent)",
+			Hidden: hidden,
+			Long: `Manual override of the dispatch flow. With an issue number: fetch the
+issue, create/check out the working branch, optionally create a worktree,
+record the workflow state, and prepare the agent in a Herdr pane (or print
+the command inline). Without a number, the embedded picker selects the
+issue. Normal operation is ` + "`lead dispatch`" + `, which needs no human step.`,
+			Args: cobra.MaximumNArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				if len(args) == 0 {
+					return runWorkTUI(cmd, deps)
+				}
+				return runWork(cmd, deps, args[0])
+			},
+		}
+		// Flags per docs/rfc-25-workflow-flexibility.md §6.1.
+		c.Flags().String("mode", state.ModeImplement, "execution mode (implement|split|research|docs)")
+		c.Flags().String("branch", "", "use existing branch instead of creating one")
+		c.Flags().String("pr", "", "attach to existing PR instead of creating one")
+		c.Flags().String("worktree", "", "create isolated worktree: bare flag = auto path, or --worktree=<path>")
+		c.Flags().String("part", "", "work unit within a multi-PR issue")
+		c.Flags().Bool("draft", false, "create PR as draft")
+		c.Flags().String("agent", "", "coding agent (default: agy)")
+		// Bare `--worktree` means "auto path under <repo>/.worktrees".
+		c.Flags().Lookup("worktree").NoOptDefVal = "auto"
+		return c
+	}
+	runCmd := newRunCmd("run", false)
+	workCmd := newRunCmd("work", true)
+
+	dispatchCmd := &cobra.Command{
+		Use:   "dispatch",
+		Short: "Hand ready issues to headless agents (worktree per issue)",
+		Long: `Foreground dispatcher (docs/rfc-inbox-ux.md §7). Each pass lists open
+issues labelled "ready", skips locally blocked ones, and for up to
+--parallel of them creates a worktree and runs the agent non-interactively
+with the issue and completion definition as its prompt. When the agent
+returns and the issue is closed on GitHub, the worktree and state record
+are removed. Otherwise the attempt is counted; after 3 failures the issue
+is relabelled "blocked" with the cause posted as a comment.
+Without --once the pass repeats every --interval until Ctrl-C; running
+agents are not killed on exit.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				return runWorkTUI(cmd, deps)
-			}
-			return runWork(cmd, deps, args[0])
+			return runDispatch(cmd, deps)
 		},
 	}
-	// Flags per docs/rfc-25-workflow-flexibility.md §6.1.
-	workCmd.Flags().String("mode", state.ModeImplement, "execution mode (implement|split|research|docs)")
-	workCmd.Flags().String("branch", "", "use existing branch instead of creating one")
-	workCmd.Flags().String("pr", "", "attach to existing PR instead of creating one")
-	workCmd.Flags().String("worktree", "", "create isolated worktree: bare flag = auto path, or --worktree=<path>")
-	workCmd.Flags().String("part", "", "work unit within a multi-PR issue")
-	workCmd.Flags().Bool("draft", false, "create PR as draft")
-	workCmd.Flags().String("agent", "", "coding agent (default: agy)")
-	// Bare `--worktree` means "auto path under <repo>/.worktrees".
-	workCmd.Flags().Lookup("worktree").NoOptDefVal = "auto"
+	dispatchCmd.Flags().Int("parallel", dispatch.DefaultParallel, "max agents running at once")
+	dispatchCmd.Flags().Bool("once", false, "run a single pass and exit")
+	dispatchCmd.Flags().Duration("interval", 30*time.Second, "pause between passes")
+	dispatchCmd.Flags().String("agent", "", "headless implementation agent (default: agy)")
 
 	setupCmd := &cobra.Command{
 		Use:   "setup",
@@ -421,7 +462,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 	callCmd.Flags().String("args", "", "JSON object args (default {})")
 	apiCmd.AddCommand(schemaCmd, snapshotCmd, callCmd)
 
-	root.AddCommand(versionCmd, workCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, initCmd)
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, initCmd)
 	return root
 }
 
@@ -467,8 +508,44 @@ func runWorkTUI(cmd *cobra.Command, deps Deps) error {
 	return runWorkIssue(cmd, deps, ports.Issue{Number: sel.IssueNumber, Title: title})
 }
 
-// runWork implements `lead work <number>`: fetch the issue, then branch +
-// optional worktree + state record. Re-running is idempotent.
+// runDispatch implements `lead dispatch` (RFC inbox §7 Part A).
+func runDispatch(cmd *cobra.Command, deps Deps) error {
+	flags := cmd.Flags()
+	parallel, _ := flags.GetInt("parallel")
+	once, _ := flags.GetBool("once")
+	interval, _ := flags.GetDuration("interval")
+	agentName, _ := flags.GetString("agent")
+
+	cwd, err := deps.workDir()
+	if err != nil {
+		return fmt.Errorf("dispatch: working directory: %w", err)
+	}
+	stateFile := deps.stateFile()
+	d := &dispatch.Dispatcher{
+		Gh:       deps.gh(),
+		Git:      deps.gitRunner(),
+		Store:    &state.Store{Path: stateFile},
+		Launcher: deps.launcher(),
+		Out:      cmd.OutOrStdout(),
+		Opts: dispatch.Options{
+			Parallel: parallel,
+			Agent:    agentName,
+			LogDir:   filepath.Join(filepath.Dir(stateFile), "logs"),
+			WorkDir:  cwd,
+		},
+	}
+	if once {
+		_, err := d.Once(cmd.Context())
+		return err
+	}
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return d.Loop(ctx, interval)
+}
+
+// runWork implements `lead run <number>` (and the hidden `work` alias):
+// fetch the issue, then branch + optional worktree + state record.
+// Re-running is idempotent.
 func runWork(cmd *cobra.Command, deps Deps, raw string) error {
 	number, err := strconv.Atoi(raw)
 	if err != nil || number <= 0 {

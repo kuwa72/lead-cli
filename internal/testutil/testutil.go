@@ -133,9 +133,44 @@ type FakeGhClient struct {
 	Closed      []int
 	Browsed     []int
 	Comments    []IssueComment
+
+	// Labeled feeds ListByLabel: label → summaries.
+	Labeled        map[string][]ports.IssueSummary
+	LabelListErr   error
+	LabelListCalls []string
+	LabelErr       error
+	AddedLabels    []LabelCall
+	RemovedLabels  []LabelCall
+}
+
+// LabelCall records one IssueAddLabel / IssueRemoveLabel invocation.
+type LabelCall struct {
+	Number int
+	Label  string
 }
 
 var _ ports.GhClient = (*FakeGhClient)(nil)
+
+// ListByLabel returns Labeled[label] (or LabelListErr) and records the call.
+func (f *FakeGhClient) ListByLabel(ctx context.Context, label string) ([]ports.IssueSummary, error) {
+	f.LabelListCalls = append(f.LabelListCalls, label)
+	if f.LabelListErr != nil {
+		return nil, f.LabelListErr
+	}
+	return f.Labeled[label], nil
+}
+
+// IssueAddLabel records the call (or returns LabelErr).
+func (f *FakeGhClient) IssueAddLabel(ctx context.Context, number int, label string) error {
+	f.AddedLabels = append(f.AddedLabels, LabelCall{Number: number, Label: label})
+	return f.LabelErr
+}
+
+// IssueRemoveLabel records the call (or returns LabelErr).
+func (f *FakeGhClient) IssueRemoveLabel(ctx context.Context, number int, label string) error {
+	f.RemovedLabels = append(f.RemovedLabels, LabelCall{Number: number, Label: label})
+	return f.LabelErr
+}
 
 // ListOpen returns Summaries (or ListErr) and records the call.
 func (f *FakeGhClient) ListOpen(ctx context.Context) ([]ports.IssueSummary, error) {

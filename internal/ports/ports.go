@@ -47,6 +47,13 @@ type GhClient interface {
 	LatestReleaseTag(ctx context.Context, repo string) (string, error)
 	// BrowseIssue mirrors `gh issue view <n> --web`.
 	BrowseIssue(ctx context.Context, number int) error
+	// ListByLabel mirrors `gh issue list --state open --label <l> --json number,title`
+	// (dispatch queue: docs/rfc-inbox-ux.md §7).
+	ListByLabel(ctx context.Context, label string) ([]IssueSummary, error)
+	// IssueAddLabel mirrors `gh issue edit <n> --add-label <l>`.
+	IssueAddLabel(ctx context.Context, number int, label string) error
+	// IssueRemoveLabel mirrors `gh issue edit <n> --remove-label <l>`.
+	IssueRemoveLabel(ctx context.Context, number int, label string) error
 }
 
 // PRCheck is one CI check row. Bucket is pass/fail/pending/skipping/cancel.

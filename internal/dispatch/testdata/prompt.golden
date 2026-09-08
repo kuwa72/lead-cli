@@ -1,0 +1,21 @@
+Issue #42: feat: thing
+
+## 受入条件
+- a
+- b
+
+---
+## 完了定義（lead dispatch）
+
+この Issue はヘッドレスで担当している。途中で人間の確認は入らない。次をすべて自分で完了させること。
+
+1. 現在のディレクトリ（この Issue 専用の worktree・ブランチ）で作業する。main には直接 push しない。
+2. TDD: 先に失敗するテストを追加して Red を確認し、実装して Green にする。
+3. リポジトリのテストをすべてパスさせる（./test/run-tests.sh、なければ go test ./... 等プロジェクト固有のコマンド）。
+4. git push -u origin <現在のブランチ> し、gh pr create --fill --base main で PR を作る。PR 本文に Issue の受入条件をチェックリストとして転記し、Closes #42 を含める。
+5. bin/ci-wait <PR番号>（なければ gh pr checks）で CI が全て pass するまで待つ。
+6. gh pr merge --squash --delete-branch でマージする。
+7. gh issue view 42 --json state で closed になったことを確認する。closed でなければ gh issue close 42 する。
+8. 進められない場合は原因と試したことを gh issue comment 42 --body に書いて終了する。
+
+AGENTS.md、.claude/、.devin/ などプロジェクト規約ファイルは、この Issue で明示されていない限り編集しない。
