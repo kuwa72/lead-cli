@@ -3,8 +3,8 @@
 - **Issue**: [#16](https://github.com/kuwa72/lead-cli/issues/16)
 - **親トラッキングIssue**: [#29](https://github.com/kuwa72/lead-cli/issues/29)
 - **インプット**: [#22 実装言語移行検討](rfc-22-language-migration.md) / [#24 競合・類似ツール調査](rfc-24-competitor-analysis.md)
-- **ステータス**: Proposal / RFC
-- **更新日**: 2026-09-06
+- **ステータス**: Accepted。§3（基本UXモデル）は [rfc-inbox-ux.md](rfc-inbox-ux.md) により **Superseded**。§2（提供形態）は有効
+- **更新日**: 2026-09-08
 
 ---
 
