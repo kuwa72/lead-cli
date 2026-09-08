@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/testutil"
 )
 
 func execute(t *testing.T, args ...string) (stdout, stderr string, err error) {
@@ -45,6 +49,48 @@ func TestUnknownCommandFails(t *testing.T) {
 	_, _, err := execute(t, "no-such-command")
 	if err == nil {
 		t.Fatal("lead no-such-command = nil error, want non-zero exit")
+	}
+}
+
+// Bare `lead` opens the inbox TUI (issue #91). Under `go test` stdin is not a
+// terminal, so it must refuse with a hint instead of printing help or hanging.
+func TestBareLeadWithoutTTYFailsWithHelpHint(t *testing.T) {
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "")
+	stdout, _, err := execute(t)
+	if err == nil {
+		t.Fatal("bare lead on non-TTY = nil error, want non-zero exit")
+	}
+	if !strings.Contains(err.Error(), "--help") {
+		t.Errorf("error should point at --help, got %q", err)
+	}
+	if strings.Contains(stdout, "Available Commands") {
+		t.Errorf("bare lead must not print help anymore, got:\n%s", stdout)
+	}
+}
+
+// LEAD_TEST_INBOX_KEYS drives the inbox headlessly; `a` on the first
+// needs-review issue must swap labels through the injected gh client.
+func TestBareLeadHeadlessKeysReachGh(t *testing.T) {
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "a,q")
+	gh := &testutil.FakeGhClient{Labeled: map[string][]ports.IssueSummary{
+		"needs-review": {{Number: 7, Title: "spec"}},
+	}}
+	root := NewRootCmdWithDeps("v0.0.0-test", "abc1234", "2026-09-07", Deps{Gh: gh, WorkDir: t.TempDir()})
+	var out strings.Builder
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs(nil)
+	if err := root.Execute(); err != nil {
+		t.Fatalf("headless inbox: %v", err)
+	}
+	if want := []testutil.LabelCall{{Number: 7, Label: "needs-review"}}; !reflect.DeepEqual(gh.RemovedLabels, want) {
+		t.Errorf("RemovedLabels = %+v, want %+v", gh.RemovedLabels, want)
+	}
+	if want := []testutil.LabelCall{{Number: 7, Label: "ready"}}; !reflect.DeepEqual(gh.AddedLabels, want) {
+		t.Errorf("AddedLabels = %+v, want %+v", gh.AddedLabels, want)
+	}
+	if !strings.Contains(out.String(), "#7") {
+		t.Errorf("headless output should render the inbox, got:\n%s", out.String())
 	}
 }
 

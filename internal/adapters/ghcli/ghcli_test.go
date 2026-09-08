@@ -411,6 +411,27 @@ func TestLatestReleaseTag(t *testing.T) {
 	}
 }
 
+func TestIssueEditBody_FeedsBodyOnStdin(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", `cat > "$(dirname "$0")/stdin.txt"`)
+	testutil.ClearLog(t, logPath)
+
+	body := "-- starts with dashes --\nline two\n"
+	if err := New().IssueEditBody(context.Background(), 7, body); err != nil {
+		t.Fatalf("IssueEditBody: %v", err)
+	}
+	log := testutil.LogText(t, logPath)
+	if want := "<issue>\n<edit>\n<7>\n<--body-file>\n<->\n"; log != want {
+		t.Errorf("gh argv = %q, want %q", log, want)
+	}
+	got, err := os.ReadFile(filepath.Join(filepath.Dir(logPath), "stdin.txt"))
+	if err != nil {
+		t.Fatalf("dummy gh did not capture stdin: %v", err)
+	}
+	if string(got) != body {
+		t.Errorf("stdin body = %q, want %q", got, body)
+	}
+}
+
 func TestBrowseIssue_OpensWebView(t *testing.T) {
 	logPath := testutil.InstallDummy(t, "gh", ":")
 	testutil.ClearLog(t, logPath)

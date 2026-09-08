@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -50,11 +51,17 @@ func (c *Client) lookPath() func(string) (string, error) {
 // run executes bin with args, returning stdout. Exit failures surface
 // gh's stderr so callers see the real cause.
 func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {
+	return c.runStdin(ctx, nil, args...)
+}
+
+// runStdin is run with stdin attached (nil = no stdin).
+func (c *Client) runStdin(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
 	bin := c.bin()
 	if _, err := c.lookPath()(bin); err != nil {
 		return nil, &ports.BinaryNotFoundError{Binary: bin}
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Stdin = stdin
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -228,6 +235,12 @@ func (c *Client) IssueAddLabel(ctx context.Context, number int, label string) er
 // IssueRemoveLabel runs `gh issue edit <n> --remove-label <l>`.
 func (c *Client) IssueRemoveLabel(ctx context.Context, number int, label string) error {
 	_, err := c.run(ctx, "issue", "edit", strconv.Itoa(number), "--remove-label", label)
+	return err
+}
+
+// IssueEditBody runs `gh issue edit <n> --body-file -` feeding body on stdin.
+func (c *Client) IssueEditBody(ctx context.Context, number int, body string) error {
+	_, err := c.runStdin(ctx, strings.NewReader(body), "issue", "edit", strconv.Itoa(number), "--body-file", "-")
 	return err
 }
 

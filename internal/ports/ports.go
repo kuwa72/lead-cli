@@ -54,6 +54,10 @@ type GhClient interface {
 	IssueAddLabel(ctx context.Context, number int, label string) error
 	// IssueRemoveLabel mirrors `gh issue edit <n> --remove-label <l>`.
 	IssueRemoveLabel(ctx context.Context, number int, label string) error
+	// IssueEditBody mirrors `gh issue edit <n> --body-file -` with body on
+	// stdin (inbox `e`: docs/rfc-inbox-ux.md §5.2). stdin keeps arbitrary
+	// bodies — leading dashes, huge text — out of argv.
+	IssueEditBody(ctx context.Context, number int, body string) error
 	// PrFiles mirrors `gh pr view <pr> --json files --jq '.files[].path'`
 	// (guardrail: docs/rfc-inbox-ux.md §7).
 	PrFiles(ctx context.Context, pr int) ([]string, error)
