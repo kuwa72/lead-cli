@@ -41,19 +41,26 @@ type PRRef struct {
 
 // Workflow is one row of workflows.json (RFC §5.2 minimal record).
 type Workflow struct {
-	Repository   string    `json:"repository"`
-	Issue        int       `json:"issue"`
-	ParentIssue  *int      `json:"parent_issue,omitempty"`
-	Mode         string    `json:"mode"`
-	Part         string    `json:"part,omitempty"`
-	Branch       string    `json:"branch"`
-	Worktree     string    `json:"worktree,omitempty"`
-	Pane         string    `json:"pane,omitempty"`
-	PullRequests []PRRef   `json:"pull_requests,omitempty"`
-	Status       Status    `json:"status"`
-	MergePolicy  string    `json:"merge_policy,omitempty"`
-	Artifacts    []string  `json:"artifacts,omitempty"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	Repository   string   `json:"repository"`
+	Issue        int      `json:"issue"`
+	ParentIssue  *int     `json:"parent_issue,omitempty"`
+	Mode         string   `json:"mode"`
+	Part         string   `json:"part,omitempty"`
+	Branch       string   `json:"branch"`
+	Worktree     string   `json:"worktree,omitempty"`
+	Pane         string   `json:"pane,omitempty"`
+	PullRequests []PRRef  `json:"pull_requests,omitempty"`
+	Status       Status   `json:"status"`
+	MergePolicy  string   `json:"merge_policy,omitempty"`
+	Artifacts    []string `json:"artifacts,omitempty"`
+	// Dispatch bookkeeping (docs/rfc-inbox-ux.md §7): which headless agent
+	// ran, how many times it failed to close the issue, the last process
+	// and its log. GitHub stays the source of truth for the issue itself.
+	Agent     string    `json:"agent,omitempty"`
+	Attempts  int       `json:"attempts,omitempty"`
+	PID       int       `json:"pid,omitempty"`
+	LogPath   string    `json:"log_path,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Key identifies a workflow: issue number plus optional --part slug.

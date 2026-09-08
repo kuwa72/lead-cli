@@ -120,6 +120,10 @@ func Start(ctx context.Context, g GitRunner, store *state.Store, opts StartOptio
 		w.PullRequests = existing.PullRequests
 		w.MergePolicy = existing.MergePolicy
 		w.Artifacts = existing.Artifacts
+		w.Agent = existing.Agent
+		w.Attempts = existing.Attempts
+		w.PID = existing.PID
+		w.LogPath = existing.LogPath
 	}
 	if err := store.Upsert(w); err != nil {
 		return StartResult{}, fmt.Errorf("work #%d: %w", number, err)

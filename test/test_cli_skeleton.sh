@@ -19,18 +19,18 @@ CGO_ENABLED=0 go build \
   -o "$tmp/lead-stamped" ./cmd/lead || fail "stamped build failed"
 
 # 1. 各コマンド --help が終了状態 0 で用法を表示すること
-for cmd in version work setup completion doctor update init; do
+for cmd in version run dispatch setup completion doctor update init; do
   out="$("$tmp/lead" "$cmd" --help)" || fail "lead $cmd --help exited non-zero"
   case "$out" in *"lead $cmd"*) ;; *) fail "lead $cmd --help missing usage header";; esac
 done
 root_help="$("$tmp/lead" --help)" || fail "lead --help exited non-zero"
-for cmd in work setup completion doctor update init version; do
+for cmd in run dispatch setup completion doctor update init version; do
   case "$root_help" in *"$cmd"*) ;; *) fail "lead --help missing command $cmd";; esac
 done
 
 # 2. 未知サブコマンドは非ゼロ終了すること
 "$tmp/lead" no-such-command >/dev/null 2>&1 && fail "unknown subcommand exited 0"
-"$tmp/lead" work --bogus-flag >/dev/null 2>&1 && fail "unknown flag exited 0"
+"$tmp/lead" run --bogus-flag >/dev/null 2>&1 && fail "unknown flag exited 0"
 
 # 3. version は注入された版数情報を表示すること
 stamped_out="$("$tmp/lead-stamped" version)" || fail "stamped lead version failed"
@@ -46,6 +46,6 @@ echo "$bash_out" | bash -n || fail "generated bash completion fails syntax check
 # 5. 対話系の未確定部分は非ゼロ終了すること。
 # bare `lead work` は実 picker を開くため、非TTY環境では
 # TTY エラーで非ゼロ終了する (正常系は test_tui_picker.sh で検証)。
-"$tmp/lead" work >/dev/null 2>&1 && fail "bare 'lead work' exited 0"
+"$tmp/lead" run >/dev/null 2>&1 && fail "bare 'lead run' exited 0"
 
 echo "cli skeleton behavioral checks passed"

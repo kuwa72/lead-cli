@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -48,6 +49,40 @@ func Argv(agentName, prompt string) []string {
 		return []string{"-i", prompt}
 	}
 	return []string{prompt}
+}
+
+// ErrHeadlessUnsupported reports an agent with no verified headless
+// (non-interactive, auto-approve) invocation.
+var ErrHeadlessUnsupported = errors.New("agent has no verified headless mode")
+
+// HeadlessArgv builds the full argv (binary first) that runs the agent
+// non-interactively with permissions auto-approved, for `lead dispatch`
+// (docs/rfc-inbox-ux.md §7). Every mapping below was confirmed against the
+// CLI's own `--help` on 2026-09-08; do not add entries from memory.
+//
+//	claude   -p --dangerously-skip-permissions <prompt>
+//	codex    exec --dangerously-bypass-approvals-and-sandbox <prompt>
+//	agy      --dangerously-skip-permissions -p <prompt>
+//	gemini   -y <prompt>            (positional prompt; -p is deprecated)
+//	opencode run --auto <prompt>
+//
+// devin exposes --print but no auto-approval flag was found, so it is
+// rejected rather than guessed.
+func HeadlessArgv(agentName, prompt string) ([]string, error) {
+	name := Resolve(agentName)
+	switch name {
+	case "claude":
+		return []string{"claude", "-p", "--dangerously-skip-permissions", prompt}, nil
+	case "codex":
+		return []string{"codex", "exec", "--dangerously-bypass-approvals-and-sandbox", prompt}, nil
+	case "agy":
+		return []string{"agy", "--dangerously-skip-permissions", "-p", prompt}, nil
+	case "gemini":
+		return []string{"gemini", "-y", prompt}, nil
+	case "opencode":
+		return []string{"opencode", "run", "--auto", prompt}, nil
+	}
+	return nil, fmt.Errorf("%s: %w", name, ErrHeadlessUnsupported)
 }
 
 // CommandString builds the shell command string prepared in a new Herdr

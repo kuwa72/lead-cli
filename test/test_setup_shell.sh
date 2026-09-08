@@ -87,8 +87,8 @@ bash -c "source '$RC'" || fail "rc broken after uninstall"
 # --- fish: setup → real-fish completion candidates (when fish exists) ---
 if command -v fish >/dev/null 2>&1; then
   "$tmp/lead" setup --shell fish --write --yes --no-keybinding || fail "fish setup failed"
-  HOME="$HOME" fish -c 'complete -C"lead "' | grep -q "^work" \
-    || fail "fish completion candidates missing 'work'"
+  HOME="$HOME" fish -c 'complete -C"lead "' | grep -q "^dispatch" \
+    || fail "fish completion candidates missing 'dispatch'"
 else
   echo "(fish absent: skipping real-fish completion check)"
 fi
