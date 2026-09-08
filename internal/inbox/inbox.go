@@ -28,6 +28,11 @@ type Options struct {
 	// Refresh > 0 reloads the sections periodically (interactive mode only).
 	Refresh time.Duration
 	Now     func() time.Time
+	// Say turns a one-liner into needs-review issues via the spec AI
+	// (`lead say`, issue #94) and returns a human summary. followUp > 0
+	// files a 実機NG follow-up referencing that issue (inbox n key).
+	// Nil disables s/n.
+	Say func(ctx context.Context, oneLiner string, followUp int) (string, error)
 }
 
 type mode int
@@ -267,7 +272,24 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m.openAgentsMd()
 	case "s":
-		m.status = "s say は未接続（#94 の `lead say` を待つ）。当面は `lead say \"一言\"` を直接実行"
+		if m.opts.Say == nil {
+			m.status = "say は未設定です（spec AI なし）。`lead say \"一言\"` を直接実行できます"
+			return m, nil
+		}
+		say := m.opts.Say
+		m.mode = modeInput
+		m.input = inputState{prompt: "say 一言（Enter で needs-review 起票, Esc 取消）> ", submit: func(text string) tea.Cmd {
+			if text == "" {
+				return func() tea.Msg { return doneMsg{status: "空の一言は起票しません"} }
+			}
+			return func() tea.Msg {
+				summary, err := say(context.Background(), text, 0)
+				if err != nil {
+					return doneMsg{err: err}
+				}
+				return doneMsg{status: summary, refresh: true}
+			}
+		}}
 		return m, nil
 	}
 
@@ -356,7 +378,25 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "n":
-		m.status = fmt.Sprintf("n 実機NG は未接続（#92/#94 で追い Issue 起票につなぐ）。当面は #%d に t で一言を残す", it.Number)
+		if m.opts.Say == nil {
+			m.status = "n 実機NG は未設定です（spec AI なし）。`lead say --follow-up N \"一言\"` を直接実行できます"
+			return m, nil
+		}
+		say := m.opts.Say
+		number := it.Number
+		m.mode = modeInput
+		m.input = inputState{prompt: fmt.Sprintf("実機NG #%d — 一言（Enter で追い Issue 起票, Esc 取消）> ", number), submit: func(text string) tea.Cmd {
+			if text == "" {
+				return func() tea.Msg { return doneMsg{status: "空の一言は起票しません"} }
+			}
+			return func() tea.Msg {
+				summary, err := say(context.Background(), text, number)
+				if err != nil {
+					return doneMsg{err: err}
+				}
+				return doneMsg{status: summary, refresh: true}
+			}
+		}}
 		return m, nil
 	}
 	return m, nil
@@ -622,9 +662,9 @@ func (m Model) viewHelp() string {
 		"x      却下: 任意の一言をコメントして close",
 		"t      一言返す: Issue コメント",
 		"p      覗く: エージェントのログパス表示",
-		"n      実機 NG（未接続）",
+		"n      実機 NG: 一言から追い Issue を起票",
 		"r      規約: AGENTS.md を $EDITOR で開く",
-		"s      say（未接続）",
+		"s      say: 一言から needs-review Issue を起票",
 		"o      ブラウザで開く",
 		"j/k    移動   z 折畳の切替   R 再読込   q 終了",
 		m.rule(),

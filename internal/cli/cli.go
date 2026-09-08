@@ -540,6 +540,29 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		AgentsPath: filepath.Join(root, "AGENTS.md"),
 		Repo:       inbox.RepoSlug(deps.gitRunner().OriginURL(root)),
 	}
+	opts.Say = func(ctx context.Context, oneLiner string, followUp int) (string, error) {
+		r := &spec.Runner{
+			Gh:    deps.gh(),
+			Agent: deps.specAgent(),
+			Out:   cmd.OutOrStdout(),
+			Opts: spec.Options{
+				Agent:      os.Getenv("LEAD_SPEC_AGENT"),
+				LogDir:     filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
+				WorkDir:    root,
+				Repository: deps.gitRunner().OriginURL(root),
+				FollowUp:   followUp,
+			},
+		}
+		res, err := r.Say(ctx, oneLiner)
+		if err != nil {
+			return "", err
+		}
+		var nums []string
+		for _, c := range res.Created {
+			nums = append(nums, fmt.Sprintf("#%d", c.Number))
+		}
+		return fmt.Sprintf("%s を起票（needs-review）", strings.Join(nums, ", ")), nil
+	}
 	if keys := os.Getenv("LEAD_TEST_INBOX_KEYS"); keys != "" {
 		opts.Shell = inbox.SyncShell{}
 		return inbox.RunHeadless(inbox.New(opts), strings.Split(keys, ","), cmd.OutOrStdout())

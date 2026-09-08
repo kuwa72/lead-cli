@@ -52,8 +52,15 @@ case "$1 $2" in
   "issue edit")
     case "$*" in *"--body-file -"*) cat > "$GH_STDIN" ;; esac ;;
   "issue comment"|"issue close") : ;;
+  "issue create") echo "https://github.com/acme/widgets/issues/101" ;;
   *) echo "unexpected gh call: $*" >&2; exit 3 ;;
 esac
+EOF
+# Dummy spec agent (default: agy): record argv, print one draft on stdout.
+cat > "$tmp/bin/agy" <<'EOF'
+#!/bin/sh
+echo "AGY $*" >> "$AGY_LOG"
+printf '[{"title":"fix(stock): warn on zero stock","body":"## Acceptance\\n- warns"}]\n'
 EOF
 # Dummy $EDITOR: log argv, append one line to the file it was given.
 cat > "$tmp/bin/fake-editor" <<'EOF'
@@ -61,7 +68,8 @@ cat > "$tmp/bin/fake-editor" <<'EOF'
 for a in "$@"; do printf '<%s>\n' "$a" >> "$EDITOR_LOG"; done
 printf -- '- edited by human\n' >> "$1"
 EOF
-chmod +x "$tmp/bin/gh" "$tmp/bin/fake-editor"
+chmod +x "$tmp/bin/gh" "$tmp/bin/fake-editor" "$tmp/bin/agy"
+export AGY_LOG="$tmp/agy.log"; : > "$AGY_LOG"
 export PATH="$tmp/bin:$PATH"
 export EDITOR=fake-editor
 
@@ -147,7 +155,24 @@ LEAD_TEST_INBOX_KEYS=o,enter,esc,q "$tmp/lead" >/dev/null 2>&1 || fail "headless
 grep -qxF 'GH issue view 7 --web' "$GH_LOG" || fail "o did not open browser: $(cat "$GH_LOG")"
 grep -qxF 'GH issue view 7 --json number,title,body,state' "$GH_LOG" || fail "enter did not fetch detail"
 
-# --- 10. unknown key token is an error ------------------------------------------------
+# --- 10. s: 一言から needs-review Issue 起票（spec AI 経由） -------------------------
+: > "$GH_LOG"; : > "$AGY_LOG"
+LEAD_TEST_INBOX_KEYS='s,text:add alert on zero stock,enter,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless s flow failed"
+grep -q 'add alert on zero stock' "$AGY_LOG" || fail "one-liner not passed to spec agent: $(cat "$AGY_LOG")"
+# --body contains a newline, so the argv record spans two log lines.
+tr '\n' ' ' < "$GH_LOG" | grep -q 'issue create --title fix(stock): warn on zero stock --body ## Acceptance - warns --label needs-review' \
+  || fail "s did not create a needs-review issue from the draft: $(cat "$GH_LOG")"
+
+# --- 11. n: 実機NG → 元 Issue 参照つき追い Issue --------------------------------------
+: > "$GH_LOG"; : > "$AGY_LOG"
+LEAD_TEST_INBOX_KEYS='n,text:still broken on main,enter,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless n flow failed"
+grep -qxF 'GH issue view 7 --json number,title,body,state' "$GH_LOG" \
+  || fail "n did not fetch the parent issue: $(cat "$GH_LOG")"
+grep -q 'issue create' "$GH_LOG" || fail "n did not create a follow-up issue"
+tr '\n' ' ' < "$GH_LOG" | grep -q 'issue create.*#7' \
+  || fail "follow-up body lacks the #7 reference: $(cat "$GH_LOG")"
+
+# --- 12. unknown key token is an error ------------------------------------------------
 LEAD_TEST_INBOX_KEYS=bogus-key "$tmp/lead" >/dev/null 2>&1 && fail "unknown key token exited 0"
 
 echo "inbox tests passed"

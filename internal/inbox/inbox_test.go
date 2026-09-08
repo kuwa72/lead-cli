@@ -1,6 +1,7 @@
 package inbox
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -309,11 +310,84 @@ func TestKeyP_ShowsLogPathForBlockedAgent(t *testing.T) {
 	}
 }
 
-func TestKeysNS_AreDeferredAndTouchNothing(t *testing.T) {
+// sayCall records one Options.Say invocation.
+type sayCall struct {
+	OneLiner string
+	FollowUp int
+}
+
+func fakeSay(calls *[]sayCall) func(context.Context, string, int) (string, error) {
+	return func(_ context.Context, oneLiner string, followUp int) (string, error) {
+		*calls = append(*calls, sayCall{OneLiner: oneLiner, FollowUp: followUp})
+		return "#101 を起票（needs-review）", nil
+	}
+}
+
+func TestKeysNS_WithoutSayAreNoOps(t *testing.T) {
 	gh, sh, m := newFixture(t)
 	press(t, m, "n", "s")
 	if len(gh.Comments)+len(gh.Closed)+len(gh.AddedLabels)+len(sh.Calls) != 0 {
-		t.Errorf("n/s must be no-ops for now: %+v %v %+v %v", gh.Comments, gh.Closed, gh.AddedLabels, sh.Calls)
+		t.Errorf("n/s without Say must be no-ops: %+v %v %+v %v", gh.Comments, gh.Closed, gh.AddedLabels, sh.Calls)
+	}
+}
+
+func TestKeyS_FilesNeedsReviewIssueViaSay(t *testing.T) {
+	gh, _, m := newFixture(t)
+	var calls []sayCall
+	m.opts.Say = fakeSay(&calls)
+	m = press(t, m, "s", "text:warn when stock hits zero", "enter")
+	if want := []sayCall{{OneLiner: "warn when stock hits zero", FollowUp: 0}}; !reflect.DeepEqual(calls, want) {
+		t.Errorf("Say calls = %+v, want %+v", calls, want)
+	}
+	if !strings.Contains(m.View(), "#101") {
+		t.Errorf("status should report the created issue, got:\n%s", m.View())
+	}
+	if len(gh.Created) != 0 {
+		t.Errorf("inbox must not create issues itself (Say owns that): %+v", gh.Created)
+	}
+}
+
+func TestKeyS_EmptyOneLinerDoesNotCallSay(t *testing.T) {
+	_, _, m := newFixture(t)
+	var calls []sayCall
+	m.opts.Say = fakeSay(&calls)
+	press(t, m, "s", "enter")
+	if len(calls) != 0 {
+		t.Errorf("empty one-liner must not call Say: %+v", calls)
+	}
+}
+
+func TestKeyS_EscCancels(t *testing.T) {
+	_, _, m := newFixture(t)
+	var calls []sayCall
+	m.opts.Say = fakeSay(&calls)
+	m = press(t, m, "s", "text:x", "esc")
+	if len(calls) != 0 {
+		t.Errorf("esc must cancel: %+v", calls)
+	}
+	if v := m.View(); !strings.Contains(v, "取り消しました") {
+		t.Errorf("esc should show cancel status, got:\n%s", v)
+	}
+}
+
+func TestKeyN_FilesFollowUpReferencingSelectedIssue(t *testing.T) {
+	_, _, m := newFixture(t)
+	var calls []sayCall
+	m.opts.Say = fakeSay(&calls)
+	press(t, m, "j", "j", "n", "text:still broken on main", "enter") // on blocked #9
+	if want := []sayCall{{OneLiner: "still broken on main", FollowUp: 9}}; !reflect.DeepEqual(calls, want) {
+		t.Errorf("Say calls = %+v, want %+v (n must pass the selected issue as followUp)", calls, want)
+	}
+}
+
+func TestKeyN_SayErrorIsShownNotFatal(t *testing.T) {
+	_, _, m := newFixture(t)
+	m.opts.Say = func(context.Context, string, int) (string, error) {
+		return "", errors.New("spec: agent exploded")
+	}
+	m = press(t, m, "n", "text:ng", "enter")
+	if v := m.View(); !strings.Contains(v, "agent exploded") {
+		t.Errorf("say error should surface in the status line, got:\n%s", v)
 	}
 }
 
