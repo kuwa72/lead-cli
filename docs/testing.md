@@ -53,3 +53,18 @@ if got := testutil.LogText(t, logPath); !strings.Contains(got, "<pane-123>") { .
 - Go テスト側の等価物はレビュー観点とする:
   テストが `os.ReadFile` 等で `*.go` ソースを読み、文字列包含だけを
   アサートしていないか確認する（振る舞い＝実行・入出力・終了状態を主張すること）。
+
+## 6. 開発環境からの隔離（issue #96）
+
+自動テストは開発者の実 Herdr セッション・実リポジトリ・実状態ファイルに触れない。
+
+- `internal/cli/main_test.go` の `TestMain` が構造ガード:
+  `HERDR_ENV` を解除（`herdr.Available()` を偽に）、cwd を空の一時ディレクトリへ移動、
+  `LEAD_STATE_FILE` を一時パスに固定する。`NewRootCmd`（本番デフォルト）で
+  コマンドを実行するテストが増えても実環境に届かない。
+- シェルテストは `unset HERDR_ENV`・一時 HOME・一時リポジトリ・ダミー `gh`/`herdr` を使う。
+- コマンドのフラグ定義だけを確認したいときは `cmd.ParseFlags` を使い、`Execute` しない。
+- 実 Herdr での実機確認は `test/smoke_herdr_pane.sh`（opt-in。`test_*.sh` グロブ外なので
+  `run-tests.sh` は実行しない）。`HERDR_ENV=1` の端末で手動実行し、シナリオごとに
+  **1 ペイン開く → 検証 → `herdr pane close`** を直列に行い、終了時に `herdr pane list`
+  が実行前と一致することを確認する。ペインを開いたまま終わらない。

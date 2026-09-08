@@ -88,17 +88,17 @@ func TestVersionPrintsStampedFields(t *testing.T) {
 // It is intentionally not exercised here with production defaults:
 // that would list real issues and touch the TTY.
 
+// Flags are parsed without executing the command: running `work 36` with
+// production defaults reached the real gh, git checkout and Herdr session
+// (issue #96). TestMain additionally guards against a regression.
 func TestWorkAcceptsDocumentedFlags(t *testing.T) {
 	root := NewRootCmd("v0.0.0-test", "abc1234", "2026-09-07")
-	var outBuf, errBuf strings.Builder
-	root.SetOut(&outBuf)
-	root.SetErr(&errBuf)
-	root.SetArgs([]string{"work", "36", "--mode", "plan", "--draft", "--agent", "devin"})
-	_ = root.Execute() // stub RunE fails; flags must still parse
-
 	work, _, err := root.Find([]string{"work"})
 	if err != nil || work == nil {
 		t.Fatalf("work command not found: %v", err)
+	}
+	if err := work.ParseFlags([]string{"36", "--mode", "plan", "--draft", "--agent", "devin"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
 	}
 	if got, _ := work.Flags().GetString("mode"); got != "plan" {
 		t.Errorf("--mode = %q, want plan", got)
