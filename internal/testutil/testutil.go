@@ -141,6 +141,61 @@ type FakeGhClient struct {
 	LabelErr       error
 	AddedLabels    []LabelCall
 	RemovedLabels  []LabelCall
+
+	// Spec AI (issue #94). Created issues are numbered from NextNumber
+	// (default 101) upward; CreateErr fails every IssueCreate.
+	NextNumber    int
+	CreateErr     error
+	Created       []CreateCall
+	CommentsByNo  map[int][]ports.Comment
+	CommentsErr   error
+	CommentsCalls []int
+	EditErr       error
+	Edits         []EditCall
+}
+
+// CreateCall records one IssueCreate invocation.
+type CreateCall struct {
+	Title  string
+	Body   string
+	Labels []string
+}
+
+// EditCall records one IssueEdit invocation.
+type EditCall struct {
+	Number int
+	Title  string
+	Body   string
+}
+
+// IssueCreate records the call and returns a sequential number/URL
+// (or CreateErr).
+func (f *FakeGhClient) IssueCreate(ctx context.Context, title, body string, labels []string) (ports.IssueRef, error) {
+	f.Created = append(f.Created, CreateCall{Title: title, Body: body, Labels: append([]string(nil), labels...)})
+	if f.CreateErr != nil {
+		return ports.IssueRef{}, f.CreateErr
+	}
+	if f.NextNumber <= 0 {
+		f.NextNumber = 101
+	}
+	n := f.NextNumber
+	f.NextNumber++
+	return ports.IssueRef{Number: n, URL: fmt.Sprintf("https://github.com/o/r/issues/%d", n)}, nil
+}
+
+// IssueComments returns CommentsByNo[number] (or CommentsErr) and records the call.
+func (f *FakeGhClient) IssueComments(ctx context.Context, number int) ([]ports.Comment, error) {
+	f.CommentsCalls = append(f.CommentsCalls, number)
+	if f.CommentsErr != nil {
+		return nil, f.CommentsErr
+	}
+	return f.CommentsByNo[number], nil
+}
+
+// IssueEdit records the call (or returns EditErr).
+func (f *FakeGhClient) IssueEdit(ctx context.Context, number int, title, body string) error {
+	f.Edits = append(f.Edits, EditCall{Number: number, Title: title, Body: body})
+	return f.EditErr
 }
 
 // LabelCall records one IssueAddLabel / IssueRemoveLabel invocation.

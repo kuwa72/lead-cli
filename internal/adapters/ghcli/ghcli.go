@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -249,6 +250,95 @@ func (c *Client) ApiUser(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// IssueCreate runs `gh issue create --title <t> --body <b> --label <l>...`
+// and parses the issue number from the URL gh prints on stdout
+// (spec AI: docs/rfc-inbox-ux.md §8).
+func (c *Client) IssueCreate(ctx context.Context, title, body string, labels []string) (ports.IssueRef, error) {
+	args := []string{"issue", "create", "--title", title, "--body", body}
+	for _, l := range labels {
+		args = append(args, "--label", l)
+	}
+	out, err := c.run(ctx, args...)
+	if err != nil {
+		return ports.IssueRef{}, err
+	}
+	url := lastNonEmptyLine(string(out))
+	n, err := numberFromIssueURL(url)
+	if err != nil {
+		return ports.IssueRef{URL: url}, fmt.Errorf("gh issue create: %w", err)
+	}
+	return ports.IssueRef{Number: n, URL: url}, nil
+}
+
+func lastNonEmptyLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// numberFromIssueURL extracts the trailing number of .../issues/<n>.
+func numberFromIssueURL(url string) (int, error) {
+	url = strings.TrimRight(url, "/")
+	i := strings.LastIndex(url, "/")
+	if i < 0 {
+		return 0, fmt.Errorf("cannot parse issue number from %q", url)
+	}
+	n, err := strconv.Atoi(url[i+1:])
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("cannot parse issue number from %q", url)
+	}
+	return n, nil
+}
+
+// IssueComments runs `gh issue view <n> --json comments`.
+func (c *Client) IssueComments(ctx context.Context, number int) ([]ports.Comment, error) {
+	out, err := c.run(ctx, "issue", "view", strconv.Itoa(number), "--json", "comments")
+	if err != nil {
+		return nil, err
+	}
+	var raw struct {
+		Comments []struct {
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			Body      string `json:"body"`
+			CreatedAt string `json:"createdAt"`
+		} `json:"comments"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return nil, fmt.Errorf("gh issue view %d --json comments: decode JSON: %w", number, err)
+	}
+	comments := make([]ports.Comment, len(raw.Comments))
+	for i, r := range raw.Comments {
+		comments[i] = ports.Comment{Author: r.Author.Login, Body: r.Body, CreatedAt: r.CreatedAt}
+	}
+	return comments, nil
+}
+
+// IssueEdit runs `gh issue edit <n> --title <t> --body-file <tmp>`.
+// The body goes through a temp file so long multiline bodies never hit
+// argv limits.
+func (c *Client) IssueEdit(ctx context.Context, number int, title, body string) error {
+	f, err := os.CreateTemp("", "lead-issue-body-*.md")
+	if err != nil {
+		return fmt.Errorf("gh issue edit %d: temp body: %w", number, err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(body); err != nil {
+		f.Close()
+		return fmt.Errorf("gh issue edit %d: write body: %w", number, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("gh issue edit %d: close body: %w", number, err)
+	}
+	_, err = c.run(ctx, "issue", "edit", strconv.Itoa(number), "--title", title, "--body-file", f.Name())
+	return err
 }
 
 // LatestReleaseTag runs `gh api repos/<repo>/releases/latest --jq .tag_name`.
