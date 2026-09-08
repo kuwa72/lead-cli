@@ -15,6 +15,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,9 +23,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
+	"github.com/kuwa72/lead-cli/internal/adapters/git"
+	"github.com/kuwa72/lead-cli/internal/doctor"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/workflow"
@@ -47,6 +51,9 @@ type Options struct {
 	MaxAttempts  int
 	LogDir       string // agent stdout/stderr files; required
 	WorkDir      string // repository context for workflow.Start; required
+	// SkipProtectionCheck makes Preflight warn instead of refusing when the
+	// repository lacks branch protection / required checks (issue #67).
+	SkipProtectionCheck bool
 }
 
 func (o Options) withDefaults() Options {
@@ -98,9 +105,17 @@ type Result struct {
 	Err      error
 }
 
+// Running is an agent from an earlier pass (or an earlier `lead` process)
+// that is still alive; it holds a parallel slot and is not re-dispatched.
+type Running struct {
+	Issue int
+	PID   int
+}
+
 // Report is one pass.
 type Report struct {
 	Results []Result
+	Running []Running
 }
 
 // Dispatcher wires the ports together. Store access is serialized with mu
@@ -112,19 +127,83 @@ type Dispatcher struct {
 	Launcher Launcher
 	Opts     Options
 	Out      io.Writer // pass summaries; nil = silent
+	// ProcessAlive reports whether pid still exists on this host (reconnect,
+	// RFC §7). Nil means signal 0 via the OS.
+	ProcessAlive func(pid int) bool
 
 	mu sync.Mutex
 }
 
-// Once runs a single dispatch pass and waits for every launched agent.
+// Preflight is the safety gate of RFC §9 / issue #67: unattended agents
+// merge their own PRs, so the repository must reject unreviewed pushes and
+// failing CI on its own. It refuses (with the same guidance `lead doctor`
+// prints) when the default branch is unprotected or has no required status
+// checks; Opts.SkipProtectionCheck turns the refusal into a warning.
+func (d *Dispatcher) Preflight(ctx context.Context) error {
+	opts := d.Opts.withDefaults()
+	repoRoot, err := d.Git.RepoRoot(opts.WorkDir)
+	if err != nil {
+		return fmt.Errorf("dispatch: %w", err)
+	}
+	var missing []string
+	if slug := git.RepoSlug(d.Git.OriginURL(repoRoot)); slug == "" {
+		missing = []string{"no GitHub origin remote; agents cannot open pull requests from here"}
+	} else {
+		p, err := doctor.InspectProtection(ctx, d.Gh, slug)
+		if err != nil {
+			return fmt.Errorf("dispatch: preflight: %w", err)
+		}
+		missing = p.Missing()
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if opts.SkipProtectionCheck {
+		if d.Out != nil {
+			fmt.Fprintln(d.Out, "dispatch: WARNING: repository is not protected; proceeding because of --skip-protection-check")
+			for _, m := range missing {
+				fmt.Fprintln(d.Out, "  - "+m)
+			}
+		}
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("dispatch: refusing to start unattended agents: the repository would accept their merges unchecked\n")
+	for _, m := range missing {
+		b.WriteString("  - " + m + "\n")
+	}
+	b.WriteString("fix the repository settings (see `lead doctor`), or pass --skip-protection-check to proceed anyway")
+	return errors.New(b.String())
+}
+
+// Once runs a single dispatch pass: reconnect to agents left running by an
+// earlier pass, settle the ones that have gone, then hand out every ready
+// issue through a pool of Parallel slots (minus the reconnected ones) and
+// return once the picked issues are all settled.
 func (d *Dispatcher) Once(ctx context.Context) (Report, error) {
 	opts := d.Opts.withDefaults()
+	running, settled, err := d.reconnect(ctx, opts)
+	if err != nil {
+		return Report{}, err
+	}
+	rep := Report{Results: settled, Running: running}
+	skip := map[int]bool{}
+	for _, r := range running {
+		skip[r.Issue] = true
+	}
+	for _, r := range settled {
+		skip[r.Issue] = true // settled this pass; a retry waits for the next one
+	}
+
 	ready, err := d.Gh.ListByLabel(ctx, opts.ReadyLabel)
 	if err != nil {
 		return Report{}, fmt.Errorf("dispatch: list %s issues: %w", opts.ReadyLabel, err)
 	}
-	var picks []ports.IssueSummary
+	var picks []int
 	for _, s := range ready {
+		if skip[s.Number] {
+			continue
+		}
 		w, ok, err := d.Store.Get(s.Number, "")
 		if err != nil {
 			return Report{}, fmt.Errorf("dispatch: %w", err)
@@ -132,24 +211,105 @@ func (d *Dispatcher) Once(ctx context.Context) (Report, error) {
 		if ok && w.Status == state.StatusBlocked {
 			continue // local blocked state wins until a human re-readies it
 		}
-		picks = append(picks, s)
-		if len(picks) == opts.Parallel {
-			break
-		}
+		picks = append(picks, s.Number)
 	}
-	results := make([]Result, len(picks))
-	var wg sync.WaitGroup
-	for i, s := range picks {
-		wg.Add(1)
-		go func(i int, s ports.IssueSummary) {
-			defer wg.Done()
-			results[i] = d.runOne(ctx, opts, s.Number)
-		}(i, s)
-	}
-	wg.Wait()
-	rep := Report{Results: results}
+	rep.Results = append(rep.Results, d.runPool(ctx, opts, picks, opts.Parallel-len(running))...)
 	d.print(rep)
 	return rep, nil
+}
+
+// runPool starts picks through slots workers: the next issue starts as soon
+// as one finishes (no batch-then-wait). ctx cancellation stops new starts;
+// agents already running are waited for, never killed.
+func (d *Dispatcher) runPool(ctx context.Context, opts Options, picks []int, slots int) []Result {
+	if slots <= 0 || len(picks) == 0 {
+		return nil
+	}
+	results := make([]Result, len(picks))
+	sem := make(chan struct{}, slots)
+	var wg sync.WaitGroup
+	started := 0
+	for i, n := range picks {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			i = len(picks) // stop starting
+		}
+		if i == len(picks) {
+			break
+		}
+		started++
+		wg.Add(1)
+		go func(i, n int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			results[i] = d.runOne(ctx, opts, n)
+		}(i, n)
+	}
+	wg.Wait()
+	return results[:started]
+}
+
+// reconnect scans workflows.json for this repository's records with a
+// recorded PID (RFC §7: closing the inbox must not kill agents, reopening
+// it must pick them up). Alive processes are reported as Running; gone
+// ones have PID cleared and go through the normal evaluation (closed →
+// cleanup, open → failed attempt).
+func (d *Dispatcher) reconnect(ctx context.Context, opts Options) ([]Running, []Result, error) {
+	repoRoot, err := d.Git.RepoRoot(opts.WorkDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("dispatch: %w", err)
+	}
+	key := repoKey(d.Git.OriginURL(repoRoot))
+	d.mu.Lock()
+	all, err := d.Store.List()
+	d.mu.Unlock()
+	if err != nil {
+		return nil, nil, fmt.Errorf("dispatch: %w", err)
+	}
+	var running []Running
+	var settled []Result
+	for _, w := range all {
+		if w.PID <= 0 || w.Part != "" || repoKey(w.Repository) != key {
+			continue
+		}
+		if d.alive(w.PID) {
+			running = append(running, Running{Issue: w.Issue, PID: w.PID})
+			continue
+		}
+		gone := fmt.Errorf("agent process %d is gone without closing the issue", w.PID)
+		settled = append(settled, d.evaluate(ctx, opts, w.Issue, repoRoot, w.Worktree, w.LogPath, gone))
+	}
+	return running, settled, nil
+}
+
+func (d *Dispatcher) alive(pid int) bool {
+	if d.ProcessAlive != nil {
+		return d.ProcessAlive(pid)
+	}
+	return processAlive(pid)
+}
+
+// processAlive sends signal 0: success or EPERM means the pid exists.
+func processAlive(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = p.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// repoKey normalizes what workflow.Start stores in Workflow.Repository so
+// records of this repository can be matched whatever URL form origin had.
+func repoKey(origin string) string {
+	if s := git.RepoSlug(origin); s != "" {
+		return s
+	}
+	if origin == "" {
+		return "local"
+	}
+	return origin
 }
 
 // Loop repeats Once every interval until ctx is cancelled. Agents already
@@ -211,14 +371,25 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) Resul
 	}
 
 	waitErr := proc.Wait()
+	return d.evaluate(ctx, opts, number, start.RepoRoot, start.Worktree, logPath, waitErr)
+}
+
+// evaluate settles an issue whose agent is no longer running: closed on
+// GitHub → remove worktree and record (completed); otherwise count the
+// attempt and, at MaxAttempts, block it. waitErr is the agent's exit error
+// (nil = exited cleanly but left the issue open).
+func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, repoRoot, worktree, logPath string, waitErr error) Result {
+	res := Result{Issue: number, Worktree: worktree, LogPath: logPath}
 
 	after, viewErr := d.Gh.View(ctx, number)
 	if viewErr == nil && strings.EqualFold(after.State, "CLOSED") {
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if err := d.Git.WorktreeRemove(start.RepoRoot, start.Worktree, true); err != nil {
-			res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: closed, but worktree cleanup failed: %w", number, err)
-			return res
+		if worktree != "" {
+			if err := d.Git.WorktreeRemove(repoRoot, worktree, true); err != nil {
+				res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: closed, but worktree cleanup failed: %w", number, err)
+				return res
+			}
 		}
 		if _, err := d.Store.Delete(number, ""); err != nil {
 			res.Outcome, res.Err = OutcomeError, err
@@ -252,7 +423,7 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) Resul
 		return res
 	}
 
-	if err := d.block(ctx, opts, number, attempts, cause, logPath, start.Worktree); err != nil {
+	if err := d.block(ctx, opts, number, attempts, cause, logPath, worktree); err != nil {
 		res.Outcome, res.Err = OutcomeError, err
 		return res
 	}
@@ -302,8 +473,13 @@ func (d *Dispatcher) print(rep Report) {
 	if d.Out == nil {
 		return
 	}
+	for _, r := range rep.Running {
+		fmt.Fprintf(d.Out, "#%d running (pid %d, reconnected)\n", r.Issue, r.PID)
+	}
 	if len(rep.Results) == 0 {
-		fmt.Fprintln(d.Out, "dispatch: no ready issues")
+		if len(rep.Running) == 0 {
+			fmt.Fprintln(d.Out, "dispatch: no ready issues")
+		}
 		return
 	}
 	for _, r := range rep.Results {

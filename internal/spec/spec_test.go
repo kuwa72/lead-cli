@@ -309,9 +309,9 @@ func TestSay_RejectsEmptyOneLinerAndConflictingFlags(t *testing.T) {
 
 func TestSay_UnsupportedHeadlessAgent(t *testing.T) {
 	r, _, ag, _ := newRunner(t, twoDrafts)
-	r.Opts.Agent = "devin"
+	r.Opts.Agent = "cursor"
 	if _, err := r.Say(context.Background(), "x"); err == nil {
-		t.Error("devin accepted")
+		t.Error("cursor accepted")
 	}
 	if len(ag.Calls) != 0 {
 		t.Error("agent ran")

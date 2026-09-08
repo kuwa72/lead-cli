@@ -119,6 +119,7 @@ func Start(ctx context.Context, g GitRunner, store *state.Store, opts StartOptio
 		w.Pane = existing.Pane
 		w.PullRequests = existing.PullRequests
 		w.MergePolicy = existing.MergePolicy
+		w.PolicyReason = existing.PolicyReason
 		w.Artifacts = existing.Artifacts
 		w.Agent = existing.Agent
 		w.Attempts = existing.Attempts

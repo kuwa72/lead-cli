@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -248,6 +249,102 @@ func TestRepoAllowsAutoMerge_ParsesAPIBoolean(t *testing.T) {
 		if !strings.Contains(log, want) {
 			t.Errorf("gh args log missing %q, got:\n%s", want, log)
 		}
+	}
+}
+
+// protectionServeBody answers the repository-side gate calls (issue #67).
+// PROT_MODE=404 makes the classic protection endpoint fail like gh does
+// for an unprotected branch; PROT_MODE=none also empties the rulesets.
+const protectionServeBody = `if [ "$1 $2" = "pr view" ]; then
+  printf 'AGENTS.md\n.github/workflows/ci.yml\ninternal/x.go\n'
+elif [ "$1" = "api" ]; then
+  case "$2" in
+    repos/o/r) printf 'main\n' ;;
+    repos/o/r/branches/main/protection)
+      if [ -n "$PROT_MODE" ]; then echo "gh: Branch not protected (HTTP 404)" >&2; exit 1; fi
+      printf '{"required_status_checks":{"contexts":["test"],"checks":[{"context":"test"},{"context":"lint"}]},"required_pull_request_reviews":{"required_approving_review_count":0}}' ;;
+    repos/o/r/rules/branches/main)
+      if [ "$PROT_MODE" = "none" ]; then printf '[]'; else printf '[{"type":"deletion"},{"type":"pull_request","parameters":{}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"lint"},{"context":"e2e"}]}}]'; fi ;;
+    *) echo "unexpected api path: $2" >&2; exit 3 ;;
+  esac
+else
+  echo "unexpected: $@" >&2; exit 3
+fi`
+
+func TestPrFiles_CallsGhPrViewFiles(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", protectionServeBody)
+	got, err := New().PrFiles(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("PrFiles: %v", err)
+	}
+	want := []string{"AGENTS.md", ".github/workflows/ci.yml", "internal/x.go"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("PrFiles = %q, want %q", got, want)
+	}
+	if lines := testutil.LogLines(t, logPath); !reflect.DeepEqual(lines, []string{"<pr>", "<view>", "<7>", "<--json>", "<files>", "<--jq>", "<.files[].path>"}) {
+		t.Errorf("gh argv = %q", lines)
+	}
+}
+
+func TestRepoDefaultBranch_UsesRepoAPI(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", protectionServeBody)
+	got, err := New().RepoDefaultBranch(context.Background(), "o/r")
+	if err != nil || got != "main" {
+		t.Fatalf("RepoDefaultBranch = %q, %v; want main", got, err)
+	}
+	if lines := testutil.LogLines(t, logPath); !reflect.DeepEqual(lines, []string{"<api>", "<repos/o/r>", "<--jq>", "<.default_branch>"}) {
+		t.Errorf("gh argv = %q", lines)
+	}
+}
+
+func TestBranchProtection_MergesClassicAndRulesets(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", protectionServeBody)
+	got, err := New().BranchProtection(context.Background(), "o/r", "main")
+	if err != nil {
+		t.Fatalf("BranchProtection: %v", err)
+	}
+	want := ports.BranchProtection{Protected: true, RequiresPR: true, RequiredChecks: []string{"test", "lint", "e2e"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("BranchProtection = %+v, want %+v", got, want)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<repos/o/r/branches/main/protection>", "<repos/o/r/rules/branches/main>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh argv log missing %q:\n%s", want, log)
+		}
+	}
+}
+
+func TestBranchProtection_404FallsBackToRulesets(t *testing.T) {
+	t.Setenv("PROT_MODE", "404")
+	testutil.InstallDummy(t, "gh", protectionServeBody)
+	got, err := New().BranchProtection(context.Background(), "o/r", "main")
+	if err != nil {
+		t.Fatalf("BranchProtection: %v (404 must not be an error)", err)
+	}
+	want := ports.BranchProtection{Protected: true, RequiresPR: true, RequiredChecks: []string{"lint", "e2e"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("BranchProtection = %+v, want rulesets only %+v", got, want)
+	}
+}
+
+func TestBranchProtection_UnprotectedWhenBothEmpty(t *testing.T) {
+	t.Setenv("PROT_MODE", "none")
+	testutil.InstallDummy(t, "gh", protectionServeBody)
+	got, err := New().BranchProtection(context.Background(), "o/r", "main")
+	if err != nil {
+		t.Fatalf("BranchProtection: %v", err)
+	}
+	if got.Protected || got.RequiresPR || len(got.RequiredChecks) != 0 {
+		t.Errorf("BranchProtection = %+v, want unprotected", got)
+	}
+}
+
+func TestBranchProtection_PropagatesNon404Failure(t *testing.T) {
+	testutil.InstallDummy(t, "gh", `echo "gh: Must have admin rights (HTTP 403)" >&2; exit 1`)
+	_, err := New().BranchProtection(context.Background(), "o/r", "main")
+	if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+		t.Errorf("err = %v, want 403 surfaced", err)
 	}
 }
 

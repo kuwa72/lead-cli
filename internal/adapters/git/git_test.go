@@ -54,6 +54,27 @@ func TestRepoRootFindsTopLevel(t *testing.T) {
 	}
 }
 
+func TestRepoSlug(t *testing.T) {
+	cases := map[string]string{
+		"https://github.com/o/r.git":    "o/r",
+		"https://github.com/o/r":        "o/r",
+		"git@github.com:o/r.git":        "o/r",
+		"ssh://git@github.com/o/r.git":  "o/r",
+		"ssh://git@ghe.corp:2222/o/r":   "o/r",
+		"github.com/o/r":                "o/r",
+		"o/r":                           "o/r",
+		" https://github.com/o/r.git/ ": "o/r",
+		"local":                         "",
+		"":                              "",
+		"https://github.com/":           "",
+	}
+	for in, want := range cases {
+		if got := RepoSlug(in); got != want {
+			t.Errorf("RepoSlug(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestRepoRootOutsideRepoFails(t *testing.T) {
 	if _, err := New().RepoRoot(t.TempDir()); err == nil {
 		t.Error("RepoRoot outside repo = nil, want failure")

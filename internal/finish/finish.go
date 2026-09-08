@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 )
@@ -40,6 +41,8 @@ type Result struct {
 	Merged       bool
 	Closed       bool
 	Message      string
+	// Guarded lists protected files that lowered the policy to confirm.
+	Guarded []string
 }
 
 func (o *Options) timeout() time.Duration {
@@ -150,21 +153,44 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return Result{}, fmt.Errorf("PR #%d: merge conflict; resolve it first (checks will not run)", prNumber)
 	}
 
+	// Guardrail (RFC inbox §7): a PR touching protected convention files
+	// never auto-merges. Lower auto → confirm and persist the reason so the
+	// inbox can show why this issue stopped. Checked before the CI wait so a
+	// gh failure surfaces early and the record is written even if the wait
+	// is interrupted.
+	guarded, err := guardrail(ctx, gh, prNumber)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(guarded) > 0 && policy == PolicyAuto {
+		policy = PolicyConfirm
+		w.MergePolicy = string(PolicyConfirm)
+		w.PolicyReason = fmt.Sprintf("guardrail: PR #%d touches protected files: %s", prNumber, strings.Join(guarded, ", "))
+		if err := store.Upsert(w); err != nil {
+			return Result{}, err
+		}
+	}
+
 	if err := WaitChecks(ctx, gh, prNumber, opts.timeout(), opts.pollInterval(), opts.sleep); err != nil {
 		return Result{}, err
 	}
 
 	// Gate: never stops, confirm pauses without --merge, auto checks the
 	// repository auto-merge setting and falls back to a manual pointer.
+	repo := git.RepoSlug(w.Repository)
 	switch {
 	case policy == PolicyNever:
 		return Result{ChecksPassed: true,
 			Message: fmt.Sprintf("CI passed for PR #%d; merge policy is never, stopping.", prNumber)}, nil
+	case policy == PolicyConfirm && !opts.Merge && len(guarded) > 0:
+		return Result{ChecksPassed: true, Guarded: guarded,
+			Message: fmt.Sprintf("CI passed for PR #%d, but it touches protected files (%s); merge policy lowered to confirm. Review the PR, then run `lead finish %d --merge`.",
+				prNumber, strings.Join(guarded, ", "), issue)}, nil
 	case policy == PolicyConfirm && !opts.Merge:
 		return Result{ChecksPassed: true,
 			Message: fmt.Sprintf("CI passed for PR #%d; run `lead finish %d --merge` to merge.", prNumber, issue)}, nil
-	case policy == PolicyAuto && !opts.Merge && repoKnown(w.Repository):
-		allowed, err := gh.RepoAllowsAutoMerge(ctx, w.Repository)
+	case policy == PolicyAuto && !opts.Merge && repo != "":
+		allowed, err := gh.RepoAllowsAutoMerge(ctx, repo)
 		if err != nil {
 			return Result{}, fmt.Errorf("PR #%d: auto-merge check: %w", prNumber, err)
 		}
@@ -179,8 +205,13 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 	return runClosePhase(ctx, gh, store, w, prRef, prNumber, opts, true)
 }
 
-func repoKnown(repo string) bool {
-	return repo != "" && repo != "local"
+// guardrail lists the PR's protected files (see ProtectedPaths).
+func guardrail(ctx context.Context, gh ports.GhClient, pr int) ([]string, error) {
+	files, err := gh.PrFiles(ctx, pr)
+	if err != nil {
+		return nil, fmt.Errorf("PR #%d: list files (guardrail): %w", pr, err)
+	}
+	return GuardedFiles(files), nil
 }
 
 // runNoPR records a non-PR outcome (research/docs) and optionally closes.

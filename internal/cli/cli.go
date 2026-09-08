@@ -133,6 +133,20 @@ func (d Deps) workDir() (string, error) {
 	return os.Getwd()
 }
 
+// repoSlug is "owner/repo" of the working directory's origin, or "" when
+// not inside a git repository with a GitHub remote (doctor #67 checks).
+func (d Deps) repoSlug() string {
+	cwd, err := d.workDir()
+	if err != nil {
+		return ""
+	}
+	root, err := d.gitRunner().RepoRoot(cwd)
+	if err != nil {
+		return ""
+	}
+	return git.RepoSlug(d.gitRunner().OriginURL(root))
+}
+
 func (d Deps) home() string {
 	if d.Home != "" {
 		return d.Home
@@ -305,6 +319,7 @@ agents are not killed on exit.`,
 	dispatchCmd.Flags().Bool("once", false, "run a single pass and exit")
 	dispatchCmd.Flags().Duration("interval", 30*time.Second, "pause between passes")
 	dispatchCmd.Flags().String("agent", "", "headless implementation agent (default: agy)")
+	dispatchCmd.Flags().Bool("skip-protection-check", false, "start even if the default branch lacks protection / required checks (warns)")
 
 	sayCmd := &cobra.Command{
 		Use:   "say <one-liner>",
@@ -582,6 +597,7 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 	once, _ := flags.GetBool("once")
 	interval, _ := flags.GetDuration("interval")
 	agentName, _ := flags.GetString("agent")
+	skipProtection, _ := flags.GetBool("skip-protection-check")
 
 	cwd, err := deps.workDir()
 	if err != nil {
@@ -599,7 +615,12 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 			Agent:    agentName,
 			LogDir:   filepath.Join(filepath.Dir(stateFile), "logs"),
 			WorkDir:  cwd,
+
+			SkipProtectionCheck: skipProtection,
 		},
+	}
+	if err := d.Preflight(cmd.Context()); err != nil {
+		return err
 	}
 	if once {
 		_, err := d.Once(cmd.Context())
@@ -835,7 +856,7 @@ func runDoctor(cmd *cobra.Command, deps Deps, info VersionInfo) error {
 
 	rep := doctor.Run(doctor.Deps{
 		Gh: deps.gh(), Home: deps.home(), Shell: shellFlag,
-		Version: info.Version, Offline: offline,
+		Version: info.Version, Offline: offline, Repo: deps.repoSlug(),
 		GenCompletion: func(shell string) (string, error) {
 			return genCompletion(cmd.Root(), shell)
 		},

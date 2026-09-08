@@ -197,6 +197,35 @@ func (r *Runner) OriginURL(repoDir string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// RepoSlug reduces a remote URL to "owner/repo" for `gh api repos/<slug>`.
+// Accepts https://host/o/r(.git), git@host:o/r(.git), ssh://git@host/o/r,
+// host/o/r and a bare o/r. Anything else (including "local" and "") is "".
+func RepoSlug(remote string) string {
+	u := strings.TrimSpace(remote)
+	u = strings.TrimSuffix(u, "/")
+	u = strings.TrimSuffix(u, ".git")
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	if i := strings.Index(u, "@"); i >= 0 {
+		u = u[i+1:]
+	}
+	u = strings.Replace(u, ":", "/", 1)
+	parts := strings.Split(u, "/")
+	for _, p := range parts {
+		if p == "" {
+			return ""
+		}
+	}
+	switch {
+	case len(parts) >= 3:
+		return parts[len(parts)-2] + "/" + parts[len(parts)-1]
+	case len(parts) == 2 && !strings.Contains(parts[0], "."):
+		return u
+	}
+	return ""
+}
+
 func samePath(a, b string) bool {
 	aa, err := filepath.Abs(a)
 	if err != nil {
