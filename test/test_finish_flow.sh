@@ -30,7 +30,10 @@ case "$1 $2" in
   "issue view")
     printf '{"number":36,"title":"demo","body":"b","state":"OPEN"}' ;;
   "pr view")
-    printf '{"number":7,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}' ;;
+    case "$*" in
+      *"--json files"*) printf '%s\n' "${GH_FILES:-src/main.go}" ;;
+      *) printf '{"number":7,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}' ;;
+    esac ;;
   "pr checks")
     if [ "${GH_MODE:-pass}" = "fail" ]; then
       printf '[{"bucket":"fail","name":"test","state":"FAILURE"}]'
@@ -124,6 +127,27 @@ fallback_out="$("$tmp/lead" finish 36 --pr 7 --timeout 60s --poll-interval 1s)" 
   || fail "scenario C: fallback pause exited non-zero"
 case "$fallback_out" in *"auto-merge"*) ;; *) fail "scenario C: missing auto-merge fallback display: $fallback_out";; esac
 grep -q "GHLOG pr merge" "$GH_ARGS_LOG" && fail "scenario C: merged despite auto-merge disabled"
+
+# --- Scenario D: guardrail (#93 Part B) — PR touching AGENTS.md / .github never auto-merges ---
+repo_d="$tmp/repo-d"; mk_repo "$repo_d"
+git -C "$repo_d" remote add origin https://github.com/o/r.git
+export LEAD_STATE_FILE="$tmp/state-d.json" GH_MODE=pass
+export GH_FILES="$(printf 'internal/x.go\nAGENTS.md\n.github/workflows/ci.yml')"
+: > "$GH_ARGS_LOG"; rm -f "$GH_COUNT"
+cd "$repo_d"
+"$tmp/lead" work 36 >/dev/null || fail "scenario D: work failed"
+guard_out="$("$tmp/lead" finish 36 --pr 7 --timeout 60s --poll-interval 1s)" \
+  || fail "scenario D: guardrail pause exited non-zero: $guard_out"
+case "$guard_out" in *AGENTS.md*".github/workflows/ci.yml"*confirm*"--merge"*) ;; *) fail "scenario D: message must name files and point to --merge: $guard_out";; esac
+grep -q "GHLOG pr view 7 --json files --jq .files\[\].path" "$GH_ARGS_LOG" || fail "scenario D: PR files not listed via gh: $(cat "$GH_ARGS_LOG")"
+grep -q "GHLOG pr merge" "$GH_ARGS_LOG" && fail "scenario D: merged despite protected files"
+python3 -c "import json;d=json.load(open('$LEAD_STATE_FILE'));w=d['workflows'][0];assert w['merge_policy']=='confirm',w;assert 'AGENTS.md' in w['policy_reason'],w;assert w['status']=='in_progress',w" \
+  || fail "scenario D: state lacks confirm policy + reason"
+# The human confirms with --merge: now it merges and closes.
+: > "$GH_ARGS_LOG"; rm -f "$GH_COUNT"
+"$tmp/lead" finish 36 --pr 7 --merge --close --timeout 60s --poll-interval 1s >/dev/null || fail "scenario D: explicit --merge failed"
+grep -q "GHLOG pr merge 7 --squash --delete-branch" "$GH_ARGS_LOG" || fail "scenario D: explicit --merge did not merge"
+unset GH_FILES
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"
 

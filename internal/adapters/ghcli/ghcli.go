@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -243,6 +244,119 @@ func (c *Client) IssueEditBody(ctx context.Context, number int, body string) err
 	return err
 }
 
+// PrFiles runs `gh pr view <pr> --json files --jq .files[].path`
+// (one path per line).
+func (c *Client) PrFiles(ctx context.Context, pr int) ([]string, error) {
+	out, err := c.run(ctx, "pr", "view", strconv.Itoa(pr), "--json", "files", "--jq", ".files[].path")
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+// RepoDefaultBranch runs `gh api repos/<repo> --jq .default_branch`.
+func (c *Client) RepoDefaultBranch(ctx context.Context, repo string) (string, error) {
+	out, err := c.run(ctx, "api", "repos/"+repo, "--jq", ".default_branch")
+	if err != nil {
+		return "", err
+	}
+	b := strings.TrimSpace(string(out))
+	if b == "" {
+		return "", fmt.Errorf("gh api repos/%s: empty default_branch", repo)
+	}
+	return b, nil
+}
+
+// isHTTP404 reports whether a gh api failure was a 404 (gh prints
+// "... (HTTP 404)" on stderr, which run surfaces in the error).
+func isHTTP404(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "HTTP 404")
+}
+
+// BranchProtection runs the classic protection endpoint (404 = unprotected)
+// and then the rulesets endpoint, merging both into one view.
+func (c *Client) BranchProtection(ctx context.Context, repo, branch string) (ports.BranchProtection, error) {
+	var bp ports.BranchProtection
+	seen := map[string]bool{}
+	addCheck := func(ctxName string) {
+		if ctxName != "" && !seen[ctxName] {
+			seen[ctxName] = true
+			bp.RequiredChecks = append(bp.RequiredChecks, ctxName)
+		}
+	}
+
+	protPath := "repos/" + repo + "/branches/" + branch + "/protection"
+	out, err := c.run(ctx, "api", protPath)
+	switch {
+	case err == nil:
+		var raw struct {
+			RequiredStatusChecks *struct {
+				Contexts []string `json:"contexts"`
+				Checks   []struct {
+					Context string `json:"context"`
+				} `json:"checks"`
+			} `json:"required_status_checks"`
+			RequiredPullRequestReviews *struct{} `json:"required_pull_request_reviews"`
+		}
+		if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+			return bp, fmt.Errorf("gh api %s: decode JSON: %w", protPath, err)
+		}
+		bp.Protected = true
+		bp.RequiresPR = raw.RequiredPullRequestReviews != nil
+		if raw.RequiredStatusChecks != nil {
+			for _, ctxName := range raw.RequiredStatusChecks.Contexts {
+				addCheck(ctxName)
+			}
+			for _, ch := range raw.RequiredStatusChecks.Checks {
+				addCheck(ch.Context)
+			}
+		}
+	case isHTTP404(err):
+		// no classic protection; rulesets may still apply
+	default:
+		return bp, err
+	}
+
+	rulesPath := "repos/" + repo + "/rules/branches/" + branch
+	out, err = c.run(ctx, "api", rulesPath)
+	if err != nil {
+		if isHTTP404(err) {
+			return bp, nil
+		}
+		return bp, err
+	}
+	var rules []struct {
+		Type       string `json:"type"`
+		Parameters struct {
+			RequiredStatusChecks []struct {
+				Context string `json:"context"`
+			} `json:"required_status_checks"`
+		} `json:"parameters"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &rules); err != nil {
+		return bp, fmt.Errorf("gh api %s: decode JSON: %w", rulesPath, err)
+	}
+	for _, r := range rules {
+		switch r.Type {
+		case "pull_request":
+			bp.Protected = true
+			bp.RequiresPR = true
+		case "required_status_checks":
+			bp.Protected = true
+			for _, ch := range r.Parameters.RequiredStatusChecks {
+				addCheck(ch.Context)
+			}
+		}
+	}
+	return bp, nil
+}
+
 // BrowseIssue runs `gh issue view <n> --web`.
 func (c *Client) BrowseIssue(ctx context.Context, number int) error {
 	_, err := c.run(ctx, "issue", "view", strconv.Itoa(number), "--web")
@@ -262,6 +376,95 @@ func (c *Client) ApiUser(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// IssueCreate runs `gh issue create --title <t> --body <b> --label <l>...`
+// and parses the issue number from the URL gh prints on stdout
+// (spec AI: docs/rfc-inbox-ux.md §8).
+func (c *Client) IssueCreate(ctx context.Context, title, body string, labels []string) (ports.IssueRef, error) {
+	args := []string{"issue", "create", "--title", title, "--body", body}
+	for _, l := range labels {
+		args = append(args, "--label", l)
+	}
+	out, err := c.run(ctx, args...)
+	if err != nil {
+		return ports.IssueRef{}, err
+	}
+	url := lastNonEmptyLine(string(out))
+	n, err := numberFromIssueURL(url)
+	if err != nil {
+		return ports.IssueRef{URL: url}, fmt.Errorf("gh issue create: %w", err)
+	}
+	return ports.IssueRef{Number: n, URL: url}, nil
+}
+
+func lastNonEmptyLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// numberFromIssueURL extracts the trailing number of .../issues/<n>.
+func numberFromIssueURL(url string) (int, error) {
+	url = strings.TrimRight(url, "/")
+	i := strings.LastIndex(url, "/")
+	if i < 0 {
+		return 0, fmt.Errorf("cannot parse issue number from %q", url)
+	}
+	n, err := strconv.Atoi(url[i+1:])
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("cannot parse issue number from %q", url)
+	}
+	return n, nil
+}
+
+// IssueComments runs `gh issue view <n> --json comments`.
+func (c *Client) IssueComments(ctx context.Context, number int) ([]ports.Comment, error) {
+	out, err := c.run(ctx, "issue", "view", strconv.Itoa(number), "--json", "comments")
+	if err != nil {
+		return nil, err
+	}
+	var raw struct {
+		Comments []struct {
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			Body      string `json:"body"`
+			CreatedAt string `json:"createdAt"`
+		} `json:"comments"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return nil, fmt.Errorf("gh issue view %d --json comments: decode JSON: %w", number, err)
+	}
+	comments := make([]ports.Comment, len(raw.Comments))
+	for i, r := range raw.Comments {
+		comments[i] = ports.Comment{Author: r.Author.Login, Body: r.Body, CreatedAt: r.CreatedAt}
+	}
+	return comments, nil
+}
+
+// IssueEdit runs `gh issue edit <n> --title <t> --body-file <tmp>`.
+// The body goes through a temp file so long multiline bodies never hit
+// argv limits.
+func (c *Client) IssueEdit(ctx context.Context, number int, title, body string) error {
+	f, err := os.CreateTemp("", "lead-issue-body-*.md")
+	if err != nil {
+		return fmt.Errorf("gh issue edit %d: temp body: %w", number, err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(body); err != nil {
+		f.Close()
+		return fmt.Errorf("gh issue edit %d: write body: %w", number, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("gh issue edit %d: close body: %w", number, err)
+	}
+	_, err = c.run(ctx, "issue", "edit", strconv.Itoa(number), "--title", title, "--body-file", f.Name())
+	return err
 }
 
 // LatestReleaseTag runs `gh api repos/<repo>/releases/latest --jq .tag_name`.

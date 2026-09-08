@@ -58,6 +58,49 @@ type GhClient interface {
 	// stdin (inbox `e`: docs/rfc-inbox-ux.md §5.2). stdin keeps arbitrary
 	// bodies — leading dashes, huge text — out of argv.
 	IssueEditBody(ctx context.Context, number int, body string) error
+	// PrFiles mirrors `gh pr view <pr> --json files --jq '.files[].path'`
+	// (guardrail: docs/rfc-inbox-ux.md §7).
+	PrFiles(ctx context.Context, pr int) ([]string, error)
+	// RepoDefaultBranch mirrors `gh api repos/<repo> --jq .default_branch`.
+	RepoDefaultBranch(ctx context.Context, repo string) (string, error)
+	// BranchProtection mirrors `gh api repos/<repo>/branches/<branch>/protection`
+	// (404 = no classic protection) merged with the rulesets that apply to the
+	// branch (`gh api repos/<repo>/rules/branches/<branch>`). Issue #67.
+	BranchProtection(ctx context.Context, repo, branch string) (BranchProtection, error)
+	// IssueCreate mirrors `gh issue create --title <t> --body <b> --label <l>...`
+	// and returns the created issue (number parsed from the printed URL).
+	// Spec AI: docs/rfc-inbox-ux.md §8.
+	IssueCreate(ctx context.Context, title, body string, labels []string) (IssueRef, error)
+	// IssueComments mirrors `gh issue view <n> --json comments`.
+	IssueComments(ctx context.Context, number int) ([]Comment, error)
+	// IssueEdit mirrors `gh issue edit <n> --title <t> --body-file <f>`.
+	IssueEdit(ctx context.Context, number int, title, body string) error
+}
+
+// BranchProtection is what `lead doctor` / `lead dispatch` need to know
+// about a branch: is any protection in force, and which status checks
+// must pass before merging.
+type BranchProtection struct {
+	// Protected is true when classic protection or at least one ruleset
+	// (pull_request / required_status_checks) applies to the branch.
+	Protected bool
+	// RequiredChecks lists the required status-check contexts (deduplicated).
+	RequiredChecks []string
+	// RequiresPR is true when direct pushes are blocked (PR required).
+	RequiresPR bool
+}
+
+// IssueRef identifies a created issue.
+type IssueRef struct {
+	Number int
+	URL    string
+}
+
+// Comment is one row of `gh issue view --json comments`.
+type Comment struct {
+	Author    string
+	Body      string
+	CreatedAt string
 }
 
 // PRCheck is one CI check row. Bucket is pass/fail/pending/skipping/cancel.

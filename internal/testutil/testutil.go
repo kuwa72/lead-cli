@@ -114,6 +114,7 @@ type FakeGhClient struct {
 	// AutoMergeAllowed gates policy auto (repo setting).
 	AutoMergeAllowed bool
 	AutoMergeErr     error
+	AutoMergeRepos   []string // repo slugs asked
 
 	CloseErr   error
 	CommentErr error
@@ -144,6 +145,74 @@ type FakeGhClient struct {
 
 	EditBodyErr  error
 	EditedBodies []BodyEdit
+
+	// Files is returned by every PrFiles call (guardrail input).
+	Files      []string
+	FilesErr   error
+	FilesCalls []int
+
+	// DefaultBranch feeds RepoDefaultBranch ("" means "main").
+	DefaultBranch    string
+	DefaultBranchErr error
+	// Protection feeds BranchProtection; ProtectionCalls records "repo@branch".
+	Protection      ports.BranchProtection
+	ProtectionErr   error
+	ProtectionCalls []string
+
+	// Spec AI (issue #94). Created issues are numbered from NextNumber
+	// (default 101) upward; CreateErr fails every IssueCreate.
+	NextNumber    int
+	CreateErr     error
+	Created       []CreateCall
+	CommentsByNo  map[int][]ports.Comment
+	CommentsErr   error
+	CommentsCalls []int
+	EditErr       error
+	Edits         []EditCall
+}
+
+// CreateCall records one IssueCreate invocation.
+type CreateCall struct {
+	Title  string
+	Body   string
+	Labels []string
+}
+
+// EditCall records one IssueEdit invocation.
+type EditCall struct {
+	Number int
+	Title  string
+	Body   string
+}
+
+// IssueCreate records the call and returns a sequential number/URL
+// (or CreateErr).
+func (f *FakeGhClient) IssueCreate(ctx context.Context, title, body string, labels []string) (ports.IssueRef, error) {
+	f.Created = append(f.Created, CreateCall{Title: title, Body: body, Labels: append([]string(nil), labels...)})
+	if f.CreateErr != nil {
+		return ports.IssueRef{}, f.CreateErr
+	}
+	if f.NextNumber <= 0 {
+		f.NextNumber = 101
+	}
+	n := f.NextNumber
+	f.NextNumber++
+	return ports.IssueRef{Number: n, URL: fmt.Sprintf("https://github.com/o/r/issues/%d", n)}, nil
+}
+
+// IssueComments returns CommentsByNo[number] (or CommentsErr) and records the call.
+func (f *FakeGhClient) IssueComments(ctx context.Context, number int) ([]ports.Comment, error) {
+	f.CommentsCalls = append(f.CommentsCalls, number)
+	if f.CommentsErr != nil {
+		return nil, f.CommentsErr
+	}
+	return f.CommentsByNo[number], nil
+}
+
+// IssueEdit records the call (or returns EditErr).
+func (f *FakeGhClient) IssueEdit(ctx context.Context, number int, title, body string) error {
+	f.Edits = append(f.Edits, EditCall{Number: number, Title: title, Body: body})
+	return f.EditErr
 }
 
 // BodyEdit records one IssueEditBody invocation.
@@ -185,6 +254,35 @@ func (f *FakeGhClient) IssueAddLabel(ctx context.Context, number int, label stri
 func (f *FakeGhClient) IssueRemoveLabel(ctx context.Context, number int, label string) error {
 	f.RemovedLabels = append(f.RemovedLabels, LabelCall{Number: number, Label: label})
 	return f.LabelErr
+}
+
+// PrFiles returns Files (or FilesErr) and records the call.
+func (f *FakeGhClient) PrFiles(ctx context.Context, pr int) ([]string, error) {
+	f.FilesCalls = append(f.FilesCalls, pr)
+	if f.FilesErr != nil {
+		return nil, f.FilesErr
+	}
+	return f.Files, nil
+}
+
+// RepoDefaultBranch returns DefaultBranch ("main" when empty) or DefaultBranchErr.
+func (f *FakeGhClient) RepoDefaultBranch(ctx context.Context, repo string) (string, error) {
+	if f.DefaultBranchErr != nil {
+		return "", f.DefaultBranchErr
+	}
+	if f.DefaultBranch == "" {
+		return "main", nil
+	}
+	return f.DefaultBranch, nil
+}
+
+// BranchProtection returns Protection (or ProtectionErr) and records the call.
+func (f *FakeGhClient) BranchProtection(ctx context.Context, repo, branch string) (ports.BranchProtection, error) {
+	f.ProtectionCalls = append(f.ProtectionCalls, repo+"@"+branch)
+	if f.ProtectionErr != nil {
+		return ports.BranchProtection{}, f.ProtectionErr
+	}
+	return f.Protection, nil
 }
 
 // ListOpen returns Summaries (or ListErr) and records the call.
@@ -243,6 +341,7 @@ func (f *FakeGhClient) PrMerge(ctx context.Context, pr int) error {
 
 // RepoAllowsAutoMerge returns the canned repo setting.
 func (f *FakeGhClient) RepoAllowsAutoMerge(ctx context.Context, repo string) (bool, error) {
+	f.AutoMergeRepos = append(f.AutoMergeRepos, repo)
 	return f.AutoMergeAllowed, f.AutoMergeErr
 }
 

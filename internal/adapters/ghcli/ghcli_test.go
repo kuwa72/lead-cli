@@ -4,12 +4,90 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/testutil"
 )
+
+// specServeBody answers the spec-AI calls (issue #94).
+const specServeBody = `if [ "$1 $2" = "issue create" ]; then
+  echo "Creating issue in o/r"; echo "https://github.com/o/r/issues/123"
+elif [ "$1 $2" = "issue view" ] && [ "$5" = "comments" ]; then
+  printf '{"comments":[{"author":{"login":"kuwa72"},"body":"first","createdAt":"2026-09-08T00:00:00Z"},{"author":{"login":"bot"},"body":"second","createdAt":"2026-09-08T01:00:00Z"}]}'
+elif [ "$1 $2" = "issue edit" ]; then
+  cat "$7" > "$(dirname "$0")/edit-body.txt"
+else
+  echo "unexpected: $@" >&2; exit 3
+fi`
+
+func TestIssueCreate_ParsesNumberFromURL(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", specServeBody)
+	ref, err := New().IssueCreate(context.Background(), "feat: t", "line1\nline2", []string{"needs-review"})
+	if err != nil {
+		t.Fatalf("IssueCreate: %v", err)
+	}
+	if ref.Number != 123 || ref.URL != "https://github.com/o/r/issues/123" {
+		t.Errorf("ref = %+v", ref)
+	}
+	want := []string{"<issue>", "<create>", "<--title>", "<feat: t>", "<--body>", "<line1", "line2>", "<--label>", "<needs-review>"}
+	got := testutil.LogLines(t, logPath)
+	if len(got) != len(want) {
+		t.Fatalf("argv lines = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("argv[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIssueCreate_RejectsUnparseableOutput(t *testing.T) {
+	testutil.InstallDummy(t, "gh", `echo "no url here"`)
+	if _, err := New().IssueCreate(context.Background(), "t", "b", nil); err == nil {
+		t.Error("unparseable output accepted")
+	}
+}
+
+func TestIssueComments_DecodesAuthorBodyCreatedAt(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", specServeBody)
+	got, err := New().IssueComments(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("IssueComments: %v", err)
+	}
+	if len(got) != 2 || got[0].Author != "kuwa72" || got[0].Body != "first" || got[0].CreatedAt != "2026-09-08T00:00:00Z" || got[1].Author != "bot" {
+		t.Errorf("comments = %+v", got)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<issue>", "<view>", "<7>", "<--json>", "<comments>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+}
+
+func TestIssueEdit_UsesBodyFile(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", specServeBody)
+	if err := New().IssueEdit(context.Background(), 7, "new title", "new\nbody"); err != nil {
+		t.Fatalf("IssueEdit: %v", err)
+	}
+	got := testutil.LogLines(t, logPath)
+	if len(got) != 7 || got[0] != "<issue>" || got[1] != "<edit>" || got[2] != "<7>" || got[3] != "<--title>" || got[4] != "<new title>" || got[5] != "<--body-file>" {
+		t.Fatalf("argv = %q", got)
+	}
+	captured, err := os.ReadFile(filepath.Join(filepath.Dir(logPath), "edit-body.txt"))
+	if err != nil {
+		t.Fatalf("dummy did not capture body file: %v", err)
+	}
+	if string(captured) != "new\nbody" {
+		t.Errorf("body file = %q", captured)
+	}
+	if _, err := os.Stat(strings.Trim(got[6], "<>")); !os.IsNotExist(err) {
+		t.Errorf("temp body file not removed: %v", err)
+	}
+}
 
 // ghServeBody serves canned issue JSON for list/view like the real `gh`.
 const ghServeBody = `if [ "$1 $2" = "issue list" ]; then
@@ -171,6 +249,102 @@ func TestRepoAllowsAutoMerge_ParsesAPIBoolean(t *testing.T) {
 		if !strings.Contains(log, want) {
 			t.Errorf("gh args log missing %q, got:\n%s", want, log)
 		}
+	}
+}
+
+// protectionServeBody answers the repository-side gate calls (issue #67).
+// PROT_MODE=404 makes the classic protection endpoint fail like gh does
+// for an unprotected branch; PROT_MODE=none also empties the rulesets.
+const protectionServeBody = `if [ "$1 $2" = "pr view" ]; then
+  printf 'AGENTS.md\n.github/workflows/ci.yml\ninternal/x.go\n'
+elif [ "$1" = "api" ]; then
+  case "$2" in
+    repos/o/r) printf 'main\n' ;;
+    repos/o/r/branches/main/protection)
+      if [ -n "$PROT_MODE" ]; then echo "gh: Branch not protected (HTTP 404)" >&2; exit 1; fi
+      printf '{"required_status_checks":{"contexts":["test"],"checks":[{"context":"test"},{"context":"lint"}]},"required_pull_request_reviews":{"required_approving_review_count":0}}' ;;
+    repos/o/r/rules/branches/main)
+      if [ "$PROT_MODE" = "none" ]; then printf '[]'; else printf '[{"type":"deletion"},{"type":"pull_request","parameters":{}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"lint"},{"context":"e2e"}]}}]'; fi ;;
+    *) echo "unexpected api path: $2" >&2; exit 3 ;;
+  esac
+else
+  echo "unexpected: $@" >&2; exit 3
+fi`
+
+func TestPrFiles_CallsGhPrViewFiles(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", protectionServeBody)
+	got, err := New().PrFiles(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("PrFiles: %v", err)
+	}
+	want := []string{"AGENTS.md", ".github/workflows/ci.yml", "internal/x.go"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("PrFiles = %q, want %q", got, want)
+	}
+	if lines := testutil.LogLines(t, logPath); !reflect.DeepEqual(lines, []string{"<pr>", "<view>", "<7>", "<--json>", "<files>", "<--jq>", "<.files[].path>"}) {
+		t.Errorf("gh argv = %q", lines)
+	}
+}
+
+func TestRepoDefaultBranch_UsesRepoAPI(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", protectionServeBody)
+	got, err := New().RepoDefaultBranch(context.Background(), "o/r")
+	if err != nil || got != "main" {
+		t.Fatalf("RepoDefaultBranch = %q, %v; want main", got, err)
+	}
+	if lines := testutil.LogLines(t, logPath); !reflect.DeepEqual(lines, []string{"<api>", "<repos/o/r>", "<--jq>", "<.default_branch>"}) {
+		t.Errorf("gh argv = %q", lines)
+	}
+}
+
+func TestBranchProtection_MergesClassicAndRulesets(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", protectionServeBody)
+	got, err := New().BranchProtection(context.Background(), "o/r", "main")
+	if err != nil {
+		t.Fatalf("BranchProtection: %v", err)
+	}
+	want := ports.BranchProtection{Protected: true, RequiresPR: true, RequiredChecks: []string{"test", "lint", "e2e"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("BranchProtection = %+v, want %+v", got, want)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<repos/o/r/branches/main/protection>", "<repos/o/r/rules/branches/main>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh argv log missing %q:\n%s", want, log)
+		}
+	}
+}
+
+func TestBranchProtection_404FallsBackToRulesets(t *testing.T) {
+	t.Setenv("PROT_MODE", "404")
+	testutil.InstallDummy(t, "gh", protectionServeBody)
+	got, err := New().BranchProtection(context.Background(), "o/r", "main")
+	if err != nil {
+		t.Fatalf("BranchProtection: %v (404 must not be an error)", err)
+	}
+	want := ports.BranchProtection{Protected: true, RequiresPR: true, RequiredChecks: []string{"lint", "e2e"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("BranchProtection = %+v, want rulesets only %+v", got, want)
+	}
+}
+
+func TestBranchProtection_UnprotectedWhenBothEmpty(t *testing.T) {
+	t.Setenv("PROT_MODE", "none")
+	testutil.InstallDummy(t, "gh", protectionServeBody)
+	got, err := New().BranchProtection(context.Background(), "o/r", "main")
+	if err != nil {
+		t.Fatalf("BranchProtection: %v", err)
+	}
+	if got.Protected || got.RequiresPR || len(got.RequiredChecks) != 0 {
+		t.Errorf("BranchProtection = %+v, want unprotected", got)
+	}
+}
+
+func TestBranchProtection_PropagatesNon404Failure(t *testing.T) {
+	testutil.InstallDummy(t, "gh", `echo "gh: Must have admin rights (HTTP 403)" >&2; exit 1`)
+	_, err := New().BranchProtection(context.Background(), "o/r", "main")
+	if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+		t.Errorf("err = %v, want 403 surfaced", err)
 	}
 }
 

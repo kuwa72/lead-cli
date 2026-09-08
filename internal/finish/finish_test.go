@@ -3,6 +3,7 @@ package finish
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -334,5 +335,116 @@ func TestRun_ResearchWithoutPRNeedsOutcome(t *testing.T) {
 	})
 	if err != nil || !res.Closed {
 		t.Errorf("research with outcome = %+v, %v; want recorded + closed", res, err)
+	}
+}
+
+// Guardrail (RFC inbox §7, issue #93 Part B): a PR that touches protected
+// convention files must not auto-merge even under policy auto.
+func TestRun_GuardrailLowersAutoToConfirm(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.Files = []string{"internal/x.go", "AGENTS.md", ".github/workflows/ci.yml"}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil {
+		t.Fatalf("guardrail pause = %v, want clean pause", err)
+	}
+	if res.Merged || len(fake.MergeCalls) != 0 || !res.ChecksPassed {
+		t.Errorf("Result = %+v merges=%v; guarded PR must pause after checks without merging", res, fake.MergeCalls)
+	}
+	if !reflect.DeepEqual(fake.FilesCalls, []int{7}) {
+		t.Errorf("PrFiles asked for %v, want [7]", fake.FilesCalls)
+	}
+	if !reflect.DeepEqual(res.Guarded, []string{"AGENTS.md", ".github/workflows/ci.yml"}) {
+		t.Errorf("Guarded = %q", res.Guarded)
+	}
+	for _, want := range []string{"AGENTS.md", ".github/workflows/ci.yml", "confirm", "lead finish 36 --merge"} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("message %q lacks %q", res.Message, want)
+		}
+	}
+	got := loadOne(t, path)
+	if got.MergePolicy != "confirm" {
+		t.Errorf("recorded merge_policy = %q, want confirm", got.MergePolicy)
+	}
+	if !strings.Contains(got.PolicyReason, "AGENTS.md") || !strings.Contains(got.PolicyReason, "#7") {
+		t.Errorf("recorded policy_reason = %q, want the PR and files named", got.PolicyReason)
+	}
+	if got.Status != state.StatusInProgress {
+		t.Errorf("status = %q, want still in_progress", got.Status)
+	}
+}
+
+func TestRun_GuardrailStillMergesWhenHumanPassesMerge(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.Files = []string{".claude/settings.json"}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Merged || len(fake.MergeCalls) != 1 {
+		t.Errorf("Result = %+v merges=%v; explicit --merge is the human confirmation", res, fake.MergeCalls)
+	}
+	if got := loadOne(t, path); !strings.Contains(got.PolicyReason, ".claude/settings.json") {
+		t.Errorf("policy_reason = %q, want the guardrail reason kept for audit", got.PolicyReason)
+	}
+}
+
+func TestRun_GuardrailLeavesUnrelatedPRsOnAuto(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.Files = []string{"internal/x.go", "docs/rfc.md"}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || !res.Merged || len(res.Guarded) != 0 {
+		t.Errorf("Result = %+v, %v; want normal auto merge", res, err)
+	}
+	if got := loadOne(t, path); got.MergePolicy != "" || got.PolicyReason != "" {
+		t.Errorf("record policy = %q/%q, want untouched", got.MergePolicy, got.PolicyReason)
+	}
+}
+
+func TestRun_GuardrailFileListFailureStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.FilesErr = errors.New("gh boom")
+
+	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err == nil || !strings.Contains(err.Error(), "gh boom") {
+		t.Fatalf("err = %v, want file-list failure surfaced (fail closed)", err)
+	}
+	if len(fake.MergeCalls) != 0 {
+		t.Errorf("merged despite unknown file list")
+	}
+}
+
+func TestRun_RepoURLIsReducedToSlugForAPI(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{Repository: "https://github.com/o/r.git"})
+	fake := baseFake()
+	fake.AutoMergeAllowed = false
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || res.Merged {
+		t.Fatalf("Result = %+v, %v; want auto-merge fallback pause", res, err)
+	}
+	if !reflect.DeepEqual(fake.AutoMergeRepos, []string{"o/r"}) {
+		t.Errorf("repo passed to gh api = %v, want [o/r]", fake.AutoMergeRepos)
 	}
 }
