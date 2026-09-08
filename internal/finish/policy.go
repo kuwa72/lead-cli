@@ -10,8 +10,63 @@
 package finish
 
 import (
+	"path"
+	"strings"
+
 	"github.com/kuwa72/lead-cli/internal/state"
 )
+
+// ProtectedPaths are the project-convention files an unattended agent must
+// not merge changes to on its own (docs/rfc-inbox-ux.md §7 guardrail, §9).
+// A trailing "/" matches the whole directory; a trailing "*" matches a
+// prefix; a bare name matches that file at the repository root (AGENTS.md
+// also anywhere below, since nested rule files bind agents the same way).
+// Single source of truth: `lead finish` reads it, tests exercise it.
+var ProtectedPaths = []string{
+	"AGENTS.md",
+	".github/",
+	".claude/",
+	".devin/",
+	".goreleaser*",
+	"install.sh",
+}
+
+// GuardedFiles returns the subset of files matching ProtectedPaths, in
+// input order.
+func GuardedFiles(files []string) []string {
+	var hit []string
+	for _, f := range files {
+		if isProtectedPath(f) {
+			hit = append(hit, f)
+		}
+	}
+	return hit
+}
+
+func isProtectedPath(file string) bool {
+	f := strings.TrimPrefix(strings.TrimSpace(file), "./")
+	for _, p := range ProtectedPaths {
+		switch {
+		case strings.HasSuffix(p, "/"):
+			if strings.HasPrefix(f, p) {
+				return true
+			}
+		case strings.HasSuffix(p, "*"):
+			if strings.HasPrefix(f, strings.TrimSuffix(p, "*")) {
+				return true
+			}
+		case p == "AGENTS.md":
+			if path.Base(f) == p {
+				return true
+			}
+		default:
+			if f == p {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Policy is the merge policy (RFC §7.1).
 type Policy string

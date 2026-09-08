@@ -1,6 +1,7 @@
 package finish
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/kuwa72/lead-cli/internal/state"
@@ -41,6 +42,33 @@ func TestResolvePriorityFlagOverRecordOverRepoOverDefault(t *testing.T) {
 	}
 	if got := Resolve(state.ModeDocs, "", "", ""); got != PolicyNever {
 		t.Errorf("docs default: got %q", got)
+	}
+}
+
+func TestGuardedFiles_ProtectedConventionPaths(t *testing.T) {
+	files := []string{
+		"internal/finish/finish.go",
+		"AGENTS.md",
+		".github/workflows/ci.yml",
+		".claude/settings.json",
+		".devin/rules.md",
+		".goreleaser.yaml",
+		"install.sh",
+		"docs/AGENTS.md",
+		"./.github/CODEOWNERS",
+		"internal/projinit/AGENTS.md.tmpl", // template, not a rule file
+		"docs/install.sh.md",
+		"github/x", "claude.go", "agents.md",
+	}
+	want := []string{
+		"AGENTS.md", ".github/workflows/ci.yml", ".claude/settings.json", ".devin/rules.md",
+		".goreleaser.yaml", "install.sh", "docs/AGENTS.md", "./.github/CODEOWNERS",
+	}
+	if got := GuardedFiles(files); !reflect.DeepEqual(got, want) {
+		t.Errorf("GuardedFiles = %q, want %q", got, want)
+	}
+	if got := GuardedFiles([]string{"main.go", "README.md"}); got != nil {
+		t.Errorf("GuardedFiles(plain) = %q, want nil", got)
 	}
 }
 

@@ -114,6 +114,7 @@ type FakeGhClient struct {
 	// AutoMergeAllowed gates policy auto (repo setting).
 	AutoMergeAllowed bool
 	AutoMergeErr     error
+	AutoMergeRepos   []string // repo slugs asked
 
 	CloseErr   error
 	CommentErr error
@@ -141,6 +142,19 @@ type FakeGhClient struct {
 	LabelErr       error
 	AddedLabels    []LabelCall
 	RemovedLabels  []LabelCall
+
+	// Files is returned by every PrFiles call (guardrail input).
+	Files      []string
+	FilesErr   error
+	FilesCalls []int
+
+	// DefaultBranch feeds RepoDefaultBranch ("" means "main").
+	DefaultBranch    string
+	DefaultBranchErr error
+	// Protection feeds BranchProtection; ProtectionCalls records "repo@branch".
+	Protection      ports.BranchProtection
+	ProtectionErr   error
+	ProtectionCalls []string
 }
 
 // LabelCall records one IssueAddLabel / IssueRemoveLabel invocation.
@@ -170,6 +184,35 @@ func (f *FakeGhClient) IssueAddLabel(ctx context.Context, number int, label stri
 func (f *FakeGhClient) IssueRemoveLabel(ctx context.Context, number int, label string) error {
 	f.RemovedLabels = append(f.RemovedLabels, LabelCall{Number: number, Label: label})
 	return f.LabelErr
+}
+
+// PrFiles returns Files (or FilesErr) and records the call.
+func (f *FakeGhClient) PrFiles(ctx context.Context, pr int) ([]string, error) {
+	f.FilesCalls = append(f.FilesCalls, pr)
+	if f.FilesErr != nil {
+		return nil, f.FilesErr
+	}
+	return f.Files, nil
+}
+
+// RepoDefaultBranch returns DefaultBranch ("main" when empty) or DefaultBranchErr.
+func (f *FakeGhClient) RepoDefaultBranch(ctx context.Context, repo string) (string, error) {
+	if f.DefaultBranchErr != nil {
+		return "", f.DefaultBranchErr
+	}
+	if f.DefaultBranch == "" {
+		return "main", nil
+	}
+	return f.DefaultBranch, nil
+}
+
+// BranchProtection returns Protection (or ProtectionErr) and records the call.
+func (f *FakeGhClient) BranchProtection(ctx context.Context, repo, branch string) (ports.BranchProtection, error) {
+	f.ProtectionCalls = append(f.ProtectionCalls, repo+"@"+branch)
+	if f.ProtectionErr != nil {
+		return ports.BranchProtection{}, f.ProtectionErr
+	}
+	return f.Protection, nil
 }
 
 // ListOpen returns Summaries (or ListErr) and records the call.
@@ -228,6 +271,7 @@ func (f *FakeGhClient) PrMerge(ctx context.Context, pr int) error {
 
 // RepoAllowsAutoMerge returns the canned repo setting.
 func (f *FakeGhClient) RepoAllowsAutoMerge(ctx context.Context, repo string) (bool, error) {
+	f.AutoMergeRepos = append(f.AutoMergeRepos, repo)
 	return f.AutoMergeAllowed, f.AutoMergeErr
 }
 

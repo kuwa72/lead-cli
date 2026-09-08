@@ -65,9 +65,9 @@ var ErrHeadlessUnsupported = errors.New("agent has no verified headless mode")
 //	agy      --dangerously-skip-permissions -p <prompt>
 //	gemini   -y <prompt>            (positional prompt; -p is deprecated)
 //	opencode run --auto <prompt>
-//
-// devin exposes --print but no auto-approval flag was found, so it is
-// rejected rather than guessed.
+//	devin    --permission-mode dangerous -p <prompt>
+//	         (help: `--permission-mode` "dangerous" auto-approves all tools;
+//	         `-p/--print [<PROMPT>]` non-interactive, accepts an inline prompt)
 func HeadlessArgv(agentName, prompt string) ([]string, error) {
 	name := Resolve(agentName)
 	switch name {
@@ -81,6 +81,8 @@ func HeadlessArgv(agentName, prompt string) ([]string, error) {
 		return []string{"gemini", "-y", prompt}, nil
 	case "opencode":
 		return []string{"opencode", "run", "--auto", prompt}, nil
+	case "devin":
+		return []string{"devin", "--permission-mode", "dangerous", "-p", prompt}, nil
 	}
 	return nil, fmt.Errorf("%s: %w", name, ErrHeadlessUnsupported)
 }

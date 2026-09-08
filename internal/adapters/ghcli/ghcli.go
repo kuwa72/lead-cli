@@ -230,6 +230,119 @@ func (c *Client) IssueRemoveLabel(ctx context.Context, number int, label string)
 	return err
 }
 
+// PrFiles runs `gh pr view <pr> --json files --jq .files[].path`
+// (one path per line).
+func (c *Client) PrFiles(ctx context.Context, pr int) ([]string, error) {
+	out, err := c.run(ctx, "pr", "view", strconv.Itoa(pr), "--json", "files", "--jq", ".files[].path")
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+// RepoDefaultBranch runs `gh api repos/<repo> --jq .default_branch`.
+func (c *Client) RepoDefaultBranch(ctx context.Context, repo string) (string, error) {
+	out, err := c.run(ctx, "api", "repos/"+repo, "--jq", ".default_branch")
+	if err != nil {
+		return "", err
+	}
+	b := strings.TrimSpace(string(out))
+	if b == "" {
+		return "", fmt.Errorf("gh api repos/%s: empty default_branch", repo)
+	}
+	return b, nil
+}
+
+// isHTTP404 reports whether a gh api failure was a 404 (gh prints
+// "... (HTTP 404)" on stderr, which run surfaces in the error).
+func isHTTP404(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "HTTP 404")
+}
+
+// BranchProtection runs the classic protection endpoint (404 = unprotected)
+// and then the rulesets endpoint, merging both into one view.
+func (c *Client) BranchProtection(ctx context.Context, repo, branch string) (ports.BranchProtection, error) {
+	var bp ports.BranchProtection
+	seen := map[string]bool{}
+	addCheck := func(ctxName string) {
+		if ctxName != "" && !seen[ctxName] {
+			seen[ctxName] = true
+			bp.RequiredChecks = append(bp.RequiredChecks, ctxName)
+		}
+	}
+
+	protPath := "repos/" + repo + "/branches/" + branch + "/protection"
+	out, err := c.run(ctx, "api", protPath)
+	switch {
+	case err == nil:
+		var raw struct {
+			RequiredStatusChecks *struct {
+				Contexts []string `json:"contexts"`
+				Checks   []struct {
+					Context string `json:"context"`
+				} `json:"checks"`
+			} `json:"required_status_checks"`
+			RequiredPullRequestReviews *struct{} `json:"required_pull_request_reviews"`
+		}
+		if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+			return bp, fmt.Errorf("gh api %s: decode JSON: %w", protPath, err)
+		}
+		bp.Protected = true
+		bp.RequiresPR = raw.RequiredPullRequestReviews != nil
+		if raw.RequiredStatusChecks != nil {
+			for _, ctxName := range raw.RequiredStatusChecks.Contexts {
+				addCheck(ctxName)
+			}
+			for _, ch := range raw.RequiredStatusChecks.Checks {
+				addCheck(ch.Context)
+			}
+		}
+	case isHTTP404(err):
+		// no classic protection; rulesets may still apply
+	default:
+		return bp, err
+	}
+
+	rulesPath := "repos/" + repo + "/rules/branches/" + branch
+	out, err = c.run(ctx, "api", rulesPath)
+	if err != nil {
+		if isHTTP404(err) {
+			return bp, nil
+		}
+		return bp, err
+	}
+	var rules []struct {
+		Type       string `json:"type"`
+		Parameters struct {
+			RequiredStatusChecks []struct {
+				Context string `json:"context"`
+			} `json:"required_status_checks"`
+		} `json:"parameters"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &rules); err != nil {
+		return bp, fmt.Errorf("gh api %s: decode JSON: %w", rulesPath, err)
+	}
+	for _, r := range rules {
+		switch r.Type {
+		case "pull_request":
+			bp.Protected = true
+			bp.RequiresPR = true
+		case "required_status_checks":
+			bp.Protected = true
+			for _, ch := range r.Parameters.RequiredStatusChecks {
+				addCheck(ch.Context)
+			}
+		}
+	}
+	return bp, nil
+}
+
 // BrowseIssue runs `gh issue view <n> --web`.
 func (c *Client) BrowseIssue(ctx context.Context, number int) error {
 	_, err := c.run(ctx, "issue", "view", strconv.Itoa(number), "--web")

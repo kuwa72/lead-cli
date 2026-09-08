@@ -54,6 +54,28 @@ type GhClient interface {
 	IssueAddLabel(ctx context.Context, number int, label string) error
 	// IssueRemoveLabel mirrors `gh issue edit <n> --remove-label <l>`.
 	IssueRemoveLabel(ctx context.Context, number int, label string) error
+	// PrFiles mirrors `gh pr view <pr> --json files --jq '.files[].path'`
+	// (guardrail: docs/rfc-inbox-ux.md §7).
+	PrFiles(ctx context.Context, pr int) ([]string, error)
+	// RepoDefaultBranch mirrors `gh api repos/<repo> --jq .default_branch`.
+	RepoDefaultBranch(ctx context.Context, repo string) (string, error)
+	// BranchProtection mirrors `gh api repos/<repo>/branches/<branch>/protection`
+	// (404 = no classic protection) merged with the rulesets that apply to the
+	// branch (`gh api repos/<repo>/rules/branches/<branch>`). Issue #67.
+	BranchProtection(ctx context.Context, repo, branch string) (BranchProtection, error)
+}
+
+// BranchProtection is what `lead doctor` / `lead dispatch` need to know
+// about a branch: is any protection in force, and which status checks
+// must pass before merging.
+type BranchProtection struct {
+	// Protected is true when classic protection or at least one ruleset
+	// (pull_request / required_status_checks) applies to the branch.
+	Protected bool
+	// RequiredChecks lists the required status-check contexts (deduplicated).
+	RequiredChecks []string
+	// RequiresPR is true when direct pushes are blocked (PR required).
+	RequiresPR bool
 }
 
 // PRCheck is one CI check row. Bucket is pass/fail/pending/skipping/cancel.

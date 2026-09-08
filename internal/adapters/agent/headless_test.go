@@ -20,6 +20,7 @@ func TestHeadlessArgv_MapsVerifiedFlags(t *testing.T) {
 		{"", []string{"agy", "--dangerously-skip-permissions", "-p", p}},
 		{"gemini", []string{"gemini", "-y", p}},
 		{"opencode", []string{"opencode", "run", "--auto", p}},
+		{"devin", []string{"devin", "--permission-mode", "dangerous", "-p", p}},
 	}
 	for _, c := range cases {
 		got, err := HeadlessArgv(c.agent, p)
@@ -33,7 +34,7 @@ func TestHeadlessArgv_MapsVerifiedFlags(t *testing.T) {
 }
 
 func TestHeadlessArgv_UnsupportedAgents(t *testing.T) {
-	for _, name := range []string{"devin", "nope"} {
+	for _, name := range []string{"nope", "cursor"} {
 		_, err := HeadlessArgv(name, "x")
 		if !errors.Is(err, ErrHeadlessUnsupported) {
 			t.Errorf("%q: err = %v, want ErrHeadlessUnsupported", name, err)

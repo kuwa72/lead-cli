@@ -68,6 +68,9 @@ type Deps struct {
 	Shell    string // override; "" = detect from $SHELL
 	Version  string
 	Offline  bool
+	// Repo is the "owner/name" of the current repository's origin; ""
+	// skips the repository-side checks (issue #67).
+	Repo string
 	// GenCompletion renders the expected completion script (for drift check).
 	GenCompletion func(shell string) (string, error)
 }
@@ -146,6 +149,7 @@ func Run(d Deps) Report {
 		rep.Checks = append(rep.Checks, Check{Name: "agents", OK: true, Detail: fmt.Sprintf("found: %s", strings.Join(found, ", "))})
 	}
 
+	rep.Checks = append(rep.Checks, protectionChecks(ctx, d)...)
 	rep.Checks = append(rep.Checks, completionCheck(d))
 	rep.Checks = append(rep.Checks, keybindingCheck(d))
 	return rep

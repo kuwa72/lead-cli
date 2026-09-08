@@ -52,6 +52,10 @@ type Workflow struct {
 	PullRequests []PRRef  `json:"pull_requests,omitempty"`
 	Status       Status   `json:"status"`
 	MergePolicy  string   `json:"merge_policy,omitempty"`
+	// PolicyReason explains a MergePolicy that `lead finish` lowered itself
+	// (guardrail: PR touched protected files). Empty when the policy came
+	// from the human or the mode default.
+	PolicyReason string   `json:"policy_reason,omitempty"`
 	Artifacts    []string `json:"artifacts,omitempty"`
 	// Dispatch bookkeeping (docs/rfc-inbox-ux.md §7): which headless agent
 	// ran, how many times it failed to close the issue, the last process
