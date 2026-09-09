@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/kuwa72/lead-cli/internal/dispatch"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 )
@@ -35,6 +36,12 @@ type Options struct {
 	// files a 実機NG follow-up referencing that issue (inbox n key).
 	// Nil disables s/n.
 	Say func(ctx context.Context, oneLiner string, followUp int) (string, error)
+	// Parallel is the dispatcher's parallel limit for the header.
+	// 0 means dispatch.DefaultParallel.
+	Parallel int
+	// RunningCount returns the dispatcher's current running count.
+	// Nil falls back to counting the running section.
+	RunningCount func() (int, error)
 }
 
 type mode int
@@ -104,6 +111,9 @@ func New(opts Options) Model {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if opts.Parallel <= 0 {
+		opts.Parallel = dispatch.DefaultParallel
 	}
 	return Model{opts: opts, sections: Build(nil, nil, nil), loading: true}
 }
@@ -617,16 +627,26 @@ func (m Model) rule() string {
 func (m Model) viewList() string {
 	var b strings.Builder
 	running := 0
-	for _, s := range m.sections {
-		if s.Kind == KindRunning {
-			running = len(s.Items)
+	counted := false
+	if m.opts.RunningCount != nil {
+		if n, err := m.opts.RunningCount(); err == nil {
+			running = n
+			counted = true
+		}
+	}
+	if !counted {
+		for _, s := range m.sections {
+			if s.Kind == KindRunning {
+				running = len(s.Items)
+				break
+			}
 		}
 	}
 	head := "lead"
 	if m.opts.Repo != "" {
 		head += " — " + m.opts.Repo
 	}
-	right := fmt.Sprintf("実行中 %d", running)
+	right := fmt.Sprintf("実行中 %d / 並列上限 %d", running, m.opts.Parallel)
 	if m.loading {
 		right += "   ⟳ 読込中"
 	} else if age := relAge(m.refreshedAt, m.opts.Now()); age != "" {

@@ -20,6 +20,7 @@ export HOME="$tmp/home"
 export GOPATH="$REAL_GOPATH" GOCACHE="$REAL_GOCACHE"
 unset XDG_STATE_HOME HERDR_ENV LEAD_TEST_INBOX_KEYS || true
 export LEAD_STATE_FILE="$tmp/state/workflows.json"
+export PROTECTED=1
 mkdir -p "$HOME"
 
 repo="$tmp/repo"
@@ -53,6 +54,19 @@ case "$1 $2" in
     case "$*" in *"--body-file -"*) cat > "$GH_STDIN" ;; esac ;;
   "issue comment"|"issue close") : ;;
   "issue create") echo "https://github.com/acme/widgets/issues/101" ;;
+  "api repos/acme/widgets")
+    case "$*" in
+      *default_branch*) printf 'main\n' ;;
+      *allow_auto_merge*) printf 'true\n' ;;
+      *) echo "unexpected gh api jq: $*" >&2; exit 3 ;;
+    esac ;;
+  "api repos/acme/widgets/branches/main/protection")
+    if [ -n "${PROTECTED:-}" ]; then
+      printf '{"required_status_checks":{"contexts":["test"]},"required_pull_request_reviews":{}}'
+    else
+      echo "gh: Branch not protected (HTTP 404)" >&2; exit 1
+    fi ;;
+  "api repos/acme/widgets/rules/branches/main") printf '[]' ;;
   *) echo "unexpected gh call: $*" >&2; exit 3 ;;
 esac
 EOF
