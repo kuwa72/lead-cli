@@ -683,6 +683,9 @@ func (m Model) peekWithHerdrOrPager(number int, logPath, pane string) tea.Cmd {
 func (m Model) peekHerdrCmd(number int, logPath, pane string) tea.Cmd {
 	return func() tea.Msg {
 		err := m.opts.Herdr.Peek(context.Background(), logPath, pane)
+		if ports.IsPaneNotFound(err) {
+			return doneMsg{status: fmt.Sprintf("#%d のエージェントペインが見つかりません（セッションが変わった可能性があります）", number)}
+		}
 		if err != nil {
 			return doneMsg{err: err}
 		}

@@ -466,6 +466,20 @@ func fakeSay(calls *[]sayCall) func(context.Context, string, int) (string, error
 	}
 }
 
+func TestKeyP_PaneNotFoundShowsStatus(t *testing.T) {
+	_, _, m := newFixture(t)
+	store := m.opts.Store
+	if err := store.Upsert(state.Workflow{Issue: 9, Status: state.StatusBlocked, Pane: "wQ:pP", LogPath: "", Branch: "issue/9-stuck"}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Drain(m, m.loadCmd())
+	m.opts.Herdr = &testutil.FakeHerdrRunner{PeekErr: &ports.PaneNotFoundError{Pane: "wQ:pP"}}
+	m = press(t, m, "j", "j", "j", "p") // blocked #9 with pane only
+	if v := m.View(); !strings.Contains(v, "エージェントペインが見つかりません") {
+		t.Errorf("pane not found should show a friendly status, got:\n%s", v)
+	}
+}
+
 func TestKeysNS_WithoutSayAreNoOps(t *testing.T) {
 	gh, sh, m := newFixture(t)
 	press(t, m, "n", "s")

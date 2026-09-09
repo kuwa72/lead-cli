@@ -170,3 +170,18 @@ func IsBinaryNotFound(err error) bool {
 	var target *BinaryNotFoundError
 	return errors.As(err, &target)
 }
+
+// PaneNotFoundError reports that the referenced Herdr pane no longer exists.
+type PaneNotFoundError struct {
+	Pane string
+}
+
+func (e *PaneNotFoundError) Error() string {
+	return fmt.Sprintf("herdr pane %s not found", e.Pane)
+}
+
+// IsPaneNotFound reports whether err wraps a *PaneNotFoundError.
+func IsPaneNotFound(err error) bool {
+	var target *PaneNotFoundError
+	return errors.As(err, &target)
+}
