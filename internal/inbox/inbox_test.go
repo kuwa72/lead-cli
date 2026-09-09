@@ -784,6 +784,22 @@ func TestLoadCmd_UpdatesLastSeenAt(t *testing.T) {
 	}
 }
 
+func TestReload_PreservesSectionCollapsed(t *testing.T) {
+	_, _, m := newFixture(t)
+	m.sections[0].Collapsed = true
+	m = press(t, m, "R")
+	if !m.sections[0].Collapsed {
+		t.Fatalf("reload did not preserve collapsed section: %v", m.sections[0].Collapsed)
+	}
+	if m.loading {
+		t.Error("reload should finish loading")
+	}
+	v := m.View()
+	if strings.Contains(v, "#7") {
+		t.Errorf("collapsed section should still be hidden after reload, got:\n%s", v)
+	}
+}
+
 func TestHeader_EnterTogglesSection(t *testing.T) {
 	_, _, m := newFixture(t)
 	m.cursor = 0 // レビュー待ち header
