@@ -107,6 +107,50 @@ func (r *Runner) SendText(ctx context.Context, paneID string, text string) error
 	return err
 }
 
+// Peek opens an agent log in a new herdr tab, or moves an existing pane
+// into a new tab. Issue #103.
+//
+// When logPath is set it is preferred: `herdr tab create --focus` creates a
+// focused tab, then `herdr pane run <pane> tail -f <log>` streams the log.
+// When only pane is set, `herdr pane move <pane> --new-tab --focus` opens the
+// existing pane in a new focused tab.
+func (r *Runner) Peek(ctx context.Context, logPath, pane string) error {
+	if logPath != "" {
+		out, err := r.run(ctx, "tab", "create", "--focus")
+		if err != nil {
+			return err
+		}
+		rootPane, err := parseTabCreateRootPane(out)
+		if err != nil {
+			return err
+		}
+		_, err = r.run(ctx, "pane", "run", rootPane, "tail", "-f", logPath)
+		return err
+	}
+	if pane != "" {
+		_, err := r.run(ctx, "pane", "move", pane, "--new-tab", "--focus")
+		return err
+	}
+	return fmt.Errorf("herdr peek: logPath and pane are both empty")
+}
+
+func parseTabCreateRootPane(out []byte) (string, error) {
+	var parsed struct {
+		Result struct {
+			RootPane struct {
+				PaneID string `json:"pane_id"`
+			} `json:"root_pane"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &parsed); err != nil {
+		return "", fmt.Errorf("herdr tab create: decode JSON: %w", err)
+	}
+	if parsed.Result.RootPane.PaneID == "" {
+		return "", fmt.Errorf("herdr tab create: empty .result.root_pane.pane_id in %q", strings.TrimSpace(string(out)))
+	}
+	return parsed.Result.RootPane.PaneID, nil
+}
+
 // InlineRunner is the fallback when Herdr is unavailable
 // (HERDR_ENV unset or herdr missing): the agent command is surfaced
 // on Out (default os.Stdout) for the user to review and run inline.
@@ -132,6 +176,11 @@ func (r *InlineRunner) Split(ctx context.Context, dir ports.Direction, ratio flo
 func (r *InlineRunner) SendText(ctx context.Context, paneID string, text string) error {
 	_, err := fmt.Fprintln(r.out(), text)
 	return err
+}
+
+// Peek is not supported by the inline fallback.
+func (r *InlineRunner) Peek(ctx context.Context, logPath, pane string) error {
+	return &ports.BinaryNotFoundError{Binary: "herdr"}
 }
 
 // Available reports whether the Herdr path can be used:

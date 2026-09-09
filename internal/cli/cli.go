@@ -540,6 +540,11 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		AgentsPath: filepath.Join(root, "AGENTS.md"),
 		Repo:       inbox.RepoSlug(deps.gitRunner().OriginURL(root)),
 	}
+	if deps.Herdr != nil {
+		opts.Herdr = deps.Herdr
+	} else if herdr.Available() {
+		opts.Herdr = herdr.New()
+	}
 	opts.Say = func(ctx context.Context, oneLiner string, followUp int) (string, error) {
 		r := &spec.Runner{
 			Gh:    deps.gh(),
