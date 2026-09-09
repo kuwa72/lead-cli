@@ -55,6 +55,11 @@ case "$1 $2" in
     case "$*" in *"--body-file -"*) cat > "$GH_STDIN" ;; esac ;;
   "issue comment"|"issue close") : ;;
   "issue create") echo "https://github.com/acme/widgets/issues/101" ;;
+  "pr view")
+    case "$*" in
+      *"--json body"*) printf '{"body":"## Acceptance\\n- [ ] task A\\n- [x] task B\\n"}' ;;
+      *) echo "unexpected pr view: $*" >&2; exit 3 ;;
+    esac ;;
   "api repos/acme/widgets")
     case "$*" in
       *default_branch*) printf 'main\n' ;;
@@ -111,7 +116,7 @@ export EDITOR=fake-editor
 # Provide a workflow record so the blocked issue has an agent log to peek.
 mkdir -p "$(dirname "$LEAD_STATE_FILE")"
 cat > "$LEAD_STATE_FILE" <<'EOF'
-{"version":1,"workflows":[{"issue":9,"status":"blocked","agent":"claude","attempts":3,"log_path":"/logs/issue-9.log","branch":"issue/9-stuck"}]}
+{"version":1,"workflows":[{"issue":9,"status":"blocked","agent":"claude","attempts":3,"log_path":"/logs/issue-9.log","branch":"issue/9-stuck","pull_requests":[{"number":99,"status":"open"}]}]}
 EOF
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
@@ -195,6 +200,16 @@ grep -q 'issue edit\|issue comment\|issue close' "$GH_LOG" && fail "r must not t
 LEAD_TEST_INBOX_KEYS=o,enter,esc,q "$tmp/lead" >/dev/null 2>&1 || fail "headless o/enter failed"
 grep -qxF 'GH issue view 7 --web' "$GH_LOG" || fail "o did not open browser: $(cat "$GH_LOG")"
 grep -qxF 'GH issue view 7 --json number,title,body,state' "$GH_LOG" || fail "enter did not fetch detail"
+
+# --- 9.5. enter on blocked issue with linked PR: shows issue body + PR checklist ----
+: > "$GH_LOG"
+out="$(LEAD_TEST_INBOX_KEYS='j,j,enter' "$tmp/lead" 2>&1)" || fail "headless detail with PR failed"
+case "$out" in *"## Acceptance"*) ;; *) fail "detail missing issue body: $out";; esac
+case "$out" in *"PR 本文"*) ;; *) fail "detail missing PR header: $out";; esac
+case "$out" in *"- [ ] task A"*) ;; *) fail "detail missing PR checklist: $out";; esac
+case "$out" in *"（PR 未記録）"*) fail "detail should not show 'no PR' when linked: $out";; esac
+grep -qxF 'GH issue view 9 --json number,title,body,state' "$GH_LOG" || fail "enter did not fetch issue #9: $(cat "$GH_LOG")"
+grep -qxF 'GH pr view 99 --json body' "$GH_LOG" || fail "enter did not fetch PR body: $(cat "$GH_LOG")"
 
 # --- 10. s: 一言から needs-review Issue 起票（spec AI 経由） -------------------------
 : > "$GH_LOG"; : > "$AGY_LOG"

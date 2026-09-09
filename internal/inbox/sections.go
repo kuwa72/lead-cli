@@ -67,6 +67,7 @@ type Item struct {
 	LogPath  string
 	Pane     string
 	Branch   string
+	PRNumber int
 	MergedAt time.Time
 }
 
@@ -92,7 +93,7 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 	}
 	enrich := func(it Item) Item {
 		if w, ok := byIssue[it.Number]; ok {
-			it.Agent, it.Attempts, it.PID, it.LogPath, it.Pane, it.Branch = w.Agent, w.Attempts, w.PID, w.LogPath, w.Pane, w.Branch
+			it.Agent, it.Attempts, it.PID, it.LogPath, it.Pane, it.Branch, it.PRNumber = w.Agent, w.Attempts, w.PID, w.LogPath, w.Pane, w.Branch, firstPRNumber(w.PullRequests)
 		}
 		return it
 	}
@@ -139,10 +140,17 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		if w.Status != state.StatusInProgress {
 			continue
 		}
-		it := Item{Number: w.Issue, Title: strings.TrimSpace(w.Branch), Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Pane: w.Pane, Branch: w.Branch, Kind: KindRunning}
+		it := Item{Number: w.Issue, Title: strings.TrimSpace(w.Branch), Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Pane: w.Pane, Branch: w.Branch, PRNumber: firstPRNumber(w.PullRequests), Kind: KindRunning}
 		running.Items = append(running.Items, it)
 	}
 	return []Section{review, stuck, mergedSection, running}
+}
+
+func firstPRNumber(prs []state.PRRef) int {
+	if len(prs) == 0 {
+		return 0
+	}
+	return prs[0].Number
 }
 
 // FilterUnseenMerged returns merged issues with MergedAt after lastSeen and

@@ -110,6 +110,11 @@ type FakeGhClient struct {
 	PR    ports.PRInfo
 	PRErr error
 
+	// PrBodies feeds PrBody: pr number → body.
+	PrBodies     map[int]string
+	PrBodyErr    error
+	PrBodyCalls  []int
+
 	MergeErr error
 
 	// AutoMergeAllowed gates policy auto (repo setting).
@@ -348,6 +353,19 @@ func (f *FakeGhClient) PrInfo(ctx context.Context, pr int) (ports.PRInfo, error)
 		return ports.PRInfo{}, f.PRErr
 	}
 	return f.PR, nil
+}
+
+// PrBody returns PrBodies[pr] (or PrBodyErr / unknown-number error)
+// and records the call.
+func (f *FakeGhClient) PrBody(ctx context.Context, pr int) (string, error) {
+	f.PrBodyCalls = append(f.PrBodyCalls, pr)
+	if f.PrBodyErr != nil {
+		return "", f.PrBodyErr
+	}
+	if body, ok := f.PrBodies[pr]; ok {
+		return body, nil
+	}
+	return "", fmt.Errorf("fake gh: PR #%d not found", pr)
 }
 
 // PrMerge records the call (or returns MergeErr).

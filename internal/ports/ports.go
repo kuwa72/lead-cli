@@ -39,6 +39,8 @@ type GhClient interface {
 	PrChecks(ctx context.Context, pr int) ([]PRCheck, error)
 	// PrInfo mirrors `gh pr view <pr> --json number,state,mergeable,mergeStateStatus`.
 	PrInfo(ctx context.Context, pr int) (PRInfo, error)
+	// PrBody mirrors `gh pr view <pr> --json body`.
+	PrBody(ctx context.Context, pr int) (string, error)
 	// PrMerge mirrors `gh pr merge <pr> --squash --delete-branch`.
 	PrMerge(ctx context.Context, pr int) error
 	// RepoAllowsAutoMerge mirrors `gh api repos/<owner>/<repo> --jq .allow_auto_merge`.

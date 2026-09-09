@@ -169,6 +169,21 @@ func (c *Client) PrInfo(ctx context.Context, pr int) (ports.PRInfo, error) {
 	}, nil
 }
 
+// PrBody runs `gh pr view <pr> --json body` and returns the body field.
+func (c *Client) PrBody(ctx context.Context, pr int) (string, error) {
+	out, err := c.run(ctx, "pr", "view", strconv.Itoa(pr), "--json", "body")
+	if err != nil {
+		return "", err
+	}
+	var raw struct {
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return "", fmt.Errorf("gh pr view %d: decode JSON: %w", pr, err)
+	}
+	return raw.Body, nil
+}
+
 // PrMerge runs `gh pr merge <pr> --squash --delete-branch` (squash default).
 func (c *Client) PrMerge(ctx context.Context, pr int) error {
 	_, err := c.run(ctx, "pr", "merge", strconv.Itoa(pr), "--squash", "--delete-branch")

@@ -218,7 +218,11 @@ func TestView_PropagatesGhFailure(t *testing.T) {
 const prServeBody = `if [ "$1 $2" = "pr checks" ]; then
   printf '[{"bucket":"pass","name":"test","state":"SUCCESS"},{"bucket":"pending","name":"lint","state":"PENDING"}]'
 elif [ "$1 $2" = "pr view" ]; then
-  printf '{"number":7,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}'
+  if echo "$*" | grep -q 'body'; then
+    printf '{"body":"## Acceptance\\n- [ ] task\\n"}'
+  else
+    printf '{"number":7,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}'
+  fi
 elif [ "$1 $2" = "pr merge" ]; then
   printf '{"number":7,"state":"MERGED"}'
 elif [ "$1 $2" = "issue close" ]; then
@@ -265,6 +269,34 @@ func TestPrInfo_CallsGhPrView(t *testing.T) {
 		if !strings.Contains(log, want) {
 			t.Errorf("gh args log missing %q, got:\n%s", want, log)
 		}
+	}
+}
+
+func TestPrBody_CallsGhWithExpectedArgs(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", prServeBody)
+
+	body, err := New().PrBody(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("PrBody: %v", err)
+	}
+	if !strings.Contains(body, "## Acceptance") || !strings.Contains(body, "- [ ] task") {
+		t.Errorf("body = %q, want Acceptance checklist", body)
+	}
+
+	if lines := testutil.LogLines(t, logPath); !reflect.DeepEqual(lines, []string{"<pr>", "<view>", "<7>", "<--json>", "<body>"}) {
+		t.Errorf("gh argv = %q", lines)
+	}
+}
+
+func TestPrBody_DecodesBody(t *testing.T) {
+	testutil.InstallDummy(t, "gh", `printf '{"body":"- [ ] task\\n"}'`)
+
+	body, err := New().PrBody(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("PrBody: %v", err)
+	}
+	if body != "- [ ] task\n" {
+		t.Errorf("body = %q, want '- [ ] task\\n'", body)
 	}
 }
 
