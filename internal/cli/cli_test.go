@@ -1,13 +1,29 @@
 package cli
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/testutil"
+	"github.com/kuwa72/lead-cli/internal/workflow"
 )
+
+// fakeGitRunner implements workflow.GitRunner for cli tests.
+type fakeGitRunner struct {
+	root   string
+	origin string
+}
+
+func (g *fakeGitRunner) RepoRoot(dir string) (string, error) { return g.root, nil }
+func (g *fakeGitRunner) CreateBranch(repoDir, branch string) error { return nil }
+func (g *fakeGitRunner) WorktreeAdd(repoDir, path, branch string) error { return os.MkdirAll(path, 0o755) }
+func (g *fakeGitRunner) WorktreeRemove(repoDir, path string, force bool) error { return nil }
+func (g *fakeGitRunner) OriginURL(repoDir string) string { return g.origin }
+
+var _ workflow.GitRunner = (*fakeGitRunner)(nil)
 
 func execute(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
@@ -154,6 +170,47 @@ func TestWorkAcceptsDocumentedFlags(t *testing.T) {
 	}
 	if got, _ := work.Flags().GetString("agent"); got != "devin" {
 		t.Errorf("--agent = %q, want devin", got)
+	}
+}
+
+func TestBareLeadWithParallelAndNoTTYFails(t *testing.T) {
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "")
+	_, _, err := execute(t, "--parallel", "3")
+	if err == nil {
+		t.Fatal("bare lead --parallel 3 on non-TTY = nil error, want non-zero exit")
+	}
+	if !strings.Contains(err.Error(), "--help") {
+		t.Errorf("error should point at --help, got %q", err)
+	}
+}
+
+func TestBareLeadParallelFlagIsWired(t *testing.T) {
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "R,q")
+	gh := &testutil.FakeGhClient{
+		Labeled: map[string][]ports.IssueSummary{
+			"needs-review": {{Number: 7, Title: "spec"}},
+		},
+	}
+	root := NewRootCmdWithDeps("v0.0.0-test", "abc1234", "2026-09-07", Deps{
+		Gh:      gh,
+		Git:     &fakeGitRunner{root: t.TempDir(), origin: "git@github.com:acme/widgets.git"},
+		WorkDir: t.TempDir(),
+	})
+	var out strings.Builder
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"--parallel", "3"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("headless lead --parallel 3: %v", err)
+	}
+	if got, _ := root.Flags().GetInt("parallel"); got != 3 {
+		t.Errorf("--parallel flag = %d, want 3", got)
+	}
+	if !strings.Contains(out.String(), "並列上限 3") {
+		t.Errorf("inbox header should show parallel limit 3, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "実行中 0") {
+		t.Errorf("inbox header should show running count, got:\n%s", out.String())
 	}
 }
 

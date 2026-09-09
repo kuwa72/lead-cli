@@ -260,6 +260,7 @@ It needs an interactive terminal; use --help for the subcommand list.`,
 		},
 	}
 	root.PersistentFlags().BoolP("version", "v", false, "print version information and exit")
+	root.Flags().Int("parallel", dispatch.DefaultParallel, "max agents running at once")
 
 	versionCmd := &cobra.Command{
 		Use:   "version",
@@ -525,6 +526,11 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 // exits non-zero with a hint (#81 requirement), unless LEAD_TEST_INBOX_KEYS
 // replays keys headlessly for shell tests (same idea as LEAD_TEST_SELECTION).
 func runInbox(cmd *cobra.Command, deps Deps) error {
+	parallel, _ := cmd.Flags().GetInt("parallel")
+	if parallel <= 0 {
+		parallel = dispatch.DefaultParallel
+	}
+
 	cwd, err := deps.workDir()
 	if err != nil {
 		return fmt.Errorf("inbox: working directory: %w", err)
@@ -533,12 +539,14 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	if r, err := deps.gitRunner().RepoRoot(cwd); err == nil && r != "" {
 		root = r
 	}
+	store := &state.Store{Path: deps.stateFile()}
 	opts := inbox.Options{
 		Gh:         deps.gh(),
-		Store:      &state.Store{Path: deps.stateFile()},
+		Store:      store,
 		Editor:     os.Getenv("EDITOR"),
 		AgentsPath: filepath.Join(root, "AGENTS.md"),
 		Repo:       inbox.RepoSlug(deps.gitRunner().OriginURL(root)),
+		Parallel:   parallel,
 	}
 	if deps.Herdr != nil {
 		opts.Herdr = deps.Herdr
@@ -568,12 +576,41 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		}
 		return fmt.Sprintf("%s を起票（needs-review）", strings.Join(nums, ", ")), nil
 	}
-	if keys := os.Getenv("LEAD_TEST_INBOX_KEYS"); keys != "" {
+
+	keys := os.Getenv("LEAD_TEST_INBOX_KEYS")
+	if keys == "" && (!isTerminal(os.Stdin) || !isTerminal(os.Stdout)) {
+		return errors.New("lead: the inbox needs an interactive terminal (stdin/stdout are not a TTY); run `lead --help` for subcommands")
+	}
+
+	dctx, cancel := context.WithCancel(cmd.Context())
+	defer cancel()
+	d := &dispatch.Dispatcher{
+		Gh:       deps.gh(),
+		Git:      deps.gitRunner(),
+		Store:    store,
+		Launcher: deps.launcher(),
+		Out:      io.Discard,
+		Opts: dispatch.Options{
+			Parallel: parallel,
+			LogDir:   filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
+			WorkDir:  cwd,
+		},
+	}
+	opts.RunningCount = d.RunningCount
+
+	if err := d.Preflight(dctx); err != nil {
+		fmt.Fprintln(cmd.ErrOrStderr(), err)
+	} else {
+		go func() {
+			if err := d.Loop(dctx, 30*time.Second); err != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), "dispatch:", err)
+			}
+		}()
+	}
+
+	if keys != "" {
 		opts.Shell = inbox.SyncShell{}
 		return inbox.RunHeadless(inbox.New(opts), strings.Split(keys, ","), cmd.OutOrStdout())
-	}
-	if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
-		return errors.New("lead: the inbox needs an interactive terminal (stdin/stdout are not a TTY); run `lead --help` for subcommands")
 	}
 	opts.Refresh = 30 * time.Second
 	return inbox.Run(inbox.New(opts))

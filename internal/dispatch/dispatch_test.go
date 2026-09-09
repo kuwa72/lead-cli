@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -524,5 +525,83 @@ func TestExecLauncher_MissingBinary(t *testing.T) {
 	_, err := (&ExecLauncher{}).Start(context.Background(), t.TempDir(), []string{"claude", "-p", "x"}, filepath.Join(t.TempDir(), "l.log"))
 	if !ports.IsBinaryNotFound(err) {
 		t.Errorf("err = %v, want BinaryNotFoundError", err)
+	}
+}
+
+func TestLoop_CancelDoesNotKillAgent(t *testing.T) {
+	root := t.TempDir()
+	argLog := testutil.InstallDummy(t, "claude", "exec sleep 10")
+
+	gh := &testutil.FakeGhClient{
+		Issues:  map[int]ports.Issue{7: {Number: 7, Title: "dispatch me", Body: "do the thing", State: "OPEN"}},
+		Labeled: map[string][]ports.IssueSummary{"ready": {{Number: 7, Title: "dispatch me"}}},
+	}
+	store := &state.Store{Path: filepath.Join(t.TempDir(), "workflows.json")}
+	logDir := filepath.Join(t.TempDir(), "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git := &fakeGit{root: root, origin: "github.com/o/r"}
+	d := &Dispatcher{
+		Gh:       gh,
+		Git:      git,
+		Store:    store,
+		Launcher: &ExecLauncher{},
+		Opts:     Options{Parallel: 1, Agent: "claude", LogDir: logDir, WorkDir: root},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Loop(ctx, 100*time.Millisecond) }()
+
+	var pid int
+	waitFor(t, "agent start", func() bool {
+		w, ok, err := store.Get(7, "")
+		if err != nil {
+			t.Fatalf("store Get: %v", err)
+		}
+		if ok && w.PID > 0 {
+			pid = w.PID
+			return true
+		}
+		return false
+	})
+
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatalf("FindProcess: %v", err)
+	}
+	if err := p.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("agent process %d not running before cancel: %v", pid, err)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Loop: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Loop did not return after cancel")
+	}
+
+	// The process must still be alive: cancel does not kill the agent.
+	if err := p.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("agent process %d was killed by cancel: %v", pid, err)
+	}
+
+	// Kill it explicitly so the runOne goroutine can finish and the test can exit.
+	if err := p.Kill(); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	waitFor(t, "agent exit", func() bool {
+		return p.Signal(syscall.Signal(0)) != nil
+	})
+
+	logText := testutil.LogText(t, argLog)
+	for _, want := range []string{"<-p>", "<--dangerously-skip-permissions>", "Issue #7: dispatch me", "do the thing"} {
+		if !strings.Contains(logText, want) {
+			t.Errorf("agent argv missing %q:\n%s", want, logText)
+		}
 	}
 }

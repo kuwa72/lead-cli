@@ -214,13 +214,16 @@ func (d *Dispatcher) Once(ctx context.Context) (Report, error) {
 		picks = append(picks, s.Number)
 	}
 	rep.Results = append(rep.Results, d.runPool(ctx, opts, picks, opts.Parallel-len(running))...)
-	d.print(rep)
+	if ctx.Err() == nil {
+		d.print(rep)
+	}
 	return rep, nil
 }
 
 // runPool starts picks through slots workers: the next issue starts as soon
-// as one finishes (no batch-then-wait). ctx cancellation stops new starts;
-// agents already running are waited for, never killed.
+// as one finishes (no batch-then-wait). ctx cancellation stops new starts.
+// On cancel it does not wait for already-started agents: they keep running
+// and are never killed (RFC §7).
 func (d *Dispatcher) runPool(ctx context.Context, opts Options, picks []int, slots int) []Result {
 	if slots <= 0 || len(picks) == 0 {
 		return nil
@@ -246,8 +249,14 @@ func (d *Dispatcher) runPool(ctx context.Context, opts Options, picks []int, slo
 			results[i] = d.runOne(ctx, opts, n)
 		}(i, n)
 	}
-	wg.Wait()
-	return results[:started]
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return results[:started]
+	case <-ctx.Done():
+		return []Result{}
+	}
 }
 
 // reconnect scans workflows.json for this repository's records with a
@@ -331,6 +340,34 @@ func (d *Dispatcher) Loop(ctx context.Context, interval time.Duration) error {
 	}
 }
 
+// RunningCount returns the number of in-progress workflows for the current
+// repository. It is safe to call from the UI while a dispatch pass is running.
+func (d *Dispatcher) RunningCount() (int, error) {
+	opts := d.Opts.withDefaults()
+	repoRoot, err := d.Git.RepoRoot(opts.WorkDir)
+	if err != nil {
+		return 0, err
+	}
+	key := repoKey(d.Git.OriginURL(repoRoot))
+	d.mu.Lock()
+	all, err := d.Store.List()
+	d.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	var count int
+	for _, w := range all {
+		if w.Status != state.StatusInProgress || w.Part != "" {
+			continue
+		}
+		if repoKey(w.Repository) != key {
+			continue
+		}
+		count++
+	}
+	return count, nil
+}
+
 func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) Result {
 	res := Result{Issue: number}
 	iss, err := d.Gh.View(ctx, number)
@@ -371,6 +408,9 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) Resul
 	}
 
 	waitErr := proc.Wait()
+	if ctx.Err() != nil {
+		return Result{Issue: number, Worktree: start.Worktree, LogPath: logPath, Outcome: OutcomeRetry}
+	}
 	return d.evaluate(ctx, opts, number, start.RepoRoot, start.Worktree, logPath, waitErr)
 }
 
