@@ -118,6 +118,9 @@ mkdir -p "$(dirname "$LEAD_STATE_FILE")"
 cat > "$LEAD_STATE_FILE" <<'EOF'
 {"version":1,"workflows":[{"issue":9,"status":"blocked","agent":"claude","attempts":3,"log_path":"/logs/issue-9.log","branch":"issue/9-stuck","pull_requests":[{"number":99,"status":"open"}]}]}
 EOF
+cat > "$(dirname "$LEAD_STATE_FILE")/inbox-seen.json" <<'EOF'
+{"help_shown":true}
+EOF
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 cd "$repo"
@@ -249,7 +252,7 @@ LEAD_TEST_INBOX_KEYS=bogus-key "$tmp/lead" >/dev/null 2>&1 && fail "unknown key 
 seen_dir="$(dirname "$LEAD_STATE_FILE")"
 mkdir -p "$seen_dir"
 cat > "$seen_dir/inbox-seen.json" <<'EOF'
-{"last_seen_at":"2026-09-09T00:00:00Z","confirmed":[]}
+{"last_seen_at":"2026-09-09T00:00:00Z","confirmed":[],"help_shown":true}
 EOF
 
 out="$(LEAD_TEST_INBOX_KEYS='z,q' "$tmp/lead" 2>&1)" || fail "headless merged show failed"
@@ -258,11 +261,29 @@ grep -q 'issue list --state closed' "$GH_LOG" || fail "ListMergedSince not calle
 
 # Reset the open timestamp and confirm the merged issue.
 cat > "$seen_dir/inbox-seen.json" <<'EOF'
-{"last_seen_at":"2026-09-09T00:00:00Z","confirmed":[]}
+{"last_seen_at":"2026-09-09T00:00:00Z","confirmed":[],"help_shown":true}
 EOF
 out="$(LEAD_TEST_INBOX_KEYS='z,j,j,j,c,q' "$tmp/lead" 2>&1)" || fail "headless c on merged failed"
 case "$out" in *"最近マージ (0)"*) ;; *) fail "merged issue still shown after c: $out";; esac
 case "$out" in *"#42 を確認しました"*) ;; *) fail "c status missing: $out";; esac
 grep -q '42' "$seen_dir/inbox-seen.json" || fail "inbox-seen not updated: $(cat "$seen_dir/inbox-seen.json")"
+
+# --- 17. first launch shows help and persists dismissal ----------------------
+rm -f "$seen_dir/inbox-seen.json"
+out="$(LEAD_TEST_INBOX_KEYS='q' "$tmp/lead" 2>&1)" || fail "headless first launch failed"
+case "$out" in *"受信箱の操作一覧"*"Issueを進める"*) ;; *) fail "first-launch help missing: $out";; esac
+case "$out" in *"q / Esc で一覧に戻る"*) ;; *) fail "help return hint missing: $out";; esac
+case "$(cat "$seen_dir/inbox-seen.json")" in *'"help_shown":true'*|*'"help_shown": true'*) ;; *) fail "help dismissal was not persisted: $(cat "$seen_dir/inbox-seen.json")";; esac
+
+# --- 18. second launch starts in list mode after help was dismissed -----------
+out="$(LEAD_TEST_INBOX_KEYS='q' "$tmp/lead" 2>&1)" || fail "headless second launch failed"
+case "$out" in *"受信箱の操作一覧"*) fail "help unexpectedly shown on second launch: $out";; esac
+case "$out" in *"? 操作一覧"*"q 終了"*) ;; *) fail "list footer labels missing: $out";; esac
+
+# --- 18. organized help uses outcome-oriented Japanese labels ----------------
+out="$(LEAD_TEST_INBOX_KEYS='?' "$tmp/lead" 2>&1)" || fail "explicit help failed"
+for label in "Issueを進める" "エージェントを確認する" "マージ後に確認する" "全体操作" "移動" "p エージェント画面" "s 新規起票" "n 不具合報告" "c 確認済み" "z 開閉" "? 操作一覧"; do
+  case "$out" in *"$label"*) ;; *) fail "help missing $label: $out";; esac
+done
 
 echo "inbox tests passed"

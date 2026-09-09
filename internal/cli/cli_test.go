@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -17,11 +18,13 @@ type fakeGitRunner struct {
 	origin string
 }
 
-func (g *fakeGitRunner) RepoRoot(dir string) (string, error) { return g.root, nil }
+func (g *fakeGitRunner) RepoRoot(dir string) (string, error)       { return g.root, nil }
 func (g *fakeGitRunner) CreateBranch(repoDir, branch string) error { return nil }
-func (g *fakeGitRunner) WorktreeAdd(repoDir, path, branch string) error { return os.MkdirAll(path, 0o755) }
+func (g *fakeGitRunner) WorktreeAdd(repoDir, path, branch string) error {
+	return os.MkdirAll(path, 0o755)
+}
 func (g *fakeGitRunner) WorktreeRemove(repoDir, path string, force bool) error { return nil }
-func (g *fakeGitRunner) OriginURL(repoDir string) string { return g.origin }
+func (g *fakeGitRunner) OriginURL(repoDir string) string                       { return g.origin }
 
 var _ workflow.GitRunner = (*fakeGitRunner)(nil)
 
@@ -88,6 +91,14 @@ func TestBareLeadWithoutTTYFailsWithHelpHint(t *testing.T) {
 // needs-review issue must swap labels through the injected gh client.
 func TestBareLeadHeadlessKeysReachGh(t *testing.T) {
 	t.Setenv("LEAD_TEST_INBOX_KEYS", "a,q")
+	stateFile := filepath.Join(t.TempDir(), "workflows.json")
+	t.Setenv("LEAD_STATE_FILE", stateFile)
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(stateFile), "inbox-seen.json"), []byte(`{"help_shown":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	gh := &testutil.FakeGhClient{Labeled: map[string][]ports.IssueSummary{
 		"needs-review": {{Number: 7, Title: "spec"}},
 	}}

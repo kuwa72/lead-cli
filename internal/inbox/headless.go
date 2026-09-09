@@ -90,6 +90,9 @@ func Drain(m Model, cmd tea.Cmd) (Model, bool) {
 // the final screen to out (LEAD_TEST_INBOX_KEYS hook for shell tests).
 func RunHeadless(m Model, keys []string, out io.Writer) error {
 	m, quit := Drain(m, m.Init())
+	if _, err := io.WriteString(out, m.View()); err != nil {
+		return err
+	}
 	for _, tok := range keys {
 		if quit {
 			break

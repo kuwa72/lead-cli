@@ -122,7 +122,14 @@ func New(opts Options) Model {
 	if opts.Parallel <= 0 {
 		opts.Parallel = dispatch.DefaultParallel
 	}
-	return Model{opts: opts, sections: Build(nil, nil, nil, nil, nil), loading: true}
+	m := Model{opts: opts, sections: Build(nil, nil, nil, nil, nil), loading: true}
+	if opts.Seen != nil {
+		shown, err := opts.Seen.HelpShown()
+		if err == nil && !shown {
+			m.mode = modeHelp
+		}
+	}
+	return m
 }
 
 // Init implements tea.Model.
@@ -291,6 +298,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateDetail(msg)
 		case modeHelp:
 			m.mode = modeList
+			if m.opts.Seen != nil {
+				if err := m.opts.Seen.MarkHelpShown(); err != nil {
+					m.status = "読込エラー: " + err.Error()
+				}
+			}
 			return m, nil
 		}
 		return m.updateList(msg)
@@ -335,12 +347,12 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openAgentsMd()
 	case "s":
 		if m.opts.Say == nil {
-			m.status = "say は未設定です（spec AI なし）。`lead say \"一言\"` を直接実行できます"
+			m.status = "s 新規起票は未設定です（spec AI なし）。`lead say \"一言\"` を直接実行できます"
 			return m, nil
 		}
 		say := m.opts.Say
 		m.mode = modeInput
-		m.input = inputState{prompt: "say 一言（Enter で needs-review 起票, Esc 取消）> ", submit: func(text string) tea.Cmd {
+		m.input = inputState{prompt: "新規起票 — 一言（Enter でレビュー待ちを起票, Esc 取消）> ", submit: func(text string) tea.Cmd {
 			if text == "" {
 				return func() tea.Msg { return doneMsg{status: "空の一言は起票しません"} }
 			}
@@ -444,7 +456,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "c":
 		if it.Kind != KindMerged {
-			m.status = fmt.Sprintf("#%d は確認対象外（最近マージの Issue のみ c で確認できます）", it.Number)
+			m.status = fmt.Sprintf("#%d は確認済み対象外（最近マージの Issue のみ c で確認できます）", it.Number)
 			return m, nil
 		}
 		if m.opts.Seen == nil {
@@ -462,14 +474,14 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.peekItem(it)
 	case "n":
 		if m.opts.Say == nil {
-			m.status = "n 実機NG は未設定です（spec AI なし）。`lead say --follow-up N \"一言\"` を直接実行できます"
+			m.status = "n 不具合報告は未設定です（spec AI なし）。`lead say --follow-up N \"一言\"` を直接実行できます"
 			return m, nil
 		}
 		say := m.opts.Say
 		number := it.Number
 		kind := it.Kind
 		m.mode = modeInput
-		m.input = inputState{prompt: fmt.Sprintf("実機NG #%d — 一言（Enter で追い Issue 起票, Esc 取消）> ", number), submit: func(text string) tea.Cmd {
+		m.input = inputState{prompt: fmt.Sprintf("不具合報告 #%d — 一言（Enter で追い Issue 起票, Esc 取消）> ", number), submit: func(text string) tea.Cmd {
 			if text == "" {
 				return func() tea.Msg { return doneMsg{status: "空の一言は起票しません"} }
 			}
@@ -686,8 +698,6 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // --- view ---------------------------------------------------------------------
 
-const keyBar = "a 承認  e 編集して承認  x 却下  t 一言返す  p 覗く  c 確認  n 実機NG  r 規約  s say  o ブラウザ  Enter 本文  z 折畳  R 更新  ? ヘルプ  q 終了"
-
 // View implements tea.Model.
 func (m Model) View() string {
 	switch m.mode {
@@ -745,11 +755,11 @@ func (m Model) viewList() string {
 	idx := 0
 	for _, s := range m.sections {
 		folded := s.Collapsed && !m.expanded
-		mark := ""
+		mark := "▾"
 		if folded {
-			mark = "  ▸"
+			mark = "▸"
 		}
-		fmt.Fprintf(&b, "%s (%d)%s\n", s.Kind.Title(), len(s.Items), mark)
+		fmt.Fprintf(&b, "%s %s (%d)\n", mark, s.Kind.Title(), len(s.Items))
 		if folded {
 			continue
 		}
@@ -760,7 +770,7 @@ func (m Model) viewList() string {
 				cur = "> "
 			}
 			idx++
-			fmt.Fprintf(&b, "  %s#%-4d %s%s\n", cur, it.Number, it.Title, itemMeta(it, now))
+			fmt.Fprintf(&b, "%s#%-4d %s%s\n", cur, it.Number, it.Title, itemMeta(it, now))
 		}
 	}
 	if len(rows) == 0 && m.loadErr == nil && !m.loading {
@@ -770,12 +780,50 @@ func (m Model) viewList() string {
 	if m.mode == modeInput {
 		fmt.Fprintf(&b, "%s%s▏\n", m.input.prompt, string(m.input.text))
 	} else {
-		b.WriteString(keyBar + "\n")
+		b.WriteString(m.footer() + "\n")
 		if m.status != "" {
 			b.WriteString(m.status + "\n")
 		}
 	}
 	return b.String()
+}
+
+func (m Model) footer() string {
+	tokens := []string{"s 新規起票", "r AGENTS.md", "R 更新", "? 操作一覧", "q 終了"}
+	if it, ok := m.current(); ok {
+		switch it.Kind {
+		case KindNeedsReview:
+			tokens = []string{"a 承認", "e 編集", "t コメント", "x 却下", "Enter 詳細", "? 操作一覧", "q 終了"}
+		case KindBlocked:
+			tokens = []string{"t 再指示", "p エージェント画面", "x 却下", "Enter 詳細", "? 操作一覧", "q 終了"}
+		case KindMerged:
+			tokens = []string{"c 確認済み", "n 不具合報告", "p エージェント画面", "o ブラウザ", "Enter 詳細", "? 操作一覧", "q 終了"}
+		case KindRunning:
+			tokens = []string{"p エージェント画面", "o ブラウザ", "Enter 詳細", "? 操作一覧", "q 終了"}
+		}
+	}
+	width := m.width
+	if width <= 0 {
+		width = 78
+	}
+	var lines []string
+	line := ""
+	for _, token := range tokens {
+		candidate := token
+		if line != "" {
+			candidate = line + "   " + token
+		}
+		if line != "" && len([]rune(candidate)) > width {
+			lines = append(lines, line)
+			line = token
+		} else {
+			line = candidate
+		}
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func itemMeta(it Item, now time.Time) string {
@@ -830,22 +878,36 @@ func (m Model) viewDetail() string {
 
 func (m Model) viewHelp() string {
 	return strings.Join([]string{
-		"受信箱のキー（docs/rfc-inbox-ux.md §5.2）",
+		"受信箱の操作一覧",
 		m.rule(),
-		"Enter  本文をフルスクリーン表示",
-		"a      承認: needs-review を外し ready を付ける",
-		"e      $EDITOR で本文を編集して承認",
-		"x      却下: 任意の一言をコメントして close",
-		"t      一言返す: Issue コメント",
-		"p      覗く: エージェントのログ/画面を herdr タブまたは $PAGER で開く",
-		"c      確認: 最近マージの Issue を確認済みにする",
-		"n      実機 NG: 一言から追い Issue を起票",
-		"r      規約: AGENTS.md を $EDITOR で開く",
-		"s      say: 一言から needs-review Issue を起票",
-		"o      ブラウザで開く",
-		"j/k    移動   z 折畳の切替   R 再読込   q 終了",
+		"Issueを進める",
+		"  a  承認 — レビュー待ちを完了にする",
+		"  e  編集 — 本文を直してから承認する",
+		"  t  コメント — Issue に指示や補足を送る",
+		"  x  却下 — 理由を残して Issue を閉じる",
+		"  Enter  詳細 — Issue 本文と関連情報を読む",
+		"",
+		"エージェントを確認する",
+		"  p エージェント画面 — 実行中/停止中の画面を開く",
+		"",
+		"マージ後に確認する",
+		"  c 確認済み — マージ済みの Issue を一覧から外す",
+		"  n 不具合報告 — 元 Issue を参照する追い Issue を起票する",
+		"  o  ブラウザ — Issue のページを開く",
+		"",
+		"全体操作",
+		"  s 新規起票 — 一言からレビュー待ちの Issue を起票する",
+		"  r  AGENTS.md — プロジェクトのルールを開く",
+		"  R  更新 — 最新の一覧を読み直す",
+		"  ?  操作一覧 — この画面を開く",
+		"  q  終了 — 受信箱を閉じる",
+		"",
+		"移動",
+		"  j/k  上下に移動する",
+		"  z 開閉 / Tab 開閉 — 区画を開閉する",
+		"",
 		m.rule(),
-		"何かキーを押すと戻ります",
+		"q / Esc で一覧に戻る（その他のキーでも戻ります）",
 		"",
 	}, "\n")
 }
