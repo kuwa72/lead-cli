@@ -175,7 +175,7 @@ x_line="$(grep -n 'issue close 7' "$GH_LOG" | cut -d: -f1)"
 
 # --- 6. t on blocked issue: comment only ------------------------------------------
 : > "$GH_LOG"
-LEAD_TEST_INBOX_KEYS='j,j,t,text:retry with -race,enter,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless t flow failed"
+LEAD_TEST_INBOX_KEYS='j,j,j,t,text:retry with -race,enter,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless t flow failed"
 grep -qxF 'GH issue comment 9 --body retry with -race' "$GH_LOG" || fail "t comment wrong: $(cat "$GH_LOG")"
 grep -q 'issue close' "$GH_LOG" && fail "t must not close"
 grep -q 'issue edit' "$GH_LOG" && fail "t must not relabel"
@@ -206,7 +206,7 @@ grep -qxF 'GH issue view 7 --json number,title,body,state' "$GH_LOG" || fail "en
 
 # --- 9.5. enter on blocked issue with linked PR: shows issue body + PR checklist ----
 : > "$GH_LOG"
-out="$(LEAD_TEST_INBOX_KEYS='j,j,enter' "$tmp/lead" 2>&1)" || fail "headless detail with PR failed"
+out="$(LEAD_TEST_INBOX_KEYS='j,j,j,enter' "$tmp/lead" 2>&1)" || fail "headless detail with PR failed"
 case "$out" in *"## Acceptance"*) ;; *) fail "detail missing issue body: $out";; esac
 case "$out" in *"PR 本文"*) ;; *) fail "detail missing PR header: $out";; esac
 case "$out" in *"- [ ] task A"*) ;; *) fail "detail missing PR checklist: $out";; esac
@@ -233,7 +233,7 @@ tr '\n' ' ' < "$GH_LOG" | grep -q 'issue create.*#7' \
 
 # --- 12. p with herdr: new tab + tail -f on the agent log ----------------------------
 : > "$HERDR_LOG"; unset HERDR_ENV
-HERDR_ENV=1 LEAD_TEST_INBOX_KEYS='j,j,p,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless p herdr failed"
+HERDR_ENV=1 LEAD_TEST_INBOX_KEYS='j,j,j,p,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless p herdr failed"
 grep -qxF '<tab>' "$HERDR_LOG" || fail "p did not call herdr tab create: $(cat "$HERDR_LOG")"
 grep -qxF '<create>' "$HERDR_LOG" || fail "p herdr tab create args wrong: $(cat "$HERDR_LOG")"
 grep -qxF '<--focus>' "$HERDR_LOG" || fail "p herdr tab create missing --focus: $(cat "$HERDR_LOG")"
@@ -242,11 +242,17 @@ grep -qxF '<tail>' "$HERDR_LOG" && grep -qxF '<-f>' "$HERDR_LOG" && grep -qxF '<
 
 # --- 13. p without herdr: $PAGER (less) fallback -----------------------------------
 : > "$PAGER_LOG"; unset HERDR_ENV
-LEAD_TEST_INBOX_KEYS='j,j,p,q' PAGER= "$tmp/lead" >/dev/null 2>&1 || fail "headless p pager failed"
+LEAD_TEST_INBOX_KEYS='j,j,j,p,q' PAGER= "$tmp/lead" >/dev/null 2>&1 || fail "headless p pager failed"
 grep -qxF '</logs/issue-9.log>' "$PAGER_LOG" || fail "p did not open the log via $PAGER/less: $(cat "$PAGER_LOG")"
 
 # --- 14. unknown key token is an error ------------------------------------------------
 LEAD_TEST_INBOX_KEYS=bogus-key "$tmp/lead" >/dev/null 2>&1 && fail "unknown key token exited 0"
+
+# --- 14.5. header selection and per-section toggle ----------------------------------
+: > "$GH_LOG"
+out="$(LEAD_TEST_INBOX_KEYS='up,enter,q' "$tmp/lead" 2>&1)" || fail "header toggle failed"
+case "$out" in *"▸ レビュー待ち (2)"*) ;; *) fail "review header not collapsed: $out";; esac
+grep -qE 'issue view|issue edit|issue close|issue comment' "$GH_LOG" && fail "header enter must not call gh issue: $(cat "$GH_LOG")"
 
 # --- 15. merged section: recently closed issues show, c confirms and hides them ----
 seen_dir="$(dirname "$LEAD_STATE_FILE")"
@@ -263,7 +269,7 @@ grep -q 'issue list --state closed' "$GH_LOG" || fail "ListMergedSince not calle
 cat > "$seen_dir/inbox-seen.json" <<'EOF'
 {"last_seen_at":"2026-09-09T00:00:00Z","confirmed":[],"help_shown":true}
 EOF
-out="$(LEAD_TEST_INBOX_KEYS='z,j,j,j,c,q' "$tmp/lead" 2>&1)" || fail "headless c on merged failed"
+out="$(LEAD_TEST_INBOX_KEYS='z,j,j,j,j,j,c,q' "$tmp/lead" 2>&1)" || fail "headless c on merged failed"
 case "$out" in *"最近マージ (0)"*) ;; *) fail "merged issue still shown after c: $out";; esac
 case "$out" in *"#42 を確認しました"*) ;; *) fail "c status missing: $out";; esac
 grep -q '42' "$seen_dir/inbox-seen.json" || fail "inbox-seen not updated: $(cat "$seen_dir/inbox-seen.json")"
@@ -282,7 +288,7 @@ case "$out" in *"? 操作一覧"*"q 終了"*) ;; *) fail "list footer labels mis
 
 # --- 18. organized help uses outcome-oriented Japanese labels ----------------
 out="$(LEAD_TEST_INBOX_KEYS='?' "$tmp/lead" 2>&1)" || fail "explicit help failed"
-for label in "Issueを進める" "エージェントを確認する" "マージ後に確認する" "全体操作" "移動" "p エージェント画面" "s 新規起票" "n 不具合報告" "c 確認済み" "z 開閉" "? 操作一覧"; do
+for label in "Issueを進める" "エージェントを確認する" "マージ後に確認する" "全体操作" "移動" "Enter / space / → / l" "z / Tab" "p エージェント画面" "s 新規起票" "n 不具合報告" "c 確認済み" "? 操作一覧"; do
   case "$out" in *"$label"*) ;; *) fail "help missing $label: $out";; esac
 done
 
