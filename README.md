@@ -1,9 +1,68 @@
-# lead-cli
+# lead
 
-GitHub Issue駆動 × TDD × Herdr × マルチコーディングエージェント連携ワークフロー CLI。
+`lead` is an Issue-driven coding orchestrator: an approved GitHub Issue becomes a branch, a TDD implementation, a PR, CI wait, and a squash merge.
 
-## 特徴
-- `gh issue list` + `fzf` による高速・インタラクティブな Issue 選択（本文・ラベルプレビュー付）。
-- 複数エージェント（agy, claude, codex, devin 等）の選択・ローテーション対応。
-- Herdr ペイン自動分割 & 最適化された TDD コンテキストの動的注入。
-- 堅牢な CI 待機 & 自動マージ (`ci-wait`)。
+Without a subcommand, `lead` opens the inbox (docs/rfc-inbox-ux.md §5). The inbox is the human gate: you approve an issue to start a headless coding agent.
+
+## Inbox
+
+`lead` needs an interactive terminal. Run `--help` or a subcommand when not in a TTY.
+
+Sections:
+
+- レビュー待ち (`needs-review`): issues waiting for human approval
+- 止まってる (`blocked`): agents that failed or are stuck
+- 最近マージ (`merged`, collapsible): recently merged issues for staging verification
+- 実行中 (`running`, collapsible): currently running agents
+
+### Keys
+
+| Key | Action |
+|---|---|
+| `a` | approve: `needs-review` → `ready` |
+| `e` | edit body with `$EDITOR`, then approve |
+| `x` | reject and close the issue |
+| `t` | add a comment; spec or impl agent will re-run |
+| `p` | peek at the agent screen with herdr or `$PAGER` |
+| `n` | report real-machine NG and spawn a follow-up issue |
+| `r` | open `AGENTS.md` in `$EDITOR` |
+| `s` | turn a one-liner into a new `needs-review` issue |
+| `o` | open the selected issue in a browser |
+| `Enter` | show the full issue body |
+| `z` | toggle section expand/collapse |
+| `R` | refresh |
+| `?` | show help |
+| `q` | quit |
+
+## Subcommands
+
+| Command | Purpose |
+|---|---|
+| `lead run <n>` | manually start an issue with an interactive agent |
+| `lead dispatch` | hand `ready` issues to headless agents |
+| `lead say <one-liner>` | create `needs-review` issues from a one-liner |
+| `lead status` | show active workflows |
+| `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
+| `lead clean <n>` | remove the workflow worktree and state |
+| `lead init` | install the `AGENTS.md` management block |
+| `lead setup` | interactive environment setup |
+| `lead doctor` | diagnose `gh`, agents, herdr, and branch protection |
+| `lead version` | show version |
+
+## Install and setup
+
+```sh
+# from a clone
+bin/install-local
+# or from a release
+curl -fsSL https://raw.githubusercontent.com/kuwa72/lead-cli/main/install.sh | sh
+lead setup --write
+```
+
+`lead init` adds the `AGENTS.md` rule block; `lead setup --write` installs shell completion and a keybinding.
+
+## Conventions
+
+- `AGENTS.md` is the single entry point for project conventions.
+- Work follows the issue-driven TDD, branch-per-PR, CI-wait, squash-merge flow in `AGENTS.md`.
+- The full inbox UX spec is in `docs/rfc-inbox-ux.md`.
