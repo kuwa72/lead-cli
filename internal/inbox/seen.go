@@ -15,6 +15,7 @@ import (
 type SeenState struct {
 	LastSeenAt time.Time `json:"last_seen_at"`
 	Confirmed  []int     `json:"confirmed"`
+	HelpShown  bool      `json:"help_shown"`
 }
 
 // IsConfirmed reports whether the given issue number has been confirmed.
@@ -132,4 +133,26 @@ func (s *SeenStore) Confirm(number int) error {
 	}
 	st.Confirm(number)
 	return s.Save(st)
+}
+
+// HelpShown reports whether the first-launch help has been dismissed.
+func (s *SeenStore) HelpShown() (bool, error) {
+	st, err := s.Load()
+	if err != nil {
+		return false, err
+	}
+	return st.HelpShown, nil
+}
+
+// MarkHelpShown persists dismissal of the first-launch help.
+func (s *SeenStore) MarkHelpShown() error {
+	st, err := s.Load()
+	if err != nil {
+		return err
+	}
+	if st.HelpShown {
+		return nil
+	}
+	st.HelpShown = true
+	return s.save(st)
 }

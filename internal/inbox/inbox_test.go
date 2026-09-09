@@ -370,9 +370,9 @@ func TestKeyP_NoLogOrPaneShowsStatus(t *testing.T) {
 func TestKeyP_HerdrOpensLogInNewTab(t *testing.T) {
 	logPath := testutil.InstallDummy(t, "herdr",
 		`if [ "$1 $2" = "tab create" ]; then printf '{"result":{"root_pane":{"pane_id":"p-new"}}}';`+
-		`elif [ "$1 $2" = "pane run" ]; then :;`+
-		`elif [ "$1 $2" = "pane move" ]; then :;`+
-		`else echo "unexpected: $@" >&2; exit 3; fi`)
+			`elif [ "$1 $2" = "pane run" ]; then :;`+
+			`elif [ "$1 $2" = "pane move" ]; then :;`+
+			`else echo "unexpected: $@" >&2; exit 3; fi`)
 
 	_, _, m := newFixture(t)
 	m.opts.Herdr = herdr.New()
@@ -545,6 +545,57 @@ func TestKeyQ_Quits(t *testing.T) {
 	}
 }
 
+func TestFooter_ContextDependentActions(t *testing.T) {
+	want := map[Kind]string{
+		KindNeedsReview: "a 承認   e 編集   t コメント   x 却下   Enter 詳細   ? 操作一覧   q 終了",
+		KindBlocked:     "t 再指示   p エージェント画面   x 却下   Enter 詳細   ? 操作一覧   q 終了",
+		KindMerged:      "c 確認済み   n 不具合報告   p エージェント画面   o ブラウザ   Enter 詳細   ? 操作一覧   q 終了",
+		KindRunning:     "p エージェント画面   o ブラウザ   Enter 詳細   ? 操作一覧   q 終了",
+	}
+	for kind, expected := range want {
+		m := Model{sections: []Section{{Kind: kind, Items: []Item{{Number: 1, Kind: kind}}}}, width: 120}
+		if got := m.footer(); got != expected {
+			t.Errorf("footer(%v) = %q, want %q", kind, got, expected)
+		}
+	}
+	empty := Model{sections: []Section{{Kind: KindNeedsReview}}, width: 120}
+	if got, want := empty.footer(), "s 新規起票   r AGENTS.md   R 更新   ? 操作一覧   q 終了"; got != want {
+		t.Errorf("empty footer = %q, want %q", got, want)
+	}
+}
+
+func TestFooter_WrapsToTerminalWidth(t *testing.T) {
+	m := Model{sections: []Section{{Kind: KindMerged, Items: []Item{{Number: 1, Kind: KindMerged}}}}, width: 35}
+	got := m.footer()
+	if strings.Count(got, "\n") == 0 {
+		t.Fatalf("footer did not wrap at width: %q", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if len([]rune(line)) > 35 {
+			t.Errorf("footer line exceeds width: %q", line)
+		}
+	}
+}
+
+func TestFirstLaunchHelpIsDismissedAndPersisted(t *testing.T) {
+	seen := &SeenStore{Path: filepath.Join(t.TempDir(), "inbox-seen.json")}
+	m := New(Options{Seen: seen, Shell: &fakeShell{}})
+	if !strings.Contains(m.View(), "Issueを進める") {
+		t.Fatalf("first launch did not start in help: %s", m.View())
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if strings.Contains(next.(Model).View(), "Issueを進める") {
+		t.Fatal("Esc did not leave help")
+	}
+	if shown, err := seen.HelpShown(); err != nil || !shown {
+		t.Fatalf("help dismissal not persisted: %v, %v", shown, err)
+	}
+	second := New(Options{Seen: seen, Shell: &fakeShell{}})
+	if strings.Contains(second.View(), "Issueを進める") {
+		t.Fatal("second launch unexpectedly started in help")
+	}
+}
+
 func TestView_ListsSectionsInOrderWithCounts(t *testing.T) {
 	_, _, m := newFixture(t)
 	v := m.View()
@@ -648,6 +699,9 @@ func newMergedFixture(t *testing.T) (*testutil.FakeGhClient, *fakeShell, *SeenSt
 	store := &state.Store{Path: stateFile}
 	seenFile := filepath.Join(t.TempDir(), "inbox-seen.json")
 	seen := &SeenStore{Path: seenFile}
+	if err := seen.MarkHelpShown(); err != nil {
+		t.Fatal(err)
+	}
 	sh := &fakeShell{}
 	m := New(Options{
 		Gh:         gh,
