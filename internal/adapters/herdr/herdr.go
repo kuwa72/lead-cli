@@ -129,7 +129,13 @@ func (r *Runner) Peek(ctx context.Context, logPath, pane string) error {
 	}
 	if pane != "" {
 		_, err := r.run(ctx, "pane", "move", pane, "--new-tab", "--focus")
-		return err
+		if err != nil {
+			if strings.Contains(err.Error(), "pane_not_found") {
+				return &ports.PaneNotFoundError{Pane: pane}
+			}
+			return err
+		}
+		return nil
 	}
 	return fmt.Errorf("herdr peek: logPath and pane are both empty")
 }
