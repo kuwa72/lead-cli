@@ -104,7 +104,7 @@ func newFixture(t *testing.T) (*testutil.FakeGhClient, *fakeShell, Model) {
 	}
 	stateFile := filepath.Join(t.TempDir(), "workflows.json")
 	store := &state.Store{Path: stateFile}
-	if err := store.Upsert(state.Workflow{Issue: 9, Status: state.StatusBlocked, Agent: "claude", Attempts: 3, LogPath: "/logs/issue-9.log", Branch: "issue/9-stuck"}); err != nil {
+	if err := store.Upsert(state.Workflow{Issue: 9, Status: state.StatusBlocked, Agent: "claude", Attempts: 3, LogPath: "/logs/issue-9.log", Branch: "issue/9-stuck", PullRequests: []state.PRRef{{Number: 11, Status: "open"}}}); err != nil {
 		t.Fatal(err)
 	}
 	sh := &fakeShell{}
@@ -296,6 +296,31 @@ func TestEnter_ShowsBodyFullscreenAndEscReturns(t *testing.T) {
 	m = press(t, m, "esc")
 	if v := m.View(); !strings.Contains(v, "spec: second") {
 		t.Errorf("esc should return to the list, got:\n%s", v)
+	}
+}
+
+func TestDetail_MergesPrBody(t *testing.T) {
+	gh, _, m := newFixture(t)
+	gh.PrBodies = map[int]string{11: "## Acceptance\n- [ ] task A\n- [x] task B\n"}
+	m = press(t, m, "j", "j", "enter")
+	if !reflect.DeepEqual(gh.ViewCalls, []int{9}) {
+		t.Fatalf("ViewCalls = %v, want [9]", gh.ViewCalls)
+	}
+	if !reflect.DeepEqual(gh.PrBodyCalls, []int{11}) {
+		t.Fatalf("PrBodyCalls = %v, want [11]", gh.PrBodyCalls)
+	}
+	v := m.View()
+	if !strings.Contains(v, "blocked body") {
+		t.Errorf("detail view missing issue body, got:\n%s", v)
+	}
+	if !strings.Contains(v, "## PR 本文") {
+		t.Errorf("detail view missing PR header, got:\n%s", v)
+	}
+	if !strings.Contains(v, "- [ ] task A") || !strings.Contains(v, "- [x] task B") {
+		t.Errorf("detail view missing PR checklist, got:\n%s", v)
+	}
+	if strings.Contains(v, "spec: second") {
+		t.Errorf("detail view should not show other issue, got:\n%s", v)
 	}
 }
 

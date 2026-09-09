@@ -69,6 +69,8 @@ type Model struct {
 	mode         mode
 	detail       ports.Issue
 	detailOffset int
+	detailPrBody string
+	detailPrNum  int
 	input        inputState
 	status       string
 	loadErr      error
@@ -92,8 +94,10 @@ type (
 		refresh bool
 	}
 	detailMsg struct {
-		issue ports.Issue
-		err   error
+		issue    ports.Issue
+		prNumber int
+		prBody   string
+		err      error
 	}
 	editBodyMsg struct {
 		issue ports.Issue
@@ -265,7 +269,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "エラー: " + msg.err.Error()
 			return m, nil
 		}
-		m.detail, m.detailOffset, m.mode = msg.issue, 0, modeDetail
+		m.detail, m.detailOffset, m.detailPrNum, m.detailPrBody, m.mode = msg.issue, 0, msg.prNumber, msg.prBody, modeDetail
 		return m, nil
 	case editBodyMsg:
 		if msg.err != nil {
@@ -362,8 +366,18 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "enter":
 		return m, func() tea.Msg {
-			iss, err := gh.View(context.Background(), it.Number)
-			return detailMsg{issue: iss, err: err}
+			ctx := context.Background()
+			iss, err := gh.View(ctx, it.Number)
+			if err != nil {
+				return detailMsg{err: err}
+			}
+			prNumber, prBody := it.PRNumber, ""
+			if prNumber > 0 {
+				if body, err := gh.PrBody(ctx, prNumber); err == nil {
+					prBody = body
+				}
+			}
+			return detailMsg{issue: iss, prNumber: prNumber, prBody: prBody}
 		}
 	case "a":
 		if it.Kind != KindNeedsReview {
@@ -790,7 +804,11 @@ func (m Model) viewDetail() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "#%d %s  [%s]\n", m.detail.Number, m.detail.Title, m.detail.State)
 	b.WriteString(m.rule() + "\n")
-	lines := strings.Split(strings.ReplaceAll(m.detail.Body, "\r\n", "\n"), "\n")
+	content := m.detail.Body
+	if m.detailPrNum > 0 && strings.TrimSpace(m.detailPrBody) != "" {
+		content += "\n\n---\n## PR 本文\n\n" + m.detailPrBody
+	}
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
 	off := m.detailOffset
 	if off > len(lines)-1 {
 		off = max(0, len(lines)-1)
@@ -803,6 +821,9 @@ func (m Model) viewDetail() string {
 		b.WriteString(l + "\n")
 	}
 	b.WriteString(m.rule() + "\n")
+	if m.detailPrNum == 0 && m.opts.Store != nil {
+		b.WriteString("（PR 未記録）\n")
+	}
 	b.WriteString("j/k スクロール  Esc/q 戻る\n")
 	return b.String()
 }
