@@ -49,8 +49,9 @@ func ParseKey(tok string) (tea.KeyMsg, error) {
 	}
 	named := map[string]tea.KeyType{
 		"enter": tea.KeyEnter, "esc": tea.KeyEsc, "escape": tea.KeyEsc,
-		"up": tea.KeyUp, "down": tea.KeyDown, "tab": tea.KeyTab,
-		"backspace": tea.KeyBackspace, "ctrl+c": tea.KeyCtrlC, "space": tea.KeySpace,
+		"up": tea.KeyUp, "down": tea.KeyDown, "left": tea.KeyLeft, "right": tea.KeyRight,
+		"tab": tea.KeyTab, "backspace": tea.KeyBackspace, "ctrl+c": tea.KeyCtrlC,
+		"space": tea.KeySpace,
 	}
 	if kt, ok := named[strings.ToLower(tok)]; ok {
 		return tea.KeyMsg{Type: kt}, nil

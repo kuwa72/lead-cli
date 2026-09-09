@@ -207,22 +207,34 @@ func (m Model) loadCmd() tea.Cmd {
 	}
 }
 
+// Row is one selectable line in the inbox: either a section header or an issue.
+type Row struct {
+	Section *Section
+	Item    *Item
+}
+
+func (r Row) IsHeader() bool { return r.Item == nil }
+
 // visible flattens the rows the cursor can reach.
-func (m Model) visible() []Item {
-	var out []Item
-	for _, s := range m.sections {
+func (m Model) visible() []Row {
+	var out []Row
+	for i := range m.sections {
+		s := &m.sections[i]
+		out = append(out, Row{Section: s})
 		if s.Collapsed && !m.expanded {
 			continue
 		}
-		out = append(out, s.Items...)
+		for j := range s.Items {
+			out = append(out, Row{Section: s, Item: &s.Items[j]})
+		}
 	}
 	return out
 }
 
-func (m Model) current() (Item, bool) {
+func (m Model) current() (Row, bool) {
 	rows := m.visible()
 	if len(rows) == 0 {
-		return Item{}, false
+		return Row{}, false
 	}
 	if m.cursor >= len(rows) {
 		m.cursor = len(rows) - 1
@@ -240,6 +252,28 @@ func (m *Model) clampCursor() {
 	}
 }
 
+func (m *Model) focusFirstItem() {
+	for i, r := range m.visible() {
+		if !r.IsHeader() {
+			m.cursor = i
+			return
+		}
+	}
+	m.cursor = 0
+}
+
+func (m *Model) toggleSection(s *Section) {
+	if m.expanded {
+		m.expanded = false
+		for i := range m.sections {
+			m.sections[i].Collapsed = false
+		}
+		s.Collapsed = true
+		return
+	}
+	s.Collapsed = !s.Collapsed
+}
+
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -255,6 +289,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sections = msg.sections
 			m.refreshedAt = m.opts.Now()
 			m.clampCursor()
+			m.focusFirstItem()
 		}
 		if !msg.sessionSince.IsZero() && m.sessionSince.IsZero() {
 			m.sessionSince = msg.sessionSince
@@ -367,13 +402,26 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	it, ok := m.current()
+	row, ok := m.current()
 	if !ok {
 		if key != "" {
 			m.status = "対象がありません"
 		}
 		return m, nil
 	}
+	if row.IsHeader() {
+		switch key {
+		case "enter", " ", "space", "right", "l":
+			m.toggleSection(row.Section)
+			m.clampCursor()
+			return m, nil
+		}
+		if key != "" {
+			m.status = "区画ヘッダーが選択中です"
+		}
+		return m, nil
+	}
+	it := *row.Item
 	gh := m.opts.Gh
 	switch key {
 	case "enter":
@@ -752,26 +800,29 @@ func (m Model) viewList() string {
 	}
 
 	rows := m.visible()
-	idx := 0
-	for _, s := range m.sections {
-		folded := s.Collapsed && !m.expanded
-		mark := "▾"
-		if folded {
-			mark = "▸"
-		}
-		fmt.Fprintf(&b, "%s %s (%d)\n", mark, s.Kind.Title(), len(s.Items))
-		if folded {
+	now := m.opts.Now()
+	for i, r := range rows {
+		isCur := i == m.cursor
+		if r.IsHeader() {
+			s := r.Section
+			folded := s.Collapsed && !m.expanded
+			mark := "▾"
+			if folded {
+				mark = "▸"
+			}
+			cur := "  "
+			if isCur {
+				cur = "▶ "
+			}
+			fmt.Fprintf(&b, "%s%s %s (%d)\n", cur, mark, s.Kind.Title(), len(s.Items))
 			continue
 		}
-		now := m.opts.Now()
-		for _, it := range s.Items {
-			cur := "  "
-			if idx < len(rows) && idx == m.cursor {
-				cur = "> "
-			}
-			idx++
-			fmt.Fprintf(&b, "%s#%-4d %s%s\n", cur, it.Number, it.Title, itemMeta(it, now))
+		it := *r.Item
+		cur := "  "
+		if isCur {
+			cur = "> "
 		}
+		fmt.Fprintf(&b, "%s#%-4d %s%s\n", cur, it.Number, it.Title, itemMeta(it, now))
 	}
 	if len(rows) == 0 && m.loadErr == nil && !m.loading {
 		b.WriteString("  人間の仕事はありません\n")
@@ -790,16 +841,22 @@ func (m Model) viewList() string {
 
 func (m Model) footer() string {
 	tokens := []string{"s 新規起票", "r AGENTS.md", "R 更新", "? 操作一覧", "q 終了"}
-	if it, ok := m.current(); ok {
-		switch it.Kind {
-		case KindNeedsReview:
-			tokens = []string{"a 承認", "e 編集", "t コメント", "x 却下", "Enter 詳細", "? 操作一覧", "q 終了"}
-		case KindBlocked:
-			tokens = []string{"t 再指示", "p エージェント画面", "x 却下", "Enter 詳細", "? 操作一覧", "q 終了"}
-		case KindMerged:
-			tokens = []string{"c 確認済み", "n 不具合報告", "p エージェント画面", "o ブラウザ", "Enter 詳細", "? 操作一覧", "q 終了"}
-		case KindRunning:
-			tokens = []string{"p エージェント画面", "o ブラウザ", "Enter 詳細", "? 操作一覧", "q 終了"}
+	if row, ok := m.current(); ok {
+		if row.IsHeader() {
+			if len(row.Section.Items) > 0 {
+				tokens = []string{"Enter 開閉", "→ 開閉", "z 全開閉", "? 操作一覧", "q 終了"}
+			}
+		} else {
+			switch row.Item.Kind {
+			case KindNeedsReview:
+				tokens = []string{"a 承認", "e 編集", "t コメント", "x 却下", "Enter 詳細", "? 操作一覧", "q 終了"}
+			case KindBlocked:
+				tokens = []string{"t 再指示", "p エージェント画面", "x 却下", "Enter 詳細", "? 操作一覧", "q 終了"}
+			case KindMerged:
+				tokens = []string{"c 確認済み", "n 不具合報告", "p エージェント画面", "o ブラウザ", "Enter 詳細", "? 操作一覧", "q 終了"}
+			case KindRunning:
+				tokens = []string{"p エージェント画面", "o ブラウザ", "Enter 詳細", "? 操作一覧", "q 終了"}
+			}
 		}
 	}
 	width := m.width
@@ -903,8 +960,9 @@ func (m Model) viewHelp() string {
 		"  q  終了 — 受信箱を閉じる",
 		"",
 		"移動",
-		"  j/k  上下に移動する",
-		"  z 開閉 / Tab 開閉 — 区画を開閉する",
+		"  j/k  上下に移動する（区画ヘッダーと Issue 行を連続）",
+		"  Enter / space / → / l  区画を開閉する",
+		"  z / Tab  すべての区画を開閉する",
 		"",
 		m.rule(),
 		"q / Esc で一覧に戻る（その他のキーでも戻ります）",

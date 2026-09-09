@@ -168,7 +168,7 @@ func TestKeyA_MovesCursorThenApprovesSecond(t *testing.T) {
 
 func TestKeyA_OnBlockedIssueDoesNothingToGitHub(t *testing.T) {
 	gh, _, m := newFixture(t)
-	m = press(t, m, "j", "j", "a") // 7 → 8 → 9 (blocked)
+	m = press(t, m, "j", "j", "j", "a") // 7 → 8 → header → 9 (blocked)
 	if len(gh.AddedLabels)+len(gh.RemovedLabels) != 0 {
 		t.Errorf("blocked issue must not be approved: added=%+v removed=%+v", gh.AddedLabels, gh.RemovedLabels)
 	}
@@ -246,7 +246,7 @@ func TestKeyX_EscCancels(t *testing.T) {
 
 func TestKeyT_PostsOneLineComment(t *testing.T) {
 	gh, _, m := newFixture(t)
-	m = press(t, m, "j", "j", "t", "text:retry with -race", "enter") // on blocked #9
+	m = press(t, m, "j", "j", "j", "t", "text:retry with -race", "enter") // on blocked #9
 	if want := []testutil.IssueComment{{Number: 9, Body: "retry with -race"}}; !reflect.DeepEqual(gh.Comments, want) {
 		t.Errorf("Comments = %+v, want %+v", gh.Comments, want)
 	}
@@ -302,7 +302,7 @@ func TestEnter_ShowsBodyFullscreenAndEscReturns(t *testing.T) {
 func TestDetail_MergesPrBody(t *testing.T) {
 	gh, _, m := newFixture(t)
 	gh.PrBodies = map[int]string{11: "## Acceptance\n- [ ] task A\n- [x] task B\n"}
-	m = press(t, m, "j", "j", "enter")
+	m = press(t, m, "j", "j", "j", "enter")
 	if !reflect.DeepEqual(gh.ViewCalls, []int{9}) {
 		t.Fatalf("ViewCalls = %v, want [9]", gh.ViewCalls)
 	}
@@ -361,7 +361,7 @@ func TestKeyP_NoLogOrPaneShowsStatus(t *testing.T) {
 	// Reload so the cleared log/pane is reflected.
 	m, _ = Drain(m, m.loadCmd())
 	m.opts.Herdr = &testutil.FakeHerdrRunner{}
-	m = press(t, m, "j", "j", "p")
+	m = press(t, m, "j", "j", "j", "p")
 	if !strings.Contains(m.View(), "ログもペインもありません") {
 		t.Errorf("p without log/pane should show a status message, got:\n%s", m.View())
 	}
@@ -376,7 +376,7 @@ func TestKeyP_HerdrOpensLogInNewTab(t *testing.T) {
 
 	_, _, m := newFixture(t)
 	m.opts.Herdr = herdr.New()
-	m = press(t, m, "j", "j", "p")
+	m = press(t, m, "j", "j", "j", "p")
 
 	logText := testutil.LogText(t, logPath)
 	for _, want := range []string{"<tab>", "<create>", "<--focus>"} {
@@ -404,7 +404,8 @@ func TestKeyP_HerdrAttachesPaneForRunningAgent(t *testing.T) {
 	fh := &testutil.FakeHerdrRunner{}
 	m.opts.Herdr = fh
 	m.expanded = true
-	m = press(t, m, "j", "j", "j", "p")
+	m.cursor = 7 // running #70
+	m = press(t, m, "p")
 	if len(fh.PeekCalls) != 1 || fh.PeekCalls[0].Pane != "w1:p70" || fh.PeekCalls[0].LogPath != "" {
 		t.Errorf("Peek calls = %+v, want Pane=w1:p70", fh.PeekCalls)
 	}
@@ -420,7 +421,7 @@ func TestKeyP_FallsBackToPagerWhenHerdrUnavailable(t *testing.T) {
 	_, sh, m := newFixture(t)
 	m.opts.Herdr = nil
 	sh.OnExec = func(c *exec.Cmd) error { return c.Run() }
-	m = press(t, m, "j", "j", "p")
+	m = press(t, m, "j", "j", "j", "p")
 
 	if want := [][]string{{"less", "/logs/issue-9.log"}}; !reflect.DeepEqual(sh.Calls, want) {
 		t.Errorf("shell calls = %v, want %v", sh.Calls, want)
@@ -441,7 +442,7 @@ func TestKeyP_UsesPAGERWhenSet(t *testing.T) {
 	_, sh, m := newFixture(t)
 	m.opts.Herdr = nil
 	sh.OnExec = func(c *exec.Cmd) error { return c.Run() }
-	m = press(t, m, "j", "j", "p")
+	m = press(t, m, "j", "j", "j", "p")
 
 	if want := [][]string{{"fake-pager", "--flag", "/logs/issue-9.log"}}; !reflect.DeepEqual(sh.Calls, want) {
 		t.Errorf("shell calls = %v, want %v", sh.Calls, want)
@@ -516,7 +517,7 @@ func TestKeyN_FilesFollowUpReferencingSelectedIssue(t *testing.T) {
 	_, _, m := newFixture(t)
 	var calls []sayCall
 	m.opts.Say = fakeSay(&calls)
-	press(t, m, "j", "j", "n", "text:still broken on main", "enter") // on blocked #9
+	press(t, m, "j", "j", "j", "n", "text:still broken on main", "enter") // on blocked #9
 	if want := []sayCall{{OneLiner: "still broken on main", FollowUp: 9}}; !reflect.DeepEqual(calls, want) {
 		t.Errorf("Say calls = %+v, want %+v (n must pass the selected issue as followUp)", calls, want)
 	}
@@ -553,7 +554,8 @@ func TestFooter_ContextDependentActions(t *testing.T) {
 		KindRunning:     "p エージェント画面   o ブラウザ   Enter 詳細   ? 操作一覧   q 終了",
 	}
 	for kind, expected := range want {
-		m := Model{sections: []Section{{Kind: kind, Items: []Item{{Number: 1, Kind: kind}}}}, width: 120}
+		m := Model{sections: []Section{{Kind: kind, Items: []Item{{Number: 1, Kind: kind}}}}, width: 120, expanded: true}
+		m.cursor = 1
 		if got := m.footer(); got != expected {
 			t.Errorf("footer(%v) = %q, want %q", kind, got, expected)
 		}
@@ -565,7 +567,8 @@ func TestFooter_ContextDependentActions(t *testing.T) {
 }
 
 func TestFooter_WrapsToTerminalWidth(t *testing.T) {
-	m := Model{sections: []Section{{Kind: KindMerged, Items: []Item{{Number: 1, Kind: KindMerged}}}}, width: 35}
+	m := Model{sections: []Section{{Kind: KindMerged, Items: []Item{{Number: 1, Kind: KindMerged}}}}, width: 35, expanded: true}
+	m.cursor = 1
 	got := m.footer()
 	if strings.Count(got, "\n") == 0 {
 		t.Fatalf("footer did not wrap at width: %q", got)
@@ -719,7 +722,8 @@ func newMergedFixture(t *testing.T) (*testutil.FakeGhClient, *fakeShell, *SeenSt
 func TestKeyC_ConfirmsMergedAndRefreshes(t *testing.T) {
 	_, _, seen, m := newMergedFixture(t)
 	m.expanded = true
-	m = press(t, m, "j", "c")
+	m.cursor = 4 // merged #42
+	m = press(t, m, "c")
 
 	st, err := seen.Load()
 	if err != nil {
@@ -749,9 +753,10 @@ func TestKeyC_OnNonMergedDoesNothing(t *testing.T) {
 func TestKeyN_OnMergedConfirmsAndFollowsUp(t *testing.T) {
 	_, _, seen, m := newMergedFixture(t)
 	m.expanded = true
+	m.cursor = 4 // merged #42
 	var calls []sayCall
 	m.opts.Say = fakeSay(&calls)
-	m = press(t, m, "j", "n", "text:still broken", "enter")
+	m = press(t, m, "n", "text:still broken", "enter")
 
 	if want := []sayCall{{OneLiner: "still broken", FollowUp: 42}}; !reflect.DeepEqual(calls, want) {
 		t.Errorf("Say calls = %+v, want %+v", calls, want)
@@ -776,5 +781,74 @@ func TestLoadCmd_UpdatesLastSeenAt(t *testing.T) {
 	}
 	if st.LastSeenAt.IsZero() {
 		t.Error("last_seen_at not updated on inbox open")
+	}
+}
+
+func TestHeader_EnterTogglesSection(t *testing.T) {
+	_, _, m := newFixture(t)
+	m.cursor = 0 // レビュー待ち header
+	m = press(t, m, "enter")
+	if !m.sections[0].Collapsed {
+		t.Fatalf("enter on header did not collapse section")
+	}
+	v := m.View()
+	if strings.Contains(v, "#7") || strings.Contains(v, "#8") {
+		t.Errorf("collapsed section should not show its issues, got:\n%s", v)
+	}
+	if !strings.Contains(v, "▸ レビュー待ち (2)") {
+		t.Errorf("collapsed header should show closed marker, got:\n%s", v)
+	}
+}
+
+func TestHeader_ZStillExpandsAll(t *testing.T) {
+	_, _, m := newFixture(t)
+	m.cursor = 0
+	m = press(t, m, "enter") // collapse review
+	if !m.sections[0].Collapsed {
+		t.Fatalf("enter did not collapse section")
+	}
+	m = press(t, m, "z")
+	v := m.View()
+	if !strings.Contains(v, "#7") {
+		t.Errorf("z should expand all sections, got:\n%s", v)
+	}
+}
+
+func TestHeader_LAndRightToggle(t *testing.T) {
+	_, _, m := newFixture(t)
+	m.cursor = 0
+	m = press(t, m, "l")
+	if !m.sections[0].Collapsed {
+		t.Fatalf("l on header did not collapse section")
+	}
+	m = press(t, m, "right")
+	if m.sections[0].Collapsed {
+		t.Fatalf("right on header did not expand section")
+	}
+}
+
+func TestHeader_JKMoveThroughHeaders(t *testing.T) {
+	_, _, m := newFixture(t)
+	m = press(t, m, "k") // from #7 to review header
+	row, ok := m.current()
+	if !ok || !row.IsHeader() || row.Section.Kind != KindNeedsReview {
+		t.Fatalf("k should move cursor to review header, got %+v", row)
+	}
+	m = press(t, m, "j") // back to #7
+	row, ok = m.current()
+	if !ok || row.IsHeader() || row.Item.Number != 7 {
+		t.Fatalf("j should move back to issue #7, got %+v", row)
+	}
+}
+
+func TestIssueKeysOnHeaderDoNothing(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.cursor = 0 // review header
+	m = press(t, m, "a")
+	if len(gh.AddedLabels)+len(gh.RemovedLabels)+len(gh.Comments)+len(gh.Closed) != 0 {
+		t.Errorf("issue keys on header must not touch GitHub")
+	}
+	if !strings.Contains(m.View(), "区画ヘッダーが選択中です") {
+		t.Errorf("status should explain header is selected, got:\n%s", m.View())
 	}
 }
