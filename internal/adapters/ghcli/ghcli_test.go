@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/testutil"
@@ -97,6 +98,50 @@ elif [ "$1 $2" = "issue view" ]; then
 else
   echo "unexpected: $@" >&2; exit 3
 fi`
+
+func TestListMergedSince_CallsGhIssueListClosed(t *testing.T) {
+	body := `if [ "$1 $2" = "issue list" ] && [ "$4" = "closed" ]; then
+  printf '[{"number":42,"title":"feat: done","closedAt":"2026-09-08T10:30:00Z"}]'
+else
+  echo "unexpected: $@" >&2; exit 3
+fi`
+	logPath := testutil.InstallDummy(t, "gh", body)
+
+	got, err := New().ListMergedSince(context.Background(), time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ListMergedSince: %v", err)
+	}
+	if len(got) != 1 || got[0].Number != 42 || got[0].Title != "feat: done" {
+		t.Fatalf("ListMergedSince = %+v, want one merged issue 42", got)
+	}
+	want := time.Date(2026, 9, 8, 10, 30, 0, 0, time.UTC)
+	if !got[0].MergedAt.Equal(want) {
+		t.Errorf("MergedAt = %v, want %v", got[0].MergedAt, want)
+	}
+
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{
+		"<issue>", "<list>", "<--state>", "<closed>",
+		"<--limit>", "<50>", "<--json>", "<number,title,closedAt>",
+	} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+}
+
+func TestListMergedSince_FiltersBySince(t *testing.T) {
+	body := `printf '[{"number":1,"title":"old","closedAt":"2026-09-08T09:00:00Z"},{"number":2,"title":"new","closedAt":"2026-09-08T11:00:00Z"}]'`
+	testutil.InstallDummy(t, "gh", body)
+
+	got, err := New().ListMergedSince(context.Background(), time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ListMergedSince: %v", err)
+	}
+	if len(got) != 1 || got[0].Number != 2 {
+		t.Errorf("ListMergedSince = %+v, want issue 2", got)
+	}
+}
 
 func TestListOpen_CallsGhWithExpectedArgs(t *testing.T) {
 	logPath := testutil.InstallDummy(t, "gh", ghServeBody)

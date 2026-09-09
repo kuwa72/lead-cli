@@ -43,6 +43,7 @@ case "$1 $2" in
     case "$*" in
       *"--label needs-review"*) printf '[{"number":7,"title":"spec: warn on zero stock"},{"number":8,"title":"spec: second"}]' ;;
       *"--label blocked"*) printf '[{"number":9,"title":"impl: stuck on flaky test"}]' ;;
+      *"--state closed"*) printf '[{"number":42,"title":"feat: merged","closedAt":"2026-09-09T17:00:00Z"}]' ;;
       *) printf '[]' ;;
     esac ;;
   "issue view")
@@ -228,5 +229,25 @@ grep -qxF '</logs/issue-9.log>' "$PAGER_LOG" || fail "p did not open the log via
 
 # --- 14. unknown key token is an error ------------------------------------------------
 LEAD_TEST_INBOX_KEYS=bogus-key "$tmp/lead" >/dev/null 2>&1 && fail "unknown key token exited 0"
+
+# --- 15. merged section: recently closed issues show, c confirms and hides them ----
+seen_dir="$(dirname "$LEAD_STATE_FILE")"
+mkdir -p "$seen_dir"
+cat > "$seen_dir/inbox-seen.json" <<'EOF'
+{"last_seen_at":"2026-09-09T00:00:00Z","confirmed":[]}
+EOF
+
+out="$(LEAD_TEST_INBOX_KEYS='z,q' "$tmp/lead" 2>&1)" || fail "headless merged show failed"
+case "$out" in *"最近マージ (1)"*"#42"*"feat: merged"*) ;; *) fail "merged issue #42 not shown: $out";; esac
+grep -q 'issue list --state closed' "$GH_LOG" || fail "ListMergedSince not called: $(cat "$GH_LOG")"
+
+# Reset the open timestamp and confirm the merged issue.
+cat > "$seen_dir/inbox-seen.json" <<'EOF'
+{"last_seen_at":"2026-09-09T00:00:00Z","confirmed":[]}
+EOF
+out="$(LEAD_TEST_INBOX_KEYS='z,j,j,j,c,q' "$tmp/lead" 2>&1)" || fail "headless c on merged failed"
+case "$out" in *"最近マージ (0)"*) ;; *) fail "merged issue still shown after c: $out";; esac
+case "$out" in *"#42 を確認しました"*) ;; *) fail "c status missing: $out";; esac
+grep -q '42' "$seen_dir/inbox-seen.json" || fail "inbox-seen not updated: $(cat "$seen_dir/inbox-seen.json")"
 
 echo "inbox tests passed"
