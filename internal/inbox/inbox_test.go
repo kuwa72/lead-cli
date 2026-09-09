@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/kuwa72/lead-cli/internal/adapters/herdr"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
@@ -299,14 +300,131 @@ func TestEnter_ShowsBodyFullscreenAndEscReturns(t *testing.T) {
 	}
 }
 
-func TestKeyP_ShowsLogPathForBlockedAgent(t *testing.T) {
-	_, sh, m := newFixture(t)
-	m = press(t, m, "j", "j", "p")
-	if !strings.Contains(m.View(), "/logs/issue-9.log") {
-		t.Errorf("p should surface the agent log path, got:\n%s", m.View())
+func TestBuild_EnrichesPaneFromState(t *testing.T) {
+	wfs := []state.Workflow{
+		{Issue: 88, Status: state.StatusBlocked, Pane: "w1:p9", LogPath: "/logs/88.log", Branch: "issue/88"},
 	}
-	if len(sh.Calls) != 0 {
-		t.Errorf("p must not exec anything: %v", sh.Calls)
+	blocked := []ports.IssueSummary{{Number: 88, Title: "stuck"}}
+	got := Build(nil, blocked, wfs)
+	if len(got[1].Items) != 1 {
+		t.Fatalf("blocked section = %d items, want 1", len(got[1].Items))
+	}
+	it := got[1].Items[0]
+	if it.Pane != "w1:p9" || it.LogPath != "/logs/88.log" {
+		t.Errorf("item not enriched: pane=%q log=%q", it.Pane, it.LogPath)
+	}
+}
+
+func TestKeyP_OnlyRunningOrBlockedAgents(t *testing.T) {
+	_, _, m := newFixture(t)
+	fh := &testutil.FakeHerdrRunner{}
+	m.opts.Herdr = fh
+	m = press(t, m, "p")
+	if len(fh.PeekCalls) != 0 {
+		t.Errorf("p on needs-review must not call Herdr: %+v", fh.PeekCalls)
+	}
+	if !strings.Contains(m.View(), "実行中/止まってる") && !strings.Contains(m.View(), "エージェント") {
+		t.Errorf("p should explain it is only for running/blocked agents, got:\n%s", m.View())
+	}
+}
+
+func TestKeyP_NoLogOrPaneShowsStatus(t *testing.T) {
+	_, _, m := newFixture(t)
+	store := m.opts.Store
+	if err := store.Upsert(state.Workflow{Issue: 9, Status: state.StatusBlocked, Branch: "issue/9-stuck"}); err != nil {
+		t.Fatal(err)
+	}
+	// Reload so the cleared log/pane is reflected.
+	m, _ = Drain(m, m.loadCmd())
+	m.opts.Herdr = &testutil.FakeHerdrRunner{}
+	m = press(t, m, "j", "j", "p")
+	if !strings.Contains(m.View(), "ログもペインもありません") {
+		t.Errorf("p without log/pane should show a status message, got:\n%s", m.View())
+	}
+}
+
+func TestKeyP_HerdrOpensLogInNewTab(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "herdr",
+		`if [ "$1 $2" = "tab create" ]; then printf '{"result":{"root_pane":{"pane_id":"p-new"}}}';`+
+		`elif [ "$1 $2" = "pane run" ]; then :;`+
+		`elif [ "$1 $2" = "pane move" ]; then :;`+
+		`else echo "unexpected: $@" >&2; exit 3; fi`)
+
+	_, _, m := newFixture(t)
+	m.opts.Herdr = herdr.New()
+	m = press(t, m, "j", "j", "p")
+
+	logText := testutil.LogText(t, logPath)
+	for _, want := range []string{"<tab>", "<create>", "<--focus>"} {
+		if !strings.Contains(logText, want) {
+			t.Errorf("herdr tab create args missing %q, got:\n%s", want, logText)
+		}
+	}
+	for _, want := range []string{"<pane>", "<run>", "<p-new>", "<tail>", "<-f>", "</logs/issue-9.log>"} {
+		if !strings.Contains(logText, want) {
+			t.Errorf("herdr pane run args missing %q, got:\n%s", want, logText)
+		}
+	}
+	if !strings.Contains(m.View(), "herdr タブ") {
+		t.Errorf("status should report herdr tab, got:\n%s", m.View())
+	}
+}
+
+func TestKeyP_HerdrAttachesPaneForRunningAgent(t *testing.T) {
+	_, _, m := newFixture(t)
+	store := m.opts.Store
+	if err := store.Upsert(state.Workflow{Issue: 70, Status: state.StatusInProgress, Pane: "w1:p70", Branch: "issue/70-x"}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Drain(m, m.loadCmd())
+	fh := &testutil.FakeHerdrRunner{}
+	m.opts.Herdr = fh
+	m.expanded = true
+	m = press(t, m, "j", "j", "j", "p")
+	if len(fh.PeekCalls) != 1 || fh.PeekCalls[0].Pane != "w1:p70" || fh.PeekCalls[0].LogPath != "" {
+		t.Errorf("Peek calls = %+v, want Pane=w1:p70", fh.PeekCalls)
+	}
+	if !strings.Contains(m.View(), "herdr タブ") {
+		t.Errorf("status should report herdr tab, got:\n%s", m.View())
+	}
+}
+
+func TestKeyP_FallsBackToPagerWhenHerdrUnavailable(t *testing.T) {
+	t.Setenv("PAGER", "")
+	lessLog := testutil.InstallDummy(t, "less", "")
+
+	_, sh, m := newFixture(t)
+	m.opts.Herdr = nil
+	sh.OnExec = func(c *exec.Cmd) error { return c.Run() }
+	m = press(t, m, "j", "j", "p")
+
+	if want := [][]string{{"less", "/logs/issue-9.log"}}; !reflect.DeepEqual(sh.Calls, want) {
+		t.Errorf("shell calls = %v, want %v", sh.Calls, want)
+	}
+	logText := testutil.LogText(t, lessLog)
+	if !strings.Contains(logText, "</logs/issue-9.log>") {
+		t.Errorf("less did not receive log path, got:\n%s", logText)
+	}
+	if !strings.Contains(m.View(), "エージェントログを開きました") {
+		t.Errorf("status should report log opened, got:\n%s", m.View())
+	}
+}
+
+func TestKeyP_UsesPAGERWhenSet(t *testing.T) {
+	t.Setenv("PAGER", "fake-pager --flag")
+	pagerLog := testutil.InstallDummy(t, "fake-pager", "")
+
+	_, sh, m := newFixture(t)
+	m.opts.Herdr = nil
+	sh.OnExec = func(c *exec.Cmd) error { return c.Run() }
+	m = press(t, m, "j", "j", "p")
+
+	if want := [][]string{{"fake-pager", "--flag", "/logs/issue-9.log"}}; !reflect.DeepEqual(sh.Calls, want) {
+		t.Errorf("shell calls = %v, want %v", sh.Calls, want)
+	}
+	logText := testutil.LogText(t, pagerLog)
+	if !strings.Contains(logText, "<--flag>") || !strings.Contains(logText, "</logs/issue-9.log>") {
+		t.Errorf("$PAGER did not receive argv, got:\n%s", logText)
 	}
 }
 

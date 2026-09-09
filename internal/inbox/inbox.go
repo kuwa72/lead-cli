@@ -19,6 +19,8 @@ type Options struct {
 	Gh    ports.GhClient
 	Store *state.Store // nil = no local sections
 	Shell Shell        // nil = TeaShell
+	// Herdr opens agent logs/panes in a new tab. Nil falls back to $PAGER.
+	Herdr ports.HerdrRunner
 	// Editor is $EDITOR (may carry flags: "code --wait"). Empty disables e/r.
 	Editor string
 	// AgentsPath is the repository's AGENTS.md for the r key.
@@ -371,12 +373,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return doneMsg{status: fmt.Sprintf("#%d をブラウザで開きました", it.Number)}
 		}
 	case "p":
-		if it.LogPath == "" {
-			m.status = fmt.Sprintf("#%d のエージェントログはありません", it.Number)
-		} else {
-			m.status = fmt.Sprintf("#%d ログ: %s  （tail -f で追えます。画面の乗り込みは herdr 統合後）", it.Number, it.LogPath)
-		}
-		return m, nil
+		return m.peekItem(it)
 	case "n":
 		if m.opts.Say == nil {
 			m.status = "n 実機NG は未設定です（spec AI なし）。`lead say --follow-up N \"一言\"` を直接実行できます"
@@ -483,6 +480,69 @@ func (m Model) openAgentsMd() (tea.Model, tea.Cmd) {
 			return doneMsg{err: fmt.Errorf("editor: %w", err)}
 		}
 		return doneMsg{status: "規約を編集しました: " + path}
+	})
+}
+
+func (m Model) peekItem(it Item) (tea.Model, tea.Cmd) {
+	if it.Kind != KindRunning && it.Kind != KindBlocked {
+		m.status = fmt.Sprintf("#%d は実行中/止まってるエージェントではありません（p は実行中/止まってるエージェントのみ）", it.Number)
+		return m, nil
+	}
+	if it.LogPath == "" && it.Pane == "" {
+		m.status = fmt.Sprintf("#%d のエージェントログもペインもありません", it.Number)
+		return m, nil
+	}
+	if it.LogPath != "" {
+		return m, m.peekWithHerdrOrPager(it.Number, it.LogPath, it.Pane)
+	}
+	if m.opts.Herdr != nil {
+		return m, m.peekHerdrCmd(it.Number, "", it.Pane)
+	}
+	m.status = fmt.Sprintf("#%d のペインを開くには herdr が必要です", it.Number)
+	return m, nil
+}
+
+func (m Model) peekWithHerdrOrPager(number int, logPath, pane string) tea.Cmd {
+	return func() tea.Msg {
+		if m.opts.Herdr == nil {
+			return m.peekPagerCmd(number, logPath)()
+		}
+		err := m.opts.Herdr.Peek(context.Background(), logPath, pane)
+		if err != nil && ports.IsBinaryNotFound(err) {
+			return m.peekPagerCmd(number, logPath)()
+		}
+		if err != nil {
+			return doneMsg{err: err}
+		}
+		return doneMsg{status: fmt.Sprintf("#%d のエージェントログを herdr タブで開きました", number)}
+	}
+}
+
+func (m Model) peekHerdrCmd(number int, logPath, pane string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.opts.Herdr.Peek(context.Background(), logPath, pane)
+		if err != nil {
+			return doneMsg{err: err}
+		}
+		if logPath != "" {
+			return doneMsg{status: fmt.Sprintf("#%d のエージェントログを herdr タブで開きました", number)}
+		}
+		return doneMsg{status: fmt.Sprintf("#%d のエージェント画面を herdr タブで開きました", number)}
+	}
+}
+
+func (m Model) peekPagerCmd(number int, logPath string) tea.Cmd {
+	pager := os.Getenv("PAGER")
+	if strings.TrimSpace(pager) == "" {
+		pager = "less"
+	}
+	argv := append(strings.Fields(pager), logPath)
+	c := exec.Command(argv[0], argv[1:]...)
+	return m.opts.Shell.Exec(c, func(err error) tea.Msg {
+		if err != nil {
+			return doneMsg{err: fmt.Errorf("pager: %w", err)}
+		}
+		return doneMsg{status: fmt.Sprintf("#%d のエージェントログを開きました", number)}
 	})
 }
 
@@ -661,7 +721,7 @@ func (m Model) viewHelp() string {
 		"e      $EDITOR で本文を編集して承認",
 		"x      却下: 任意の一言をコメントして close",
 		"t      一言返す: Issue コメント",
-		"p      覗く: エージェントのログパス表示",
+		"p      覗く: エージェントのログ/画面を herdr タブまたは $PAGER で開く",
 		"n      実機 NG: 一言から追い Issue を起票",
 		"r      規約: AGENTS.md を $EDITOR で開く",
 		"s      say: 一言から needs-review Issue を起票",

@@ -390,15 +390,23 @@ type SendCall struct {
 	Text   string
 }
 
+// PeekCall records one FakeHerdrRunner.Peek invocation.
+type PeekCall struct {
+	LogPath string
+	Pane    string
+}
+
 // FakeHerdrRunner is an in-memory ports.HerdrRunner.
 type FakeHerdrRunner struct {
 	// PaneID returned by Split; defaults to "fake-pane" when empty.
 	PaneID   string
 	SplitErr error
 	SendErr  error
+	PeekErr  error
 
-	Splits []SplitCall
-	Sends  []SendCall
+	Splits    []SplitCall
+	Sends     []SendCall
+	PeekCalls []PeekCall
 }
 
 var _ ports.HerdrRunner = (*FakeHerdrRunner)(nil)
@@ -419,6 +427,12 @@ func (f *FakeHerdrRunner) Split(ctx context.Context, dir ports.Direction, ratio 
 func (f *FakeHerdrRunner) SendText(ctx context.Context, paneID string, text string) error {
 	f.Sends = append(f.Sends, SendCall{PaneID: paneID, Text: text})
 	return f.SendErr
+}
+
+// Peek records the call (or returns PeekErr).
+func (f *FakeHerdrRunner) Peek(ctx context.Context, logPath, pane string) error {
+	f.PeekCalls = append(f.PeekCalls, PeekCall{LogPath: logPath, Pane: pane})
+	return f.PeekErr
 }
 
 // LaunchCall records one FakeAgentLauncher.Launch invocation.

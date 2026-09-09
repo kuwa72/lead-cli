@@ -69,9 +69,35 @@ for a in "$@"; do printf '<%s>\n' "$a" >> "$EDITOR_LOG"; done
 printf -- '- edited by human\n' >> "$1"
 EOF
 chmod +x "$tmp/bin/gh" "$tmp/bin/fake-editor" "$tmp/bin/agy"
+
+# Dummy herdr (tab/pane API) and less ($PAGER fallback) for the p key.
+export HERDR_LOG="$tmp/herdr.log" PAGER_LOG="$tmp/pager.log"
+: > "$HERDR_LOG"; : > "$PAGER_LOG"
+cat > "$tmp/bin/herdr" <<'EOF'
+#!/bin/sh
+for a in "$@"; do printf '<%s>\n' "$a" >> "$HERDR_LOG"; done
+case "$1 $2" in
+  "tab create") printf '{"result":{"root_pane":{"pane_id":"p-new"}}}' ;;
+  "pane run") : ;;
+  "pane move") : ;;
+  *) echo "unexpected herdr: $*" >&2; exit 3 ;;
+esac
+EOF
+cat > "$tmp/bin/less" <<'EOF'
+#!/bin/sh
+for a in "$@"; do printf '<%s>\n' "$a" >> "$PAGER_LOG"; done
+EOF
+chmod +x "$tmp/bin/herdr" "$tmp/bin/less"
+
 export AGY_LOG="$tmp/agy.log"; : > "$AGY_LOG"
 export PATH="$tmp/bin:$PATH"
 export EDITOR=fake-editor
+
+# Provide a workflow record so the blocked issue has an agent log to peek.
+mkdir -p "$(dirname "$LEAD_STATE_FILE")"
+cat > "$LEAD_STATE_FILE" <<'EOF'
+{"version":1,"workflows":[{"issue":9,"status":"blocked","agent":"claude","attempts":3,"log_path":"/logs/issue-9.log","branch":"issue/9-stuck"}]}
+EOF
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 cd "$repo"
@@ -172,7 +198,21 @@ grep -q 'issue create' "$GH_LOG" || fail "n did not create a follow-up issue"
 tr '\n' ' ' < "$GH_LOG" | grep -q 'issue create.*#7' \
   || fail "follow-up body lacks the #7 reference: $(cat "$GH_LOG")"
 
-# --- 12. unknown key token is an error ------------------------------------------------
+# --- 12. p with herdr: new tab + tail -f on the agent log ----------------------------
+: > "$HERDR_LOG"; unset HERDR_ENV
+HERDR_ENV=1 LEAD_TEST_INBOX_KEYS='j,j,p,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless p herdr failed"
+grep -qxF '<tab>' "$HERDR_LOG" || fail "p did not call herdr tab create: $(cat "$HERDR_LOG")"
+grep -qxF '<create>' "$HERDR_LOG" || fail "p herdr tab create args wrong: $(cat "$HERDR_LOG")"
+grep -qxF '<--focus>' "$HERDR_LOG" || fail "p herdr tab create missing --focus: $(cat "$HERDR_LOG")"
+grep -qxF '<pane>' "$HERDR_LOG" || fail "p did not call herdr pane run: $(cat "$HERDR_LOG")"
+grep -qxF '<tail>' "$HERDR_LOG" && grep -qxF '<-f>' "$HERDR_LOG" && grep -qxF '</logs/issue-9.log>' "$HERDR_LOG" || fail "p herdr pane run tail -f log wrong: $(cat "$HERDR_LOG")"
+
+# --- 13. p without herdr: $PAGER (less) fallback -----------------------------------
+: > "$PAGER_LOG"; unset HERDR_ENV
+LEAD_TEST_INBOX_KEYS='j,j,p,q' PAGER= "$tmp/lead" >/dev/null 2>&1 || fail "headless p pager failed"
+grep -qxF '</logs/issue-9.log>' "$PAGER_LOG" || fail "p did not open the log via $PAGER/less: $(cat "$PAGER_LOG")"
+
+# --- 14. unknown key token is an error ------------------------------------------------
 LEAD_TEST_INBOX_KEYS=bogus-key "$tmp/lead" >/dev/null 2>&1 && fail "unknown key token exited 0"
 
 echo "inbox tests passed"

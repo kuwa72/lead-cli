@@ -129,9 +129,11 @@ const (
 // HerdrRunner abstracts `herdr pane split/send-text`.
 // The agent command is prepared in the new pane for human review;
 // it is never auto-sent (no `pane run`).
+// Peek opens an agent log or pane from the inbox (issue #103).
 type HerdrRunner interface {
 	Split(ctx context.Context, dir Direction, ratio float64) (paneID string, err error)
 	SendText(ctx context.Context, paneID string, text string) error
+	Peek(ctx context.Context, logPath, pane string) error
 }
 
 // AgentLauncher runs a coding agent directly in the current terminal

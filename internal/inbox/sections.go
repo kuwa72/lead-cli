@@ -60,6 +60,7 @@ type Item struct {
 	Attempts int
 	PID      int
 	LogPath  string
+	Pane     string
 	Branch   string
 }
 
@@ -85,7 +86,7 @@ func Build(needsReview, blocked []ports.IssueSummary, wfs []state.Workflow) []Se
 	}
 	enrich := func(it Item) Item {
 		if w, ok := byIssue[it.Number]; ok {
-			it.Agent, it.Attempts, it.PID, it.LogPath, it.Branch = w.Agent, w.Attempts, w.PID, w.LogPath, w.Branch
+			it.Agent, it.Attempts, it.PID, it.LogPath, it.Pane, it.Branch = w.Agent, w.Attempts, w.PID, w.LogPath, w.Pane, w.Branch
 		}
 		return it
 	}
@@ -111,7 +112,7 @@ func Build(needsReview, blocked []ports.IssueSummary, wfs []state.Workflow) []Se
 	merged := Section{Kind: KindMerged, Collapsed: true}
 	running := Section{Kind: KindRunning, Collapsed: true}
 	for _, w := range wfs {
-		it := Item{Number: w.Issue, Title: strings.TrimSpace(w.Branch), Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Branch: w.Branch}
+		it := Item{Number: w.Issue, Title: strings.TrimSpace(w.Branch), Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Pane: w.Pane, Branch: w.Branch}
 		switch w.Status {
 		case state.StatusCompleted, state.StatusClosed:
 			it.Kind = KindMerged
