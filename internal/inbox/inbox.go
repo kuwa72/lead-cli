@@ -286,7 +286,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.loadErr = msg.err
 		if msg.sections != nil {
+			oldSections := m.sections
 			m.sections = msg.sections
+			for i := range m.sections {
+				for _, old := range oldSections {
+					if old.Kind == m.sections[i].Kind {
+						m.sections[i].Collapsed = old.Collapsed
+						break
+					}
+				}
+			}
 			m.refreshedAt = m.opts.Now()
 			m.clampCursor()
 			m.focusFirstItem()
