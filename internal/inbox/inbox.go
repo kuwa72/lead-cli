@@ -19,6 +19,7 @@ import (
 type Options struct {
 	Gh    ports.GhClient
 	Store *state.Store // nil = no local sections
+	Seen  *SeenStore   // nil = no read-state tracking
 	Shell Shell        // nil = TeaShell
 	// Herdr opens agent logs/panes in a new tab. Nil falls back to $PAGER.
 	Herdr ports.HerdrRunner
@@ -73,6 +74,7 @@ type Model struct {
 	loadErr      error
 	loading      bool
 	refreshedAt  time.Time
+	sessionSince time.Time // loaded last_seen_at at session start; refresh uses this
 	width        int
 	height       int
 }
@@ -80,8 +82,9 @@ type Model struct {
 // Messages.
 type (
 	loadedMsg struct {
-		sections []Section
-		err      error
+		sections     []Section
+		err          error
+		sessionSince time.Time
 	}
 	doneMsg struct {
 		status  string
@@ -115,7 +118,7 @@ func New(opts Options) Model {
 	if opts.Parallel <= 0 {
 		opts.Parallel = dispatch.DefaultParallel
 	}
-	return Model{opts: opts, sections: Build(nil, nil, nil), loading: true}
+	return Model{opts: opts, sections: Build(nil, nil, nil, nil, nil), loading: true}
 }
 
 // Init implements tea.Model.
@@ -135,6 +138,35 @@ func (m Model) loadCmd() tea.Cmd {
 	opts := m.opts
 	return func() tea.Msg {
 		ctx := context.Background()
+
+		var loadErr error
+		var seen *SeenState
+		if opts.Seen != nil {
+			var err error
+			seen, err = opts.Seen.Load()
+			if err != nil {
+				loadErr = err
+				seen = &SeenState{}
+			}
+		}
+		if seen == nil {
+			seen = &SeenState{}
+		}
+
+		// sessionSince is the loaded last_seen_at for this session; refresh
+		// reuses it so merged items stay visible until the next session.
+		sessionSince := m.sessionSince
+		if sessionSince.IsZero() {
+			sessionSince = seen.LastSeenAt
+			// Mark the session open so the next session starts from now.
+			if opts.Seen != nil {
+				seen.LastSeenAt = opts.Now()
+				if err := opts.Seen.Save(seen); err != nil {
+					loadErr = err
+				}
+			}
+		}
+
 		review, err := opts.Gh.ListByLabel(ctx, LabelNeedsReview)
 		if err != nil {
 			return loadedMsg{err: err}
@@ -149,7 +181,18 @@ func (m Model) loadCmd() tea.Cmd {
 				return loadedMsg{err: err}
 			}
 		}
-		return loadedMsg{sections: Build(review, blocked, wfs)}
+
+		// Build uses the sessionSince (not the updated last_seen_at) so the
+		// current session keeps seeing merges that happened at or after the
+		// time the inbox opened.
+		buildSeen := &SeenState{LastSeenAt: sessionSince, Confirmed: seen.Confirmed}
+		var merged []ports.MergedIssue
+		if merged, err = opts.Gh.ListMergedSince(ctx, sessionSince); err != nil {
+			return loadedMsg{err: err}
+		}
+
+		sections := Build(review, blocked, merged, buildSeen, wfs)
+		return loadedMsg{sections: sections, sessionSince: sessionSince, err: loadErr}
 	}
 }
 
@@ -197,10 +240,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loadedMsg:
 		m.loading = false
 		m.loadErr = msg.err
-		if msg.err == nil {
+		if msg.sections != nil {
 			m.sections = msg.sections
 			m.refreshedAt = m.opts.Now()
 			m.clampCursor()
+		}
+		if !msg.sessionSince.IsZero() && m.sessionSince.IsZero() {
+			m.sessionSince = msg.sessionSince
 		}
 		return m, nil
 	case doneMsg:
@@ -382,6 +428,22 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return doneMsg{status: fmt.Sprintf("#%d をブラウザで開きました", it.Number)}
 		}
+	case "c":
+		if it.Kind != KindMerged {
+			m.status = fmt.Sprintf("#%d は確認対象外（最近マージの Issue のみ c で確認できます）", it.Number)
+			return m, nil
+		}
+		if m.opts.Seen == nil {
+			m.status = "読み込み状態がありません"
+			return m, nil
+		}
+		number := it.Number
+		return m, func() tea.Msg {
+			if err := m.opts.Seen.Confirm(number); err != nil {
+				return doneMsg{err: err}
+			}
+			return doneMsg{status: fmt.Sprintf("#%d を確認しました", number), refresh: true}
+		}
 	case "p":
 		return m.peekItem(it)
 	case "n":
@@ -391,13 +453,20 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		say := m.opts.Say
 		number := it.Number
+		kind := it.Kind
 		m.mode = modeInput
 		m.input = inputState{prompt: fmt.Sprintf("実機NG #%d — 一言（Enter で追い Issue 起票, Esc 取消）> ", number), submit: func(text string) tea.Cmd {
 			if text == "" {
 				return func() tea.Msg { return doneMsg{status: "空の一言は起票しません"} }
 			}
 			return func() tea.Msg {
-				summary, err := say(context.Background(), text, number)
+				ctx := context.Background()
+				if kind == KindMerged && m.opts.Seen != nil {
+					if err := m.opts.Seen.Confirm(number); err != nil {
+						return doneMsg{err: err}
+					}
+				}
+				summary, err := say(ctx, text, number)
 				if err != nil {
 					return doneMsg{err: err}
 				}
@@ -603,7 +672,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // --- view ---------------------------------------------------------------------
 
-const keyBar = "a 承認  e 編集して承認  x 却下  t 一言返す  p 覗く  n 実機NG  r 規約  s say  o ブラウザ  Enter 本文  z 折畳  R 更新  ? ヘルプ  q 終了"
+const keyBar = "a 承認  e 編集して承認  x 却下  t 一言返す  p 覗く  c 確認  n 実機NG  r 規約  s say  o ブラウザ  Enter 本文  z 折畳  R 更新  ? ヘルプ  q 終了"
 
 // View implements tea.Model.
 func (m Model) View() string {
@@ -670,13 +739,14 @@ func (m Model) viewList() string {
 		if folded {
 			continue
 		}
+		now := m.opts.Now()
 		for _, it := range s.Items {
 			cur := "  "
 			if idx < len(rows) && idx == m.cursor {
 				cur = "> "
 			}
 			idx++
-			fmt.Fprintf(&b, "  %s#%-4d %s%s\n", cur, it.Number, it.Title, itemMeta(it))
+			fmt.Fprintf(&b, "  %s#%-4d %s%s\n", cur, it.Number, it.Title, itemMeta(it, now))
 		}
 	}
 	if len(rows) == 0 && m.loadErr == nil && !m.loading {
@@ -694,8 +764,13 @@ func (m Model) viewList() string {
 	return b.String()
 }
 
-func itemMeta(it Item) string {
+func itemMeta(it Item, now time.Time) string {
 	var parts []string
+	if it.Kind == KindMerged {
+		if age := relAge(it.MergedAt, now); age != "" {
+			parts = append(parts, age)
+		}
+	}
 	if it.Agent != "" {
 		parts = append(parts, it.Agent)
 	}
@@ -742,6 +817,7 @@ func (m Model) viewHelp() string {
 		"x      却下: 任意の一言をコメントして close",
 		"t      一言返す: Issue コメント",
 		"p      覗く: エージェントのログ/画面を herdr タブまたは $PAGER で開く",
+		"c      確認: 最近マージの Issue を確認済みにする",
 		"n      実機 NG: 一言から追い Issue を起票",
 		"r      規約: AGENTS.md を $EDITOR で開く",
 		"s      say: 一言から needs-review Issue を起票",

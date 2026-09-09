@@ -6,12 +6,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // IssueSummary is a single row of `gh issue list`.
 type IssueSummary struct {
 	Number int
 	Title  string
+}
+
+// MergedIssue is a recently merged/closed issue with its resolution time.
+type MergedIssue struct {
+	Number   int
+	Title    string
+	MergedAt time.Time
 }
 
 // Issue is the detail of `gh issue view`.
@@ -50,6 +58,9 @@ type GhClient interface {
 	// ListByLabel mirrors `gh issue list --state open --label <l> --json number,title`
 	// (dispatch queue: docs/rfc-inbox-ux.md §7).
 	ListByLabel(ctx context.Context, label string) ([]IssueSummary, error)
+	// ListMergedSince mirrors `gh issue list --state closed --json number,title,closedAt --limit 50`
+	// and returns closed issues with closedAt mapped to MergedAt.
+	ListMergedSince(ctx context.Context, since time.Time) ([]MergedIssue, error)
 	// IssueAddLabel mirrors `gh issue edit <n> --add-label <l>`.
 	IssueAddLabel(ctx context.Context, number int, label string) error
 	// IssueRemoveLabel mirrors `gh issue edit <n> --remove-label <l>`.

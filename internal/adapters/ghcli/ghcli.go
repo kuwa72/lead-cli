@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
 )
@@ -224,6 +225,35 @@ func (c *Client) ListByLabel(ctx context.Context, label string) ([]ports.IssueSu
 		summaries[i] = ports.IssueSummary{Number: r.Number, Title: r.Title}
 	}
 	return summaries, nil
+}
+
+// ListMergedSince runs `gh issue list --state closed --json number,title,closedAt --limit 50`
+// and returns issues whose closedAt is treated as the merge time.
+func (c *Client) ListMergedSince(ctx context.Context, since time.Time) ([]ports.MergedIssue, error) {
+	out, err := c.run(ctx, "issue", "list",
+		"--state", "closed",
+		"--limit", strconv.Itoa(ListLimit),
+		"--json", "number,title,closedAt")
+	if err != nil {
+		return nil, err
+	}
+	type rawIssue struct {
+		Number   int       `json:"number"`
+		Title    string    `json:"title"`
+		ClosedAt time.Time `json:"closedAt"`
+	}
+	var raw []rawIssue
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return nil, fmt.Errorf("gh issue list --state closed: decode JSON: %w", err)
+	}
+	outIssues := make([]ports.MergedIssue, 0, len(raw))
+	for _, r := range raw {
+		if !since.IsZero() && !r.ClosedAt.After(since) {
+			continue
+		}
+		outIssues = append(outIssues, ports.MergedIssue{Number: r.Number, Title: r.Title, MergedAt: r.ClosedAt})
+	}
+	return outIssues, nil
 }
 
 // IssueAddLabel runs `gh issue edit <n> --add-label <l>`.

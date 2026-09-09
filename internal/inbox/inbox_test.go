@@ -24,15 +24,14 @@ import (
 func TestBuild_SectionsFromLabelsAndState(t *testing.T) {
 	needsReview := []ports.IssueSummary{{Number: 92, Title: "fix(order): warn on zero stock"}, {Number: 93, Title: "feat(inbox): ready transition"}}
 	blocked := []ports.IssueSummary{{Number: 88, Title: "CI flaky"}, {Number: 92, Title: "dup: also labelled blocked"}}
+	merged := []ports.MergedIssue{{Number: 60, Title: "done 60"}, {Number: 61, Title: "done 61"}}
 	wfs := []state.Workflow{
 		{Issue: 88, Status: state.StatusBlocked, Agent: "claude", Attempts: 3, LogPath: "/logs/issue-88.log", Branch: "issue/88-ci"},
 		{Issue: 70, Status: state.StatusInProgress, Agent: "agy", PID: 4242, Branch: "issue/70-x"},
-		{Issue: 60, Status: state.StatusCompleted, Branch: "issue/60-done"},
-		{Issue: 61, Status: state.StatusClosed, Branch: "issue/61-done"},
 		{Issue: 50, Status: state.StatusPlanned, Branch: "issue/50-planned"},
 	}
 
-	got := Build(needsReview, blocked, wfs)
+	got := Build(needsReview, blocked, merged, nil, wfs)
 	if len(got) != 4 {
 		t.Fatalf("Build returned %d sections, want 4", len(got))
 	}
@@ -305,7 +304,7 @@ func TestBuild_EnrichesPaneFromState(t *testing.T) {
 		{Issue: 88, Status: state.StatusBlocked, Pane: "w1:p9", LogPath: "/logs/88.log", Branch: "issue/88"},
 	}
 	blocked := []ports.IssueSummary{{Number: 88, Title: "stuck"}}
-	got := Build(nil, blocked, wfs)
+	got := Build(nil, blocked, nil, nil, wfs)
 	if len(got[1].Items) != 1 {
 		t.Fatalf("blocked section = %d items, want 1", len(got[1].Items))
 	}
@@ -607,5 +606,96 @@ func TestRelAge(t *testing.T) {
 	}
 	if got := relAge(time.Time{}, now); got != "" {
 		t.Errorf("relAge(zero) = %q, want empty", got)
+	}
+}
+
+// newMergedFixture creates a model with a visible recently-merged issue #42.
+func newMergedFixture(t *testing.T) (*testutil.FakeGhClient, *fakeShell, *SeenStore, Model) {
+	t.Helper()
+	gh := &testutil.FakeGhClient{
+		Labeled: map[string][]ports.IssueSummary{
+			LabelNeedsReview: {{Number: 7, Title: "spec: add warning"}},
+			LabelBlocked:     {},
+		},
+		Merged: []ports.MergedIssue{{Number: 42, Title: "feat: done", MergedAt: time.Now().UTC().Add(-5 * time.Minute)}},
+	}
+	stateFile := filepath.Join(t.TempDir(), "workflows.json")
+	store := &state.Store{Path: stateFile}
+	seenFile := filepath.Join(t.TempDir(), "inbox-seen.json")
+	seen := &SeenStore{Path: seenFile}
+	sh := &fakeShell{}
+	m := New(Options{
+		Gh:         gh,
+		Store:      store,
+		Seen:       seen,
+		Shell:      sh,
+		Editor:     "fake-editor",
+		AgentsPath: filepath.Join(t.TempDir(), "AGENTS.md"),
+		Repo:       "kuwa72/lead-cli",
+	})
+	m = drive(t, m, nil, m.Init())
+	return gh, sh, seen, m
+}
+
+func TestKeyC_ConfirmsMergedAndRefreshes(t *testing.T) {
+	_, _, seen, m := newMergedFixture(t)
+	m.expanded = true
+	m = press(t, m, "j", "c")
+
+	st, err := seen.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !st.IsConfirmed(42) {
+		t.Errorf("confirmed = %v, want 42", st.Confirmed)
+	}
+	v := m.View()
+	if !strings.Contains(v, "最近マージ (0)") {
+		t.Errorf("merged section should be empty after confirm, got:\n%s", v)
+	}
+	if !strings.Contains(v, "#42 を確認しました") {
+		t.Errorf("status should report #42 confirmed, got:\n%s", v)
+	}
+}
+
+func TestKeyC_OnNonMergedDoesNothing(t *testing.T) {
+	_, _, seen, m := newMergedFixture(t)
+	press(t, m, "c")
+	st, _ := seen.Load()
+	if len(st.Confirmed) != 0 {
+		t.Errorf("c on non-merged must not confirm: %+v", st.Confirmed)
+	}
+}
+
+func TestKeyN_OnMergedConfirmsAndFollowsUp(t *testing.T) {
+	_, _, seen, m := newMergedFixture(t)
+	m.expanded = true
+	var calls []sayCall
+	m.opts.Say = fakeSay(&calls)
+	m = press(t, m, "j", "n", "text:still broken", "enter")
+
+	if want := []sayCall{{OneLiner: "still broken", FollowUp: 42}}; !reflect.DeepEqual(calls, want) {
+		t.Errorf("Say calls = %+v, want %+v", calls, want)
+	}
+	st, _ := seen.Load()
+	if !st.IsConfirmed(42) {
+		t.Errorf("n did not confirm merged issue: %+v", st.Confirmed)
+	}
+	if v := m.View(); !strings.Contains(v, "最近マージ (0)") {
+		t.Errorf("merged section should be empty after n follow-up, got:\n%s", v)
+	}
+}
+
+func TestLoadCmd_UpdatesLastSeenAt(t *testing.T) {
+	gh, _, seen, _ := newMergedFixture(t)
+	if gh.MergedCalls != 1 {
+		t.Fatalf("ListMergedSince calls = %d, want 1", gh.MergedCalls)
+	}
+	st, err := seen.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if st.LastSeenAt.IsZero() {
+		t.Error("last_seen_at not updated on inbox open")
 	}
 }

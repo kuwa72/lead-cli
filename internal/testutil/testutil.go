@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
 )
@@ -140,6 +141,12 @@ type FakeGhClient struct {
 	LabelListErr   error
 	LabelListCalls []string
 	LabelErr       error
+
+	// Merged feeds ListMergedSince.
+	Merged       []ports.MergedIssue
+	MergedErr    error
+	MergedSince  []time.Time
+	MergedCalls  int
 	AddedLabels    []LabelCall
 	RemovedLabels  []LabelCall
 
@@ -242,6 +249,16 @@ func (f *FakeGhClient) ListByLabel(ctx context.Context, label string) ([]ports.I
 		return nil, f.LabelListErr
 	}
 	return f.Labeled[label], nil
+}
+
+// ListMergedSince returns Merged (or MergedErr) and records the call.
+func (f *FakeGhClient) ListMergedSince(ctx context.Context, since time.Time) ([]ports.MergedIssue, error) {
+	f.MergedCalls++
+	f.MergedSince = append(f.MergedSince, since)
+	if f.MergedErr != nil {
+		return nil, f.MergedErr
+	}
+	return f.Merged, nil
 }
 
 // IssueAddLabel records the call (or returns LabelErr).

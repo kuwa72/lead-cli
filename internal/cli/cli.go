@@ -543,6 +543,7 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	opts := inbox.Options{
 		Gh:         deps.gh(),
 		Store:      store,
+		Seen:       &inbox.SeenStore{Path: inbox.ResolveSeenPath()},
 		Editor:     os.Getenv("EDITOR"),
 		AgentsPath: filepath.Join(root, "AGENTS.md"),
 		Repo:       inbox.RepoSlug(deps.gitRunner().OriginURL(root)),
