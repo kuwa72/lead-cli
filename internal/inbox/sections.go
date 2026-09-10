@@ -58,17 +58,18 @@ const MaxMergedItems = 20
 
 // Item is one row. Number/Title come from gh; the rest from workflows.json.
 type Item struct {
-	Number   int
-	Title    string
-	Kind     Kind
-	Agent    string
-	Attempts int
-	PID      int
-	LogPath  string
-	Pane     string
-	Branch   string
-	PRNumber int
-	MergedAt time.Time
+	Number    int
+	Title     string
+	UpdatedAt time.Time
+	Kind      Kind
+	Agent     string
+	Attempts  int
+	PID       int
+	LogPath   string
+	Pane      string
+	Branch    string
+	PRNumber  int
+	MergedAt  time.Time
 }
 
 // Section is one heading plus its rows.
@@ -76,6 +77,9 @@ type Section struct {
 	Kind      Kind
 	Items     []Item
 	Collapsed bool
+	// Truncated is true when Items was capped at a display limit (e.g.
+	// MaxMergedItems); the count is rendered as "20+" so the cap is visible.
+	Truncated bool
 }
 
 // Build sections issues: `needs-review` and `blocked` come from gh label
@@ -105,7 +109,7 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 			continue
 		}
 		seenNumbers[s.Number] = true
-		review.Items = append(review.Items, enrich(Item{Number: s.Number, Title: s.Title, Kind: KindNeedsReview}))
+		review.Items = append(review.Items, enrich(Item{Number: s.Number, Title: s.Title, Kind: KindNeedsReview, UpdatedAt: s.UpdatedAt}))
 	}
 	stuck := Section{Kind: KindBlocked}
 	for _, s := range blocked {
@@ -113,7 +117,7 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 			continue
 		}
 		seenNumbers[s.Number] = true
-		stuck.Items = append(stuck.Items, enrich(Item{Number: s.Number, Title: s.Title, Kind: KindBlocked}))
+		stuck.Items = append(stuck.Items, enrich(Item{Number: s.Number, Title: s.Title, Kind: KindBlocked, UpdatedAt: s.UpdatedAt}))
 	}
 
 	confirmed := make(map[int]bool)
@@ -133,6 +137,7 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 	}
 	if len(mergedSection.Items) > MaxMergedItems {
 		mergedSection.Items = mergedSection.Items[:MaxMergedItems]
+		mergedSection.Truncated = true
 	}
 
 	running := Section{Kind: KindRunning, Collapsed: true}

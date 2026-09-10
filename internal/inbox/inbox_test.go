@@ -887,7 +887,7 @@ func TestIssueKeysOnHeaderDoNothing(t *testing.T) {
 func TestCursorMove_UpdatesDetailPreview(t *testing.T) {
 	gh, _, m := newFixture(t)
 	m.width = 120
-	m.height = 20
+	m.height = 30
 	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "second body", State: "OPEN"}
 	m = press(t, m, "j") // #7 -> #8
 	v := m.View()
@@ -916,7 +916,7 @@ func TestCursorMove_UpdatesDetailPreview(t *testing.T) {
 func TestEnter_OpensFullscreenDetailFromSplit(t *testing.T) {
 	gh, _, m := newFixture(t)
 	m.width = 120
-	m.height = 20
+	m.height = 30
 	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "second body", State: "OPEN"}
 	m = press(t, m, "j") // load #8 preview
 	v := m.View()

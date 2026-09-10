@@ -79,6 +79,7 @@ type Model struct {
 	sessionSince time.Time // loaded last_seen_at at session start; refresh uses this
 	width        int
 	height       int
+	listTop      int // first visible row in the scrolled list body
 }
 
 // Messages.
@@ -285,6 +286,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.clampCursor()
+		m.scrollToCursor()
 		return m, nil
 	case tickMsg:
 		return m, tea.Batch(m.loadCmd(), m.tickCmd())
@@ -307,6 +310,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshedAt = m.opts.Now()
 			m.clampCursor()
 			m.focusFirstItem()
+			m.scrollToCursor()
 		}
 		if !msg.sessionSince.IsZero() && m.sessionSince.IsZero() {
 			m.sessionSince = msg.sessionSince
@@ -350,6 +354,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.approveWithBodyCmd(msg.number, msg.body)
 	case tea.KeyMsg:
+		if m.tooSmall() {
+			switch keyString(msg) {
+			case "q", "ctrl+c":
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		switch m.mode {
 		case modeInput:
 			return m.updateInput(msg)
@@ -387,14 +398,17 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "j", "down":
 		m.cursor++
 		m.clampCursor()
+		m.scrollToCursor()
 		return m, m.loadPreviewForCurrent()
 	case "k", "up":
 		m.cursor--
 		m.clampCursor()
+		m.scrollToCursor()
 		return m, m.loadPreviewForCurrent()
 	case "z", "tab":
 		m.expanded = !m.expanded
 		m.clampCursor()
+		m.scrollToCursor()
 		return m, m.loadPreviewForCurrent()
 	case "R":
 		m.loading = true
@@ -438,6 +452,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter", " ", "space", "right", "l":
 			m.toggleSection(row.Section)
 			m.clampCursor()
+			m.scrollToCursor()
 			return m, nil
 		}
 		if key != "" {
@@ -820,108 +835,130 @@ func (m Model) rule() string {
 	return strings.Repeat("─", w)
 }
 
-func (m Model) viewList() string {
-	var b strings.Builder
-	running := 0
-	counted := false
-	if m.opts.RunningCount != nil {
-		if n, err := m.opts.RunningCount(); err == nil {
-			running = n
-			counted = true
-		}
-	}
-	if !counted {
-		for _, s := range m.sections {
-			if s.Kind == KindRunning {
-				running = len(s.Items)
-				break
-			}
-		}
-	}
-	head := "lead"
+func (m Model) headerLine(w int) string {
+	left := "lead"
 	if m.opts.Repo != "" {
-		head += " — " + m.opts.Repo
+		left += " — " + m.opts.Repo
 	}
-	right := fmt.Sprintf("実行中 %d / 並列上限 %d", running, m.opts.Parallel)
+	right := fmt.Sprintf("実行中 %d / 並列上限 %d", m.runningCount(), m.opts.Parallel)
 	if m.loading {
 		right += "   ⟳ 読込中"
 	} else if age := relAge(m.refreshedAt, m.opts.Now()); age != "" {
 		right += "   ⟳ " + age
 	}
-	fmt.Fprintf(&b, "%s%s%s\n", head, strings.Repeat(" ", max(2, 78-len([]rune(head))-len([]rune(right)))), right)
-	b.WriteString(m.rule() + "\n")
-	if m.loadErr != nil {
-		fmt.Fprintf(&b, "読込エラー: %v\n", m.loadErr)
+	leftSpace := w - cellWidth(right)
+	left = truncTail(left, leftSpace-2)
+	return padRight(left, leftSpace) + right
+}
+
+func (m Model) runningCount() int {
+	if m.opts.RunningCount != nil {
+		if n, err := m.opts.RunningCount(); err == nil {
+			return n
+		}
+	}
+	for _, s := range m.sections {
+		if s.Kind == KindRunning {
+			return len(s.Items)
+		}
+	}
+	return 0
+}
+
+func (m Model) summaryLine(w int) string {
+	parts := make([]string, 0, len(m.sections))
+	for _, s := range m.sections {
+		suffix := fmt.Sprintf("%d", len(s.Items))
+		if s.Truncated {
+			suffix += "+"
+		}
+		parts = append(parts, s.Kind.Title()+" "+suffix)
+	}
+	return padRight(truncTail(strings.Join(parts, "   "), w), w)
+}
+
+func (m Model) statusLine(w int) string {
+	var s string
+	switch {
+	case m.status != "":
+		s = m.status
+	case m.loadErr != nil:
+		s = "読込エラー: " + m.loadErr.Error()
+	default:
+		s = "j/k 移動  Enter 詳細  ? 操作一覧"
+	}
+	return padRight(truncTail(s, w), w)
+}
+
+func (m Model) viewList() string {
+	if m.tooSmall() {
+		return m.viewTooSmall()
+	}
+	var b strings.Builder
+	w := m.screenWidth()
+	footerStr := m.footer()
+	footerLines := strings.Count(footerStr, "\n") + 1
+	bodyH := m.bodyHeightFor(footerLines)
+	rows := m.visible()
+
+	b.WriteString(m.headerLine(w) + "\n")
+	b.WriteString(m.summaryLine(w) + "\n")
+	b.WriteString(m.ruleW(w) + "\n")
+
+	if m.isSplit() {
+		leftW := (w - 1) * 60 / 100
+		rightW := w - 1 - leftW
+		cols := m.listColumns(leftW)
+		b.WriteString(m.columnHeaderLine(cols, leftW) + "│" + " " + padRight(m.previewHeader(), rightW-1) + "\n")
+		bodyLines := m.bodyLines(rows, m.listTop, bodyH, leftW, cols)
+		preview := m.previewLines(rightW-1, bodyH)
+		for i := 0; i < bodyH; i++ {
+			left := ""
+			if i < len(bodyLines) {
+				left = bodyLines[i]
+			}
+			right := ""
+			if i < len(preview) {
+				right = preview[i]
+			}
+			b.WriteString(padRight(left, leftW) + "│" + " " + padRight(right, rightW-1) + "\n")
+		}
+	} else {
+		cols := m.listColumns(w)
+		b.WriteString(m.columnHeaderLine(cols, w) + "\n")
+		bodyLines := m.bodyLines(rows, m.listTop, bodyH, w, cols)
+		for i := 0; i < bodyH; i++ {
+			line := ""
+			if i < len(bodyLines) {
+				line = bodyLines[i]
+			}
+			b.WriteString(padRight(line, w) + "\n")
+		}
 	}
 
-	rows := m.visible()
-	now := m.opts.Now()
-	for i, r := range rows {
-		isCur := i == m.cursor
-		if r.IsHeader() {
-			s := r.Section
-			folded := s.Collapsed && !m.expanded
-			mark := "▾"
-			if folded {
-				mark = "▸"
-			}
-			cur := "  "
-			if isCur {
-				cur = "▶ "
-			}
-			fmt.Fprintf(&b, "%s%s %s (%d)\n", cur, mark, s.Kind.Title(), len(s.Items))
-			continue
-		}
-		it := *r.Item
-		cur := "  "
-		if isCur {
-			cur = "> "
-		}
-		fmt.Fprintf(&b, "%s#%-4d %s%s\n", cur, it.Number, it.Title, itemMeta(it, now))
-	}
-	if len(rows) == 0 && m.loadErr == nil && !m.loading {
-		b.WriteString("  人間の仕事はありません\n")
-	}
-	b.WriteString(m.rule() + "\n")
+	b.WriteString(m.ruleW(w) + "\n")
 	if m.mode == modeInput {
 		fmt.Fprintf(&b, "%s%s▏\n", m.input.prompt, string(m.input.text))
 	} else {
-		b.WriteString(m.footer() + "\n")
-		if m.status != "" {
-			b.WriteString(m.status + "\n")
-		}
+		b.WriteString(m.statusLine(w) + "\n")
 	}
-	if m.detail.Number > 0 {
-		b.WriteString(m.rule() + "\n")
-		b.WriteString(m.viewPreview())
-	}
+	b.WriteString(footerStr + "\n")
 	return b.String()
 }
 
-// viewPreview renders the bottom detail pane for the currently selected issue.
-func (m Model) viewPreview() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "#%d %s  [%s]\n", m.detail.Number, m.detail.Title, m.detail.State)
-	b.WriteString(m.rule() + "\n")
-	content := m.detail.Body
-	if m.detailPrNum > 0 && strings.TrimSpace(m.detailPrBody) != "" {
-		content += "\n\n---\n## PR 本文\n\n" + m.detailPrBody
+// bodyHeightFor is the number of body rows given the actual footer line count.
+func (m Model) bodyHeightFor(footerLines int) int {
+	if m.height <= 0 {
+		if n := len(m.visible()); n > 0 {
+			return n
+		}
+		return 1
 	}
-	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
-	off := m.detailOffset
-	if off > len(lines)-1 {
-		off = max(0, len(lines)-1)
+	fixed := 6 + footerLines
+	if h := m.height - fixed; h > 0 {
+		return h
 	}
-	limit := len(lines)
-	if m.height > 0 {
-		previewHeight := max(4, m.height/2)
-		limit = min(len(lines), off+max(1, previewHeight-4))
-	}
-	for _, l := range lines[off:limit] {
-		b.WriteString(l + "\n")
-	}
-	b.WriteString(m.rule() + "\n")
-	return b.String()
+	return 1
 }
 
 func (m Model) footer() string {
