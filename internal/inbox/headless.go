@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -90,6 +91,7 @@ func Drain(m Model, cmd tea.Cmd) (Model, bool) {
 // RunHeadless replays keys against the model without a terminal and writes
 // the final screen to out (LEAD_TEST_INBOX_KEYS hook for shell tests).
 func RunHeadless(m Model, keys []string, out io.Writer) error {
+	m.opts.PreviewDelay = 0
 	m, quit := Drain(m, m.Init())
 	if _, err := io.WriteString(out, m.View()); err != nil {
 		return err
@@ -111,6 +113,9 @@ func RunHeadless(m Model, keys []string, out io.Writer) error {
 
 // Run opens the interactive inbox on the terminal.
 func Run(m Model) error {
+	if m.opts.PreviewDelay <= 0 {
+		m.opts.PreviewDelay = 150 * time.Millisecond
+	}
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }

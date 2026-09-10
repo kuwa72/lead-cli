@@ -159,6 +159,7 @@ func TestKeyA_ApprovesNeedsReviewIssue(t *testing.T) {
 
 func TestKeyA_MovesCursorThenApprovesSecond(t *testing.T) {
 	gh, _, m := newFixture(t)
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "second body", State: "OPEN"}
 	m = press(t, m, "j", "a")
 	if want := []testutil.LabelCall{{Number: 8, Label: LabelReady}}; !reflect.DeepEqual(gh.AddedLabels, want) {
 		t.Errorf("AddedLabels = %+v, want %+v", gh.AddedLabels, want)

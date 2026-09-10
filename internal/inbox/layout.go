@@ -313,25 +313,35 @@ func (m Model) previewHeader() string {
 }
 
 // previewLines renders the selected issue's detail into at most h lines of
-// width w. Content here stays plain text; extraction/attribution is issue #126.
+// width w, using section-specific extraction and source attribution.
 func (m Model) previewLines(w, h int) []string {
-	if m.detail.Number == 0 || w <= 0 || h <= 0 {
+	if h <= 0 || w <= 0 {
+		return nil
+	}
+	if m.previewLoading {
+		return []string{truncTail(fmt.Sprintf("Loading #%d…", m.detail.Number), w)}
+	}
+	if m.previewErr != nil {
+		return []string{truncTail(fmt.Sprintf("Unable to load #%d. [R] Retry", m.detail.Number), w)}
+	}
+	row, ok := m.current()
+	if !ok || row.IsHeader() || m.detail.Number == 0 {
 		return nil
 	}
 	var lines []string
 	lines = append(lines, truncTail(m.detail.Title, w))
-	content := m.detail.Body
-	if m.detailPrNum > 0 && strings.TrimSpace(m.detailPrBody) != "" {
-		content += "\n\n---\n## PR 本文\n\n" + m.detailPrBody
-	}
-	for _, l := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+	content, more := m.previewContent(max(0, h-2)) // reserve title + Enter hint
+	for _, l := range content {
 		if len(lines) >= h {
 			break
 		}
 		lines = append(lines, truncTail(l, w))
 	}
-	if len(lines) < h {
+	if more && len(lines) < h {
 		lines = append(lines, "Enter: 全画面詳細")
+	}
+	for len(lines) < h {
+		lines = append(lines, "")
 	}
 	return lines
 }
