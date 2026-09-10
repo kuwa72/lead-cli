@@ -565,14 +565,16 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		os.Exit(2)
 	}
 
+	repoSlug := inbox.RepoSlug(deps.gitRunner().OriginURL(root))
 	store := &state.Store{Path: deps.stateFile()}
 	opts := inbox.Options{
 		Gh:         deps.gh(),
 		Store:      store,
 		Seen:       &inbox.SeenStore{Path: inbox.ResolveSeenPath()},
+		Cache:      &inbox.CacheStore{Path: inbox.ResolveCachePath(repoSlug)},
 		Editor:     os.Getenv("EDITOR"),
 		AgentsPath: filepath.Join(root, "AGENTS.md"),
-		Repo:       inbox.RepoSlug(deps.gitRunner().OriginURL(root)),
+		Repo:       repoSlug,
 		Parallel:   parallel,
 		Theme:      os.Getenv("LEAD_THEME"),
 	}

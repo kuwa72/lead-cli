@@ -52,6 +52,8 @@ type Options struct {
 	Headless bool
 	// Theme is the LEAD_THEME environment value (empty = terminal default).
 	Theme string
+	// Cache is the persistent issue cache store (issue #140).
+	Cache *CacheStore
 }
 
 type mode int
@@ -168,13 +170,44 @@ func New(opts Options) Model {
 	if opts.Parallel <= 0 {
 		opts.Parallel = dispatch.DefaultParallel
 	}
-	m := Model{opts: opts, sections: Build(nil, nil, nil, nil, nil), loading: true, previewCache: make(map[int]previewSnapshot), pendingOps: make(map[int]bool), theme: NewTheme(ModeTerminal, termenv.Ascii, nil)}
+	var initialSections []Section
+	var initialStatus string
+	if opts.Cache != nil {
+		if cache, err := opts.Cache.Load(); err == nil && cache != nil {
+			var wfs []state.Workflow
+			if opts.Store != nil {
+				wfs, _ = opts.Store.List()
+			}
+			openNums := make(map[int]bool, len(cache.OpenNumbers))
+			for _, n := range cache.OpenNumbers {
+				openNums[n] = true
+			}
+			initialSections = Build(cache.Review, cache.Blocked, cache.Merged, nil, wfs, BuildOptions{
+				Repo:        opts.Repo,
+				OpenNumbers: openNums,
+			})
+			initialStatus = "cached"
+		}
+	}
+	if initialSections == nil {
+		initialSections = Build(nil, nil, nil, nil, nil)
+	}
+	m := Model{
+		opts:         opts,
+		sections:     initialSections,
+		status:       initialStatus,
+		loading:      true,
+		previewCache: make(map[int]previewSnapshot),
+		pendingOps:   make(map[int]bool),
+		theme:        NewTheme(ModeTerminal, termenv.Ascii, nil),
+	}
 	if opts.Seen != nil {
 		shown, err := opts.Seen.HelpShown()
 		if err == nil && !shown {
 			m.mode = modeHelp
 		}
 	}
+	m.focusFirstItem()
 	return m
 }
 
@@ -280,6 +313,20 @@ func (m Model) loadCmd() tea.Cmd {
 			Repo:        opts.Repo,
 			OpenNumbers: openNumbers,
 		})
+		if loadErr == nil && opts.Cache != nil {
+			var openList []int
+			for n := range openNumbers {
+				openList = append(openList, n)
+			}
+			_ = opts.Cache.Save(&IssueCache{
+				Repo:        opts.Repo,
+				CachedAt:    opts.Now(),
+				Review:      review,
+				Blocked:     blocked,
+				Merged:      merged,
+				OpenNumbers: openList,
+			})
+		}
 		return loadedMsg{sections: sections, sessionSince: sessionSince, err: loadErr}
 	}
 }
@@ -369,6 +416,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loadedMsg:
 		m.loading = false
 		m.loadErr = msg.err
+		if msg.err != nil && len(m.sections) > 0 {
+			cmd := m.setStatus("offline: " + msg.err.Error())
+			return m, cmd
+		}
 		oldRow, _ := m.current()
 		m.detail = ports.Issue{}
 		m.detailPrNum, m.detailPrBody, m.detailOffset = 0, "", 0
