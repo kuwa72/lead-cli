@@ -25,12 +25,13 @@ type GitRunner interface {
 
 // StartOptions controls one Start call.
 type StartOptions struct {
-	Issue    ports.Issue // resolved issue (number and title)
-	Mode     string      // default implement
-	Branch   string      // "" = issue/<n>-<slug>
-	Part     string
-	Worktree string // "" = none, "auto" = <repo>/.worktrees/issue-<n>[-<part>]
-	WorkDir  string // repo context (required)
+	Issue     ports.Issue // resolved issue (number and title)
+	Mode      string      // default implement
+	Branch    string      // "" = issue/<n>-<slug>
+	Part      string
+	Worktree  string // "" = none, "auto" = <repo>/.worktrees/issue-<n>[-<part>]
+	WorkDir   string // repo context (required)
+	AgentMode string // interactive|batch|dangerous
 }
 
 // StartResult describes the established workflow.
@@ -42,6 +43,7 @@ type StartResult struct {
 	Mode       string
 	RepoRoot   string
 	Pane       string
+	AgentMode  string
 }
 
 // Start creates/checks out the branch, optionally creates a worktree, and
@@ -107,6 +109,7 @@ func Start(ctx context.Context, g GitRunner, store *state.Store, opts StartOptio
 		Branch:     branch,
 		Worktree:   worktree,
 		Status:     state.StatusInProgress,
+		AgentMode:  opts.AgentMode,
 	}
 	if ok {
 		if err := state.CheckTransition(existing.Status, state.StatusInProgress); err != nil && existing.Status != state.StatusInProgress {
@@ -122,6 +125,9 @@ func Start(ctx context.Context, g GitRunner, store *state.Store, opts StartOptio
 		w.PolicyReason = existing.PolicyReason
 		w.Artifacts = existing.Artifacts
 		w.Agent = existing.Agent
+		if opts.AgentMode == "" {
+			w.AgentMode = existing.AgentMode
+		}
 		w.Attempts = existing.Attempts
 		w.PID = existing.PID
 		w.LogPath = existing.LogPath
@@ -132,5 +138,6 @@ func Start(ctx context.Context, g GitRunner, store *state.Store, opts StartOptio
 	return StartResult{
 		Branch: branch, Worktree: w.Worktree, Status: w.Status,
 		Repository: repo, Mode: mode, RepoRoot: repoRoot, Pane: w.Pane,
+		AgentMode: w.AgentMode,
 	}, nil
 }

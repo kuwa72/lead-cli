@@ -63,6 +63,17 @@ Issue一覧から2段階の選択（Issue選定→エージェント選定）を
 - **`codex`**: 軽量なスクリプト作成やクイックフィックス。
 - **`devin` / `gemini`**: タスクの性質やAPIクォータ/レートリミット時の代替。
 
+### 4.1 エージェント起動モード仕様 (`--agent-mode`, Issue #83)
+
+| エージェント | 対話モード (`interactive`) | 自走/一括モード (`batch` / `dangerous`) | 権限・承認スキップ仕様 (実機確認済み) |
+|---|---|---|---|
+| `agy` | `agy -i "<prompt>"` | `agy --dangerously-skip-permissions -p "<prompt>"` | `--dangerously-skip-permissions`: ツール実行プロンプトを全自動承認。`-p` で非対話実行。 |
+| `claude` | `claude "<prompt>"` | `claude -p --dangerously-skip-permissions "<prompt>"` | `--dangerously-skip-permissions`: ツール実行プロンプトを自動承認。`-p` で非対話実行。 |
+| `codex` | `codex "<prompt>"` | `codex exec --dangerously-bypass-approvals-and-sandbox "<prompt>"` | `exec`: 非対話実行。`--dangerously-bypass-approvals-and-sandbox`: サンドボックスおよび確認プロンプトをバイパス。 |
+| `gemini` | `gemini "<prompt>"` | `gemini -y "<prompt>"` | `-y` (`--yolo`): 全てのアクションを自動承認。 |
+| `opencode` | `opencode "<prompt>"` | `opencode run --auto "<prompt>"` | `run --auto`: 自動承認で非対話実行。 |
+| `devin` | `devin "<prompt>"` | `devin --permission-mode dangerous -p "<prompt>"` | `--permission-mode dangerous`: 全ツールを自動承認。`-p` で非対話実行。 |
+
 ---
 
 ## 5. ロードマップ & 今後のIssue候補

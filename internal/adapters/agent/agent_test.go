@@ -31,6 +31,21 @@ func TestLaunch_AgyUsesInteractiveFlag(t *testing.T) {
 	}
 }
 
+func TestLaunch_BatchMode(t *testing.T) {
+	logPath := mkDummyAgent(t, "agy", 0)
+
+	if err := New().LaunchForMode(context.Background(), "agy", "do batch", "batch"); err != nil {
+		t.Fatalf("LaunchForMode agy batch: %v", err)
+	}
+	log := testutil.LogText(t, logPath)
+	if !strings.Contains(log, "<--dangerously-skip-permissions>") {
+		t.Errorf("agy batch argv missing --dangerously-skip-permissions, got:\n%s", log)
+	}
+	if !strings.Contains(log, "<-p>") {
+		t.Errorf("agy batch argv missing -p, got:\n%s", log)
+	}
+}
+
 func TestLaunch_OtherAgentUsesPositionalPrompt(t *testing.T) {
 	for _, name := range []string{"devin", "opencode", "claude"} {
 		logPath := mkDummyAgent(t, name, 0)
@@ -115,5 +130,72 @@ func TestCommandString_BuildsReviewableCommand(t *testing.T) {
 	}
 	if got := CommandString("", "hello"); got != `agy -i "hello"` {
 		t.Errorf("CommandString default = %q, want agy form", got)
+	}
+}
+
+func TestCommandStringForMode(t *testing.T) {
+	cases := []struct {
+		agent   string
+		mode    string
+		want    string
+		wantErr bool
+	}{
+		{"agy", "interactive", `agy -i "hello"`, false},
+		{"agy", "batch", `agy --dangerously-skip-permissions -p "hello"`, false},
+		{"agy", "dangerous", `agy --dangerously-skip-permissions -p "hello"`, false},
+		{"claude", "batch", `claude -p --dangerously-skip-permissions "hello"`, false},
+		{"codex", "batch", `codex exec --dangerously-bypass-approvals-and-sandbox "hello"`, false},
+		{"gemini", "batch", `gemini -y "hello"`, false},
+		{"opencode", "batch", `opencode run --auto "hello"`, false},
+		{"devin", "batch", `devin --permission-mode dangerous -p "hello"`, false},
+		{"unknown", "batch", "", true},
+	}
+	for _, tc := range cases {
+		got, err := CommandStringForMode(tc.agent, "hello", tc.mode)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("CommandStringForMode(%s, %s) wanted error, got nil", tc.agent, tc.mode)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("CommandStringForMode(%s, %s) unexpected error: %v", tc.agent, tc.mode, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("CommandStringForMode(%s, %s) = %q, want %q", tc.agent, tc.mode, got, tc.want)
+		}
+	}
+}
+
+func TestArgvForMode(t *testing.T) {
+	cases := []struct {
+		agent   string
+		mode    string
+		want    []string
+		wantErr bool
+	}{
+		{"agy", "interactive", []string{"-i", "hello"}, false},
+		{"agy", "batch", []string{"--dangerously-skip-permissions", "-p", "hello"}, false},
+		{"claude", "batch", []string{"-p", "--dangerously-skip-permissions", "hello"}, false},
+		{"codex", "batch", []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "hello"}, false},
+		{"gemini", "batch", []string{"-y", "hello"}, false},
+		{"unknown", "batch", nil, true},
+	}
+	for _, tc := range cases {
+		got, err := ArgvForMode(tc.agent, "hello", tc.mode)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("ArgvForMode(%s, %s) wanted error, got nil", tc.agent, tc.mode)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ArgvForMode(%s, %s) unexpected error: %v", tc.agent, tc.mode, err)
+			continue
+		}
+		if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+			t.Errorf("ArgvForMode(%s, %s) = %v, want %v", tc.agent, tc.mode, got, tc.want)
+		}
 	}
 }
