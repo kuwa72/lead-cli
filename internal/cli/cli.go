@@ -200,9 +200,11 @@ func (d Deps) selector() tui.Selector {
 		return d.Selector
 	}
 	if raw := os.Getenv("LEAD_TEST_SELECTION"); raw != "" {
-		if sel, err := parseTestSelection(raw); err == nil {
-			return &tui.FakeSelector{Selection: sel}
+		sel, err := parseTestSelection(raw)
+		if err != nil {
+			return &tui.FakeSelector{Err: fmt.Errorf("invalid LEAD_TEST_SELECTION %q: %w", raw, err)}
 		}
+		return &tui.FakeSelector{Selection: sel}
 	}
 	return fzf.New()
 }
@@ -672,6 +674,9 @@ func runWorkTUI(cmd *cobra.Command, deps Deps) error {
 	if len(summaries) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "no open issues")
 		return nil
+	}
+	if deps.Selector == nil && os.Getenv("LEAD_TEST_SELECTION") == "" && (!isTerminal(os.Stdin) || !isTerminal(os.Stdout)) {
+		return errors.New("lead run: the issue picker needs an interactive terminal; specify an issue number or run `lead --help`")
 	}
 	items := make([]tui.IssueItem, len(summaries))
 	for i, s := range summaries {

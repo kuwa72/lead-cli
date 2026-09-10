@@ -248,7 +248,38 @@ func (m Model) loadCmd() tea.Cmd {
 			return loadedMsg{err: err}
 		}
 
-		sections := Build(review, blocked, merged, buildSeen, wfs)
+		var openNumbers map[int]bool
+		if openIssues, err := opts.Gh.ListOpen(ctx); err == nil && len(openIssues) > 0 {
+			openNumbers = make(map[int]bool, len(openIssues)+len(review)+len(blocked))
+			for _, iss := range openIssues {
+				openNumbers[iss.Number] = true
+			}
+			for _, iss := range review {
+				openNumbers[iss.Number] = true
+			}
+			for _, iss := range blocked {
+				openNumbers[iss.Number] = true
+			}
+
+			// Zombie workflow sync: if an in_progress workflow in this repo is no longer
+			// open on GitHub, mark it completed in the store.
+			if opts.Store != nil {
+				for i, w := range wfs {
+					if w.Status == state.StatusInProgress && !openNumbers[w.Issue] {
+						if opts.Repo == "" || w.Repository == "" || w.Repository == "local" || RepoSlug(w.Repository) == opts.Repo {
+							w.Status = state.StatusCompleted
+							wfs[i] = w
+							_ = opts.Store.Upsert(w)
+						}
+					}
+				}
+			}
+		}
+
+		sections := Build(review, blocked, merged, buildSeen, wfs, BuildOptions{
+			Repo:        opts.Repo,
+			OpenNumbers: openNumbers,
+		})
 		return loadedMsg{sections: sections, sessionSince: sessionSince, err: loadErr}
 	}
 }

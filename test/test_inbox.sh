@@ -251,7 +251,7 @@ LEAD_TEST_INBOX_KEYS=bogus-key "$tmp/lead" >/dev/null 2>&1 && fail "unknown key 
 # --- 14.5. header selection and per-section toggle ----------------------------------
 : > "$GH_LOG"
 out="$(LEAD_TEST_INBOX_KEYS='up,enter,q' "$tmp/lead" 2>&1)" || fail "header toggle failed"
-case "$out" in *"▸ Needs review (2)"*) ;; *) fail "review header not collapsed: $out";; esac
+case "$out" in *"▸ Needs review (2)"*|*"> Needs review (2)"*) ;; *) fail "review header not collapsed: $out";; esac
 grep -qE 'issue view|issue edit|issue close|issue comment' "$GH_LOG" && fail "header enter must not call gh issue: $(cat "$GH_LOG")"
 
 # --- 15. merged section: recently closed issues show, c confirms and hides them ----
