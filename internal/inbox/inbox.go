@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muesli/termenv"
 
 	"github.com/kuwa72/lead-cli/internal/dispatch"
 	"github.com/kuwa72/lead-cli/internal/ports"
@@ -47,6 +48,8 @@ type Options struct {
 	// cursor moves. Interactive runs set this to 150ms; headless tests
 	// leave it at zero so previews load synchronously.
 	PreviewDelay time.Duration
+	// Theme is the LEAD_THEME environment value (empty = terminal default).
+	Theme string
 }
 
 type mode int
@@ -94,6 +97,7 @@ type Model struct {
 	previewErr      error
 	previewCache    map[int]previewSnapshot
 	pendingOps      map[int]bool // issue numbers with in-flight state-changing operations
+	theme           *Theme       // nil-safe; set by Run/RunHeadless
 }
 
 // Messages.
@@ -156,7 +160,7 @@ func New(opts Options) Model {
 	if opts.Parallel <= 0 {
 		opts.Parallel = dispatch.DefaultParallel
 	}
-	m := Model{opts: opts, sections: Build(nil, nil, nil, nil, nil), loading: true, previewCache: make(map[int]previewSnapshot), pendingOps: make(map[int]bool)}
+	m := Model{opts: opts, sections: Build(nil, nil, nil, nil, nil), loading: true, previewCache: make(map[int]previewSnapshot), pendingOps: make(map[int]bool), theme: NewTheme(ModeTerminal, termenv.Ascii, nil)}
 	if opts.Seen != nil {
 		shown, err := opts.Seen.HelpShown()
 		if err == nil && !shown {
@@ -949,13 +953,17 @@ func (m Model) rule() string {
 	if w <= 0 {
 		w = 78
 	}
-	return strings.Repeat("─", w)
+	char := "─"
+	if m.theme != nil && m.theme.Mode() == ModePlain {
+		char = "-"
+	}
+	return strings.Repeat(char, w)
 }
 
 func (m Model) headerLine(w int) string {
 	left := "lead"
 	if m.opts.Repo != "" {
-		left += " — " + m.opts.Repo
+		left += " — " + Sanitize(m.opts.Repo)
 	}
 	right := fmt.Sprintf("実行中 %d / 並列上限 %d", m.runningCount(), m.opts.Parallel)
 	if m.loading {
@@ -965,7 +973,18 @@ func (m Model) headerLine(w int) string {
 	}
 	leftSpace := w - cellWidth(right)
 	left = truncTail(left, leftSpace-2)
-	return padRight(left, leftSpace) + right
+	plain := padRight(left, leftSpace) + right
+	if m.theme == nil {
+		return plain
+	}
+	return m.theme.Render(left, TokenFgEmphasis, TokenBgCanvas, true, false, false) + m.theme.Render(right, TokenFgSecondary, TokenBgCanvas, false, false, false)
+}
+
+func (m Model) borderChar(strong bool) string {
+	if m.theme == nil {
+		return "│"
+	}
+	return m.theme.Border(strong)
 }
 
 func (m Model) runningCount() int {
@@ -991,7 +1010,11 @@ func (m Model) summaryLine(w int) string {
 		}
 		parts = append(parts, s.Kind.Title()+" "+suffix)
 	}
-	return padRight(truncTail(strings.Join(parts, "   "), w), w)
+	plain := padRight(truncTail(strings.Join(parts, "   "), w), w)
+	if m.theme == nil {
+		return plain
+	}
+	return m.theme.Render(plain, TokenFgSecondary, TokenBgCanvas, false, false, false)
 }
 
 func (m Model) statusLine(w int) string {
@@ -1000,11 +1023,15 @@ func (m Model) statusLine(w int) string {
 	case m.status != "":
 		s = m.status
 	case m.loadErr != nil:
-		s = "読込エラー: " + m.loadErr.Error()
+		s = "読込エラー: " + Sanitize(m.loadErr.Error())
 	default:
 		s = "j/k 移動  Enter 詳細  ? 操作一覧"
 	}
-	return padRight(truncTail(s, w), w)
+	plain := padRight(truncTail(s, w), w)
+	if m.theme == nil {
+		return plain
+	}
+	return m.theme.Status(plain)
 }
 
 func (m Model) viewList() string {
@@ -1026,7 +1053,11 @@ func (m Model) viewList() string {
 		leftW := (w - 1) * 60 / 100
 		rightW := w - 1 - leftW
 		cols := m.listColumns(leftW)
-		b.WriteString(m.columnHeaderLine(cols, leftW) + "│" + " " + padRight(m.previewHeader(), rightW-1) + "\n")
+		rightHeader := padRight(m.previewHeader(), rightW-1)
+		if m.theme != nil {
+			rightHeader = m.theme.Preview(rightHeader, true)
+		}
+		b.WriteString(m.columnHeaderLine(cols, leftW) + m.borderChar(true) + " " + rightHeader + "\n")
 		bodyLines := m.bodyLines(rows, m.listTop, bodyH, leftW, cols)
 		preview := m.previewLines(rightW-1, bodyH)
 		for i := 0; i < bodyH; i++ {
@@ -1038,7 +1069,11 @@ func (m Model) viewList() string {
 			if i < len(preview) {
 				right = preview[i]
 			}
-			b.WriteString(padRight(left, leftW) + "│" + " " + padRight(right, rightW-1) + "\n")
+			right = padRight(right, rightW-1)
+			if m.theme != nil {
+				right = m.theme.Preview(right, i == 0)
+			}
+			b.WriteString(padRight(left, leftW) + m.borderChar(true) + " " + right + "\n")
 		}
 	} else {
 		cols := m.listColumns(w)
@@ -1119,7 +1154,11 @@ func (m Model) footer() string {
 	if line != "" {
 		lines = append(lines, line)
 	}
-	return strings.Join(lines, "\n")
+	plain := strings.Join(lines, "\n")
+	if m.theme == nil {
+		return plain
+	}
+	return m.theme.Render(plain, TokenFgSecondary, TokenBgCanvas, false, false, false)
 }
 
 func itemMeta(it Item, now time.Time) string {
@@ -1165,11 +1204,15 @@ func (m Model) viewDetail() string {
 	}
 	b.WriteString(m.rule() + "\n")
 	b.WriteString("j/k スクロール  Esc/q 戻る\n")
-	return b.String()
+	out := b.String()
+	if m.theme != nil {
+		out = m.theme.Render(out, TokenFgPrimary, TokenBgSurface, false, false, false)
+	}
+	return out
 }
 
 func (m Model) viewHelp() string {
-	return strings.Join([]string{
+	out := strings.Join([]string{
 		"受信箱の操作一覧",
 		m.rule(),
 		"Issueを進める",
@@ -1203,6 +1246,10 @@ func (m Model) viewHelp() string {
 		"q / Esc で一覧に戻る（その他のキーでも戻ります）",
 		"",
 	}, "\n")
+	if m.theme != nil {
+		out = m.theme.Render(out, TokenFgPrimary, TokenBgCanvas, false, false, false)
+	}
+	return out
 }
 
 // relAge renders "N秒前"-style ages; zero time yields "".
