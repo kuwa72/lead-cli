@@ -122,7 +122,7 @@ fi`
 	log := testutil.LogText(t, logPath)
 	for _, want := range []string{
 		"<issue>", "<list>", "<--state>", "<closed>",
-		"<--limit>", "<50>", "<--json>", "<number,title,closedAt>",
+		"<--limit>", "<300>", "<--json>", "<number,title,closedAt>",
 	} {
 		if !strings.Contains(log, want) {
 			t.Errorf("gh args log missing %q, got:\n%s", want, log)
@@ -158,11 +158,36 @@ func TestListOpen_CallsGhWithExpectedArgs(t *testing.T) {
 	log := testutil.LogText(t, logPath)
 	for _, want := range []string{
 		"<issue>", "<list>", "<--state>", "<open>",
-		"<--limit>", "<50>", "<--json>", "<number,title>",
+		"<--limit>", "<300>", "<--json>", "<number,title>",
 	} {
 		if !strings.Contains(log, want) {
 			t.Errorf("gh args log missing %q, got:\n%s", want, log)
 		}
+	}
+}
+
+func TestListOpen_LimitConfiguration(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", ghServeBody)
+
+	// Custom limit on Client
+	client := &Client{Limit: 250}
+	if _, err := client.ListOpen(context.Background()); err != nil {
+		t.Fatalf("ListOpen: %v", err)
+	}
+	log := testutil.LogText(t, logPath)
+	if !strings.Contains(log, "<--limit>") || !strings.Contains(log, "<250>") {
+		t.Errorf("expected limit 250 in log, got:\n%s", log)
+	}
+
+	// Environment variable override
+	t.Setenv("LEAD_ISSUE_LIMIT", "500")
+	clientEnv := New()
+	if _, err := clientEnv.ListOpen(context.Background()); err != nil {
+		t.Fatalf("ListOpen: %v", err)
+	}
+	logEnv := testutil.LogText(t, logPath)
+	if !strings.Contains(logEnv, "<500>") {
+		t.Errorf("expected limit 500 from env in log, got:\n%s", logEnv)
 	}
 }
 

@@ -17,13 +17,15 @@ import (
 	"github.com/kuwa72/lead-cli/internal/ports"
 )
 
-// ListLimit mirrors legacy bin/hgf `gh issue list --limit 50`.
-const ListLimit = 50
+// DefaultListLimit is the default page size for issue listings (issue #138).
+const DefaultListLimit = 300
 
 // Client calls the `gh` CLI. Zero value is usable.
 type Client struct {
 	// Bin is the gh binary name or path. Empty means "gh".
 	Bin string
+	// Limit overrides the default listing limit (300).
+	Limit int
 	// LookPath resolves the binary; defaults to exec.LookPath.
 	// A missing binary yields *ports.BinaryNotFoundError so callers
 	// can fall back gracefully.
@@ -40,6 +42,18 @@ func (c *Client) bin() string {
 		return c.Bin
 	}
 	return "gh"
+}
+
+func (c *Client) limit() int {
+	if c.Limit > 0 {
+		return c.Limit
+	}
+	if env := os.Getenv("LEAD_ISSUE_LIMIT"); env != "" {
+		if n, err := strconv.Atoi(env); err == nil && n > 0 {
+			return n
+		}
+	}
+	return DefaultListLimit
 }
 
 func (c *Client) lookPath() func(string) (string, error) {
@@ -76,11 +90,11 @@ func (c *Client) runStdin(ctx context.Context, stdin io.Reader, args ...string) 
 	return stdout.Bytes(), nil
 }
 
-// ListOpen runs `gh issue list --state open --limit 50 --json number,title`.
+// ListOpen runs `gh issue list --state open --limit <limit> --json number,title`.
 func (c *Client) ListOpen(ctx context.Context) ([]ports.IssueSummary, error) {
 	out, err := c.run(ctx, "issue", "list",
 		"--state", "open",
-		"--limit", strconv.Itoa(ListLimit),
+		"--limit", strconv.Itoa(c.limit()),
 		"--json", "number,title")
 	if err != nil {
 		return nil, err
@@ -218,12 +232,12 @@ func (c *Client) IssueComment(ctx context.Context, number int, body string) erro
 	return err
 }
 
-// ListByLabel runs `gh issue list --state open --label <l> --limit 50 --json number,title,updatedAt`.
+// ListByLabel runs `gh issue list --state open --label <l> --limit <limit> --json number,title,updatedAt`.
 func (c *Client) ListByLabel(ctx context.Context, label string) ([]ports.IssueSummary, error) {
 	out, err := c.run(ctx, "issue", "list",
 		"--state", "open",
 		"--label", label,
-		"--limit", strconv.Itoa(ListLimit),
+		"--limit", strconv.Itoa(c.limit()),
 		"--json", "number,title,updatedAt")
 	if err != nil {
 		return nil, err
@@ -243,12 +257,12 @@ func (c *Client) ListByLabel(ctx context.Context, label string) ([]ports.IssueSu
 	return summaries, nil
 }
 
-// ListMergedSince runs `gh issue list --state closed --json number,title,closedAt --limit 50`
+// ListMergedSince runs `gh issue list --state closed --json number,title,closedAt --limit <limit>`
 // and returns issues whose closedAt is treated as the merge time.
 func (c *Client) ListMergedSince(ctx context.Context, since time.Time) ([]ports.MergedIssue, error) {
 	out, err := c.run(ctx, "issue", "list",
 		"--state", "closed",
-		"--limit", strconv.Itoa(ListLimit),
+		"--limit", strconv.Itoa(c.limit()),
 		"--json", "number,title,closedAt")
 	if err != nil {
 		return nil, err
