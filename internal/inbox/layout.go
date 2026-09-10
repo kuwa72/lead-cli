@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -43,10 +44,14 @@ func (m Model) ruleW(w int) string {
 	if w <= 0 {
 		w = 78
 	}
-	return strings.Repeat("─", w)
+	char := "─"
+	if m.theme != nil && m.theme.Mode() == ModePlain {
+		char = "-"
+	}
+	return strings.Repeat(char, w)
 }
 
-func cellWidth(s string) int { return runewidth.StringWidth(s) }
+func cellWidth(s string) int { return lipgloss.Width(s) }
 
 // truncTail truncates s to at most w display cells, ending with "…" when cut.
 func truncTail(s string, w int) string {
@@ -208,7 +213,11 @@ func (m Model) columnHeaderLine(c listColumns, leftW int) string {
 	if c.showPR {
 		b.WriteString(" " + fitRight("PR", c.prW))
 	}
-	return padRight(b.String(), leftW)
+	plain := padRight(b.String(), leftW)
+	if m.theme == nil {
+		return plain
+	}
+	return m.theme.Render(plain, TokenFgSecondary, TokenBgCanvas, true, false, false)
 }
 
 // renderRow renders one visible row (header or item) into leftW cells.
@@ -230,17 +239,25 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 			count = fmt.Sprintf("(%d+)", len(s.Items))
 		}
 		b.WriteString(mark + " " + s.Kind.Title() + " " + count)
-		return padRight(b.String(), leftW)
+		plain := padRight(b.String(), leftW)
+		if m.theme == nil {
+			return plain
+		}
+		if r.Section.Kind == KindBlocked && len(r.Section.Items) > 0 {
+			return m.theme.Render(plain, TokenStatusWarning, TokenBgCanvas, true, false, false)
+		}
+		return m.theme.ListRow(plain, true)
 	}
 	it := *r.Item
+	title := Sanitize(it.Title)
 	b.WriteString(fitRight(fmt.Sprintf("#%d", it.Number), c.issueW))
 	b.WriteString(" ")
-	b.WriteString(fitLeft(it.Title, c.titleW))
+	b.WriteString(fitLeft(title, c.titleW))
 	if c.showUpd {
 		b.WriteString(" " + fitRight(shortAge(it.UpdatedAt, now), c.updW))
 	}
 	if c.showAgent {
-		agent := it.Agent
+		agent := Sanitize(it.Agent)
 		if agent == "" {
 			agent = "-"
 		}
@@ -260,7 +277,14 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 		}
 		b.WriteString(" " + fitRight(pr, c.prW))
 	}
-	return padRight(b.String(), leftW)
+	plain := padRight(b.String(), leftW)
+	if selected && m.theme != nil {
+		return m.theme.Accent(plain[:2], true) + m.theme.Selected(plain[2:])
+	}
+	if m.theme != nil {
+		return m.theme.ListRow(plain, false)
+	}
+	return plain
 }
 
 // headerRowIndex returns the index of the section-header row for the row at
@@ -309,7 +333,7 @@ func (m Model) previewHeader() string {
 	if !ok || row.IsHeader() || m.detail.Number == 0 {
 		return ""
 	}
-	return fmt.Sprintf("#%d  %s", m.detail.Number, row.Section.Kind.Title())
+	return Sanitize(fmt.Sprintf("#%d  %s", m.detail.Number, row.Section.Kind.Title()))
 }
 
 // previewLines renders the selected issue's detail into at most h lines of
@@ -329,13 +353,13 @@ func (m Model) previewLines(w, h int) []string {
 		return nil
 	}
 	var lines []string
-	lines = append(lines, truncTail(m.detail.Title, w))
+	lines = append(lines, truncTail(Sanitize(m.detail.Title), w))
 	content, more := m.previewContent(max(0, h-2)) // reserve title + Enter hint
 	for _, l := range content {
 		if len(lines) >= h {
 			break
 		}
-		lines = append(lines, truncTail(l, w))
+		lines = append(lines, truncTail(Sanitize(l), w))
 	}
 	if more && len(lines) < h {
 		lines = append(lines, "Enter: 全画面詳細")

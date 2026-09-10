@@ -92,6 +92,11 @@ func Drain(m Model, cmd tea.Cmd) (Model, bool) {
 // the final screen to out (LEAD_TEST_INBOX_KEYS hook for shell tests).
 func RunHeadless(m Model, keys []string, out io.Writer) error {
 	m.opts.PreviewDelay = 0
+	mode, profile, err := ResolveMode(m.opts.Theme, os.Getenv("NO_COLOR"), os.Getenv("COLORTERM"), os.Getenv("TERM"))
+	if err != nil {
+		return err
+	}
+	m.theme = NewTheme(mode, profile, out)
 	m, quit := Drain(m, m.Init())
 	if _, err := io.WriteString(out, m.View()); err != nil {
 		return err
@@ -107,7 +112,7 @@ func RunHeadless(m Model, keys []string, out io.Writer) error {
 		next, cmd := m.Update(msg)
 		m, quit = Drain(next.(Model), cmd)
 	}
-	_, err := io.WriteString(out, m.View())
+	_, err = io.WriteString(out, m.View())
 	return err
 }
 
@@ -116,6 +121,11 @@ func Run(m Model) error {
 	if m.opts.PreviewDelay <= 0 {
 		m.opts.PreviewDelay = 150 * time.Millisecond
 	}
-	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	mode, profile, err := ResolveMode(m.opts.Theme, os.Getenv("NO_COLOR"), os.Getenv("COLORTERM"), os.Getenv("TERM"))
+	if err != nil {
+		return err
+	}
+	m.theme = NewTheme(mode, profile, os.Stdout)
+	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }

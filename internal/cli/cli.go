@@ -539,6 +539,11 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	if r, err := deps.gitRunner().RepoRoot(cwd); err == nil && r != "" {
 		root = r
 	}
+	if err := inbox.ValidateTheme(os.Getenv("LEAD_THEME")); err != nil {
+		fmt.Fprintln(cmd.ErrOrStderr(), err)
+		os.Exit(2)
+	}
+
 	store := &state.Store{Path: deps.stateFile()}
 	opts := inbox.Options{
 		Gh:         deps.gh(),
@@ -548,6 +553,7 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		AgentsPath: filepath.Join(root, "AGENTS.md"),
 		Repo:       inbox.RepoSlug(deps.gitRunner().OriginURL(root)),
 		Parallel:   parallel,
+		Theme:      os.Getenv("LEAD_THEME"),
 	}
 	if deps.Herdr != nil {
 		opts.Herdr = deps.Herdr

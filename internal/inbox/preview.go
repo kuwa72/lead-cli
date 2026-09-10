@@ -378,7 +378,7 @@ func (m Model) runningPreview(out []string, it *Item, h int) ([]string, bool) {
 func runningMetaLine(it *Item, prNum int, prErr bool) string {
 	parts := []string{}
 	if it.Agent != "" {
-		parts = append(parts, fmt.Sprintf("Agent: %s", it.Agent))
+		parts = append(parts, fmt.Sprintf("Agent: %s", Sanitize(it.Agent)))
 	}
 	if it.Attempts > 0 {
 		parts = append(parts, fmt.Sprintf("×%d", it.Attempts))
@@ -402,7 +402,7 @@ func appendSourceBody(out []string, body, source string, budget int) ([]string, 
 	if budget <= 0 {
 		return out, body != ""
 	}
-	body = strings.ReplaceAll(body, "\r\n", "\n")
+	body = Sanitize(strings.ReplaceAll(body, "\r\n", "\n"))
 	var more bool
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimRight(line, " \t")
@@ -489,7 +489,7 @@ func (m Model) detailContent() string {
 			b.WriteString("\n\n")
 		}
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return Sanitize(strings.TrimRight(b.String(), "\n"))
 }
 
 func (m Model) currentItem() *Item {
