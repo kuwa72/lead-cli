@@ -159,6 +159,8 @@ type Launcher struct {
 	// Stdout/Stderr receive the agent's output; nil inherits os.Stdout/os.Stderr.
 	Stdout io.Writer
 	Stderr io.Writer
+	// Dir sets the working directory of the agent command.
+	Dir string
 }
 
 // New returns a Launcher with defaults.
@@ -180,6 +182,15 @@ func (l *Launcher) Launch(ctx context.Context, agentName string, prompt string) 
 	return l.LaunchForMode(ctx, agentName, prompt, "interactive")
 }
 
+// LaunchInDir resolves the agent and execs it in dir with mode-specific flags.
+func (l *Launcher) LaunchInDir(ctx context.Context, dir, agentName, prompt, mode string) error {
+	cp := *l
+	if dir != "" {
+		cp.Dir = dir
+	}
+	return cp.LaunchForMode(ctx, agentName, prompt, mode)
+}
+
 // LaunchForMode resolves the agent and execs it with mode-specific flags.
 func (l *Launcher) LaunchForMode(ctx context.Context, agentName, prompt, mode string) error {
 	name := Resolve(agentName)
@@ -191,6 +202,9 @@ func (l *Launcher) LaunchForMode(ctx context.Context, agentName, prompt, mode st
 		return err
 	}
 	cmd := exec.CommandContext(ctx, name, argv...)
+	if l.Dir != "" {
+		cmd.Dir = l.Dir
+	}
 	if l.Stdout != nil {
 		cmd.Stdout = l.Stdout
 	} else {
