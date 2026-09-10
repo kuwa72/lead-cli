@@ -121,3 +121,127 @@ func TestRenderWorkflowPrompt_Override(t *testing.T) {
 	}
 }
 
+func TestRenderWorkflowPromptWithOptions_TemplateSelection(t *testing.T) {
+	// Built-in template selection by name
+	out, err := RenderWorkflowPromptWithOptions(PromptOptions{
+		Template: "review",
+		Number:   84,
+		Title:    "template selection",
+		Body:     "body text",
+	})
+	if err != nil {
+		t.Fatalf("RenderWorkflowPromptWithOptions: %v", err)
+	}
+	if !strings.Contains(out, "lead lgtm 84") {
+		t.Errorf("expected review template, got:\n%s", out)
+	}
+
+	// Unknown template falls back to implement template
+	outFallback, err := RenderWorkflowPromptWithOptions(PromptOptions{
+		Template: "nonexistent",
+		Number:   84,
+		Title:    "fallback title",
+		Body:     "body text",
+	})
+	if err != nil {
+		t.Fatalf("RenderWorkflowPromptWithOptions fallback: %v", err)
+	}
+	if !strings.Contains(outFallback, "TDD") {
+		t.Errorf("expected fallback to implement template, got:\n%s", outFallback)
+	}
+
+	// Repository custom template selection by name
+	tmpDir := t.TempDir()
+	promptsDir := filepath.Join(tmpDir, "prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptsDir, "custom.md"), []byte("CUSTOM TPL #{{.Number}} {{.Title}}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	outCustom, err := RenderWorkflowPromptWithOptions(PromptOptions{
+		Template: "custom",
+		Number:   84,
+		Title:    "custom title",
+		RepoDir:  tmpDir,
+	})
+	if err != nil {
+		t.Fatalf("RenderWorkflowPromptWithOptions custom: %v", err)
+	}
+	if want := "CUSTOM TPL #84 custom title"; outCustom != want {
+		t.Errorf("got %q, want %q", outCustom, want)
+	}
+}
+
+func TestRenderWorkflowPromptWithOptions_Variables(t *testing.T) {
+	tmpDir := t.TempDir()
+	promptsDir := filepath.Join(tmpDir, "prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	varTpl := "N:{{.Number}}|T:{{.Title}}|B:{{.Body}}|BR:{{.Branch}}|M:{{.Mode}}|AM:{{.AgentMode}}|R:{{.Rules}}"
+	if err := os.WriteFile(filepath.Join(promptsDir, "vars.md"), []byte(varTpl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := RenderWorkflowPromptWithOptions(PromptOptions{
+		Template:  "vars",
+		Number:    84,
+		Title:     "test title",
+		Body:      "test body",
+		Branch:    "issue/84-test",
+		Mode:      "implement",
+		AgentMode: "batch",
+		Rules:     "Custom Rules",
+		RepoDir:   tmpDir,
+	})
+	if err != nil {
+		t.Fatalf("RenderWorkflowPromptWithOptions: %v", err)
+	}
+	want := "N:84|T:test title|B:test body|BR:issue/84-test|M:implement|AM:batch|R:Custom Rules"
+	if out != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+}
+
+func TestRenderWorkflowPromptWithOptions_AutomaticAgentsMD(t *testing.T) {
+	tmpDir := t.TempDir()
+	agentsContent := "- TDD required\n- Always run tests"
+	if err := os.WriteFile(filepath.Join(tmpDir, "AGENTS.md"), []byte(agentsContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. With default implement template: should automatically include AGENTS.md in ## プロジェクト規約
+	out, err := RenderWorkflowPromptWithOptions(PromptOptions{
+		Number:  84,
+		Title:   "agents test",
+		Body:    "body",
+		RepoDir: tmpDir,
+	})
+	if err != nil {
+		t.Fatalf("RenderWorkflowPromptWithOptions: %v", err)
+	}
+	if !strings.Contains(out, "## プロジェクト規約") {
+		t.Errorf("expected '## プロジェクト規約' in prompt, got:\n%s", out)
+	}
+	if !strings.Contains(out, agentsContent) {
+		t.Errorf("expected AGENTS.md content in prompt, got:\n%s", out)
+	}
+
+	// 2. Without AGENTS.md: ## プロジェクト規約 should not be present
+	emptyDir := t.TempDir()
+	outEmpty, err := RenderWorkflowPromptWithOptions(PromptOptions{
+		Number:  84,
+		Title:   "empty test",
+		Body:    "body",
+		RepoDir: emptyDir,
+	})
+	if err != nil {
+		t.Fatalf("RenderWorkflowPromptWithOptions: %v", err)
+	}
+	if strings.Contains(outEmpty, "## プロジェクト規約") {
+		t.Errorf("did not expect '## プロジェクト規約' in prompt when AGENTS.md missing, got:\n%s", outEmpty)
+	}
+}
+
