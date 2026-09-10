@@ -302,7 +302,8 @@ func TestEnter_ShowsBodyFullscreenAndEscReturns(t *testing.T) {
 func TestDetail_MergesPrBody(t *testing.T) {
 	gh, _, m := newFixture(t)
 	gh.PrBodies = map[int]string{11: "## Acceptance\n- [ ] task A\n- [x] task B\n"}
-	m = press(t, m, "j", "j", "j", "enter")
+	m.cursor = 4 // blocked #9
+	m = press(t, m, "enter")
 	if !reflect.DeepEqual(gh.ViewCalls, []int{9}) {
 		t.Fatalf("ViewCalls = %v, want [9]", gh.ViewCalls)
 	}
@@ -880,5 +881,53 @@ func TestIssueKeysOnHeaderDoNothing(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "区画ヘッダーが選択中です") {
 		t.Errorf("status should explain header is selected, got:\n%s", m.View())
+	}
+}
+
+func TestCursorMove_UpdatesDetailPreview(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 20
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "second body", State: "OPEN"}
+	m = press(t, m, "j") // #7 -> #8
+	v := m.View()
+	if !strings.Contains(v, "spec: second") {
+		t.Errorf("preview should show #8 title, got:\n%s", v)
+	}
+	if !strings.Contains(v, "spec: add warning") {
+		t.Errorf("list should still show #7, got:\n%s", v)
+	}
+	if strings.Contains(v, "warns on zero") {
+		t.Errorf("preview should not show #7 body, got:\n%s", v)
+	}
+	if !strings.Contains(v, "second body") {
+		t.Errorf("preview should show #8 body, got:\n%s", v)
+	}
+	m = press(t, m, "j", "j") // #8 -> header -> #9
+	v = m.View()
+	if !strings.Contains(v, "blocked body") {
+		t.Errorf("preview should show #9 body after moving, got:\n%s", v)
+	}
+	if !strings.Contains(v, "spec: second") {
+		t.Errorf("list should still show #8 title, got:\n%s", v)
+	}
+}
+
+func TestEnter_OpensFullscreenDetailFromSplit(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 20
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "second body", State: "OPEN"}
+	m = press(t, m, "j") // load #8 preview
+	v := m.View()
+	if !strings.Contains(v, "spec: second") {
+		t.Fatalf("preview not shown before enter, got:\n%s", v)
+	}
+	m = press(t, m, "enter")
+	if m.mode != modeDetail {
+		t.Fatalf("enter did not switch to fullscreen detail: mode=%v", m.mode)
+	}
+	if !strings.Contains(m.View(), "spec: second") || strings.Contains(m.View(), "spec: add warning") {
+		t.Errorf("fullscreen detail should show only #8, got:\n%s", m.View())
 	}
 }
