@@ -11,16 +11,16 @@ import (
 
 // IssueSummary is a single row of `gh issue list`.
 type IssueSummary struct {
-	Number    int
-	Title     string
+	Number    int       `json:"number"`
+	Title     string    `json:"title"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // MergedIssue is a recently merged/closed issue with its resolution time.
 type MergedIssue struct {
-	Number   int
-	Title    string
-	MergedAt time.Time
+	Number   int       `json:"number"`
+	Title    string    `json:"title"`
+	MergedAt time.Time `json:"mergedAt"`
 }
 
 // Issue is the detail of `gh issue view`.
