@@ -301,6 +301,7 @@ issue. Normal operation is ` + "`lead dispatch`" + `, which needs no human step.
 		c.Flags().String("part", "", "work unit within a multi-PR issue")
 		c.Flags().Bool("draft", false, "create PR as draft")
 		c.Flags().String("agent", "", "coding agent (default: agy)")
+		c.Flags().String("agent-mode", "interactive", "agent execution mode (interactive|batch|dangerous)")
 		// Bare `--worktree` means "auto path under <repo>/.worktrees".
 		c.Flags().Lookup("worktree").NoOptDefVal = "auto"
 		return c
@@ -811,6 +812,7 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 	mode, _ := flags.GetString("mode")
 	branchFlag, _ := flags.GetString("branch")
 	part, _ := flags.GetString("part")
+	agentMode, _ := flags.GetString("agent-mode")
 	worktreeOpt := ""
 	if wtFlag := flags.Lookup("worktree"); wtFlag != nil && wtFlag.Changed {
 		worktreeOpt = wtFlag.Value.String()
@@ -825,7 +827,7 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 	store := &state.Store{Path: deps.stateFile()}
 	res, err := workflow.Start(cmd.Context(), deps.gitRunner(), store, workflow.StartOptions{
 		Issue: iss, Mode: mode, Branch: branchFlag, Part: part,
-		Worktree: worktreeOpt, WorkDir: cwd,
+		Worktree: worktreeOpt, WorkDir: cwd, AgentMode: agentMode,
 	})
 	if err != nil {
 		return err
@@ -843,7 +845,7 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 	if res.Pane != "" {
 		fmt.Fprintf(out, "Agent already prepared in pane %s\n", res.Pane)
 	} else {
-		pane, err := launchAgent(cmd.Context(), out, deps, res, agentName, iss)
+		pane, err := launchAgent(cmd.Context(), out, deps, res, agentName, iss, agentMode)
 		if err != nil {
 			return err
 		}
@@ -868,12 +870,15 @@ func buildPrompt(mode string, iss ports.Issue, repoDir string) string {
 	return prompt
 }
 
-func launchAgent(ctx context.Context, out io.Writer, deps Deps, res workflow.StartResult, agentName string, iss ports.Issue) (string, error) {
+func launchAgent(ctx context.Context, out io.Writer, deps Deps, res workflow.StartResult, agentName string, iss ports.Issue, agentMode string) (string, error) {
 	launchDir := res.RepoRoot
 	if res.Worktree != "" {
 		launchDir = res.Worktree
 	}
-	command := agent.CommandString(agentName, buildPrompt(res.Mode, iss, res.RepoRoot))
+	command, err := agent.CommandStringForMode(agentName, buildPrompt(res.Mode, iss, res.RepoRoot), agentMode)
+	if err != nil {
+		return "", fmt.Errorf("work #%d: agent command: %w", iss.Number, err)
+	}
 	prepared := "cd " + strconv.Quote(launchDir) + " && " + command
 
 	h := deps.herdrRunner()

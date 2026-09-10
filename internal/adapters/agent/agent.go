@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
 )
@@ -49,6 +50,30 @@ func Argv(agentName, prompt string) []string {
 		return []string{"-i", prompt}
 	}
 	return []string{prompt}
+}
+
+// ArgvForMode returns the argv (without the binary name) for launching the agent
+// in the requested mode (interactive vs batch/dangerous).
+func ArgvForMode(agentName, prompt, mode string) ([]string, error) {
+	name := Resolve(agentName)
+	switch mode {
+	case "", "interactive", "safe":
+		if !IsKnown(name) {
+			return nil, fmt.Errorf("%s: unknown agent", name)
+		}
+		return Argv(name, prompt), nil
+	case "batch", "dangerous", "auto":
+		argv, err := HeadlessArgv(name, prompt)
+		if err != nil {
+			return nil, err
+		}
+		if len(argv) <= 1 {
+			return nil, fmt.Errorf("%s: headless argv too short", name)
+		}
+		return argv[1:], nil
+	default:
+		return nil, fmt.Errorf("unknown agent mode %q (supported: interactive, batch, dangerous)", mode)
+	}
 }
 
 // ErrHeadlessUnsupported reports an agent with no verified headless
@@ -97,6 +122,35 @@ func CommandString(agentName, prompt string) string {
 	return name + " " + strconv.Quote(prompt)
 }
 
+// CommandStringForMode builds the shell command string for launching the agent
+// in the requested mode (interactive vs batch/dangerous).
+func CommandStringForMode(agentName, prompt, mode string) (string, error) {
+	name := Resolve(agentName)
+	switch mode {
+	case "", "interactive", "safe":
+		if !IsKnown(name) {
+			return "", fmt.Errorf("%s: unknown agent", name)
+		}
+		return CommandString(name, prompt), nil
+	case "batch", "dangerous", "auto":
+		argv, err := HeadlessArgv(name, prompt)
+		if err != nil {
+			return "", err
+		}
+		var parts []string
+		for i, arg := range argv {
+			if i == len(argv)-1 {
+				parts = append(parts, strconv.Quote(arg))
+			} else {
+				parts = append(parts, arg)
+			}
+		}
+		return strings.Join(parts, " "), nil
+	default:
+		return "", fmt.Errorf("unknown agent mode %q (supported: interactive, batch, dangerous)", mode)
+	}
+}
+
 // Launcher runs the agent binary directly in the current terminal
 // (inline fallback). Zero value is usable.
 type Launcher struct {
@@ -123,11 +177,20 @@ func (l *Launcher) lookPath() func(string) (string, error) {
 // A missing binary yields *ports.BinaryNotFoundError; a failing agent
 // propagates its exit status.
 func (l *Launcher) Launch(ctx context.Context, agentName string, prompt string) error {
+	return l.LaunchForMode(ctx, agentName, prompt, "interactive")
+}
+
+// LaunchForMode resolves the agent and execs it with mode-specific flags.
+func (l *Launcher) LaunchForMode(ctx context.Context, agentName, prompt, mode string) error {
 	name := Resolve(agentName)
 	if _, err := l.lookPath()(name); err != nil {
 		return &ports.BinaryNotFoundError{Binary: name}
 	}
-	cmd := exec.CommandContext(ctx, name, Argv(name, prompt)...)
+	argv, err := ArgvForMode(name, prompt, mode)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, name, argv...)
 	if l.Stdout != nil {
 		cmd.Stdout = l.Stdout
 	} else {

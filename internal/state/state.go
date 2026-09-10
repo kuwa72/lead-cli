@@ -57,6 +57,7 @@ type Workflow struct {
 	// (guardrail: PR touched protected files). Empty when the policy came
 	// from the human or the mode default.
 	PolicyReason string   `json:"policy_reason,omitempty"`
+	AgentMode    string   `json:"agent_mode,omitempty"`
 	Artifacts    []string `json:"artifacts,omitempty"`
 	// Dispatch bookkeeping (docs/rfc-inbox-ux.md §7): which headless agent
 	// ran, how many times it failed to close the issue, the last process
