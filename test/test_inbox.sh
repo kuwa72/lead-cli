@@ -143,9 +143,9 @@ case "$ver_out" in *lead*) ;; *) fail "lead --version output unexpected: $ver_ou
 # --- 2. a: approve first needs-review issue (7) ------------------------------------
 : > "$GH_LOG"
 out="$(LEAD_TEST_INBOX_KEYS=a,q "$tmp/lead" 2>&1)" || fail "headless a,q exited non-zero: $out"
-grep -qxF 'GH issue list --state open --label needs-review --limit 50 --json number,title' "$GH_LOG" \
+grep -qxF 'GH issue list --state open --label needs-review --limit 50 --json number,title,updatedAt' "$GH_LOG" \
   || fail "needs-review listing argv wrong: $(cat "$GH_LOG")"
-grep -qxF 'GH issue list --state open --label blocked --limit 50 --json number,title' "$GH_LOG" \
+grep -qxF 'GH issue list --state open --label blocked --limit 50 --json number,title,updatedAt' "$GH_LOG" \
   || fail "blocked listing argv wrong"
 grep -qxF 'GH issue edit 7 --remove-label needs-review' "$GH_LOG" || fail "needs-review not removed: $(cat "$GH_LOG")"
 grep -qxF 'GH issue edit 7 --add-label ready' "$GH_LOG" || fail "ready not added"

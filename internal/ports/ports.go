@@ -11,8 +11,9 @@ import (
 
 // IssueSummary is a single row of `gh issue list`.
 type IssueSummary struct {
-	Number int
-	Title  string
+	Number    int
+	Title     string
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // MergedIssue is a recently merged/closed issue with its resolution time.
@@ -57,7 +58,7 @@ type GhClient interface {
 	LatestReleaseTag(ctx context.Context, repo string) (string, error)
 	// BrowseIssue mirrors `gh issue view <n> --web`.
 	BrowseIssue(ctx context.Context, number int) error
-	// ListByLabel mirrors `gh issue list --state open --label <l> --json number,title`
+	// ListByLabel mirrors `gh issue list --state open --label <l> --json number,title,updatedAt`
 	// (dispatch queue: docs/rfc-inbox-ux.md §7).
 	ListByLabel(ctx context.Context, label string) ([]IssueSummary, error)
 	// ListMergedSince mirrors `gh issue list --state closed --json number,title,closedAt --limit 50`

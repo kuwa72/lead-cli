@@ -218,26 +218,27 @@ func (c *Client) IssueComment(ctx context.Context, number int, body string) erro
 	return err
 }
 
-// ListByLabel runs `gh issue list --state open --label <l> --limit 50 --json number,title`.
+// ListByLabel runs `gh issue list --state open --label <l> --limit 50 --json number,title,updatedAt`.
 func (c *Client) ListByLabel(ctx context.Context, label string) ([]ports.IssueSummary, error) {
 	out, err := c.run(ctx, "issue", "list",
 		"--state", "open",
 		"--label", label,
 		"--limit", strconv.Itoa(ListLimit),
-		"--json", "number,title")
+		"--json", "number,title,updatedAt")
 	if err != nil {
 		return nil, err
 	}
 	var raw []struct {
-		Number int    `json:"number"`
-		Title  string `json:"title"`
+		Number    int       `json:"number"`
+		Title     string    `json:"title"`
+		UpdatedAt time.Time `json:"updatedAt"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
 		return nil, fmt.Errorf("gh issue list --label %s: decode JSON: %w", label, err)
 	}
 	summaries := make([]ports.IssueSummary, len(raw))
 	for i, r := range raw {
-		summaries[i] = ports.IssueSummary{Number: r.Number, Title: r.Title}
+		summaries[i] = ports.IssueSummary{Number: r.Number, Title: r.Title, UpdatedAt: r.UpdatedAt}
 	}
 	return summaries, nil
 }
