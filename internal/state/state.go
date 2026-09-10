@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -236,4 +238,62 @@ func (s *Store) Delete(issue int, part string) (ok bool, err error) {
 		return false, nil
 	}
 	return true, s.save(kept)
+}
+
+// RepairUpsert inserts or replaces a workflow, repairing/overwriting the file
+// even if the existing file contains corrupt JSON.
+func (s *Store) RepairUpsert(w Workflow) error {
+	all, err := s.Load()
+	if err != nil {
+		all = nil // ignore corrupt file
+	}
+	w.UpdatedAt = time.Now().UTC()
+	want := Key(w.Issue, w.Part)
+	replaced := false
+	for i, cur := range all {
+		if Key(cur.Issue, cur.Part) == want {
+			all[i] = w
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		all = append(all, w)
+	}
+	return s.save(all)
+}
+
+// FindByTarget returns all workflows matching target.
+// If target is numeric (or #<num>), it matches Issue or PullRequests number.
+// Otherwise it matches Branch or Worktree path.
+func (s *Store) FindByTarget(target string) ([]Workflow, error) {
+	all, err := s.Load()
+	if err != nil {
+		return nil, err
+	}
+	target = strings.TrimSpace(target)
+	numStr := strings.TrimPrefix(target, "#")
+	num, isNumErr := strconv.Atoi(numStr)
+	isNumeric := isNumErr == nil && num > 0
+
+	var matches []Workflow
+	for _, w := range all {
+		if isNumeric {
+			if w.Issue == num {
+				matches = append(matches, w)
+				continue
+			}
+			for _, pr := range w.PullRequests {
+				if pr.Number == num {
+					matches = append(matches, w)
+					break
+				}
+			}
+		} else {
+			if w.Branch == target || w.Worktree == target || filepath.Base(w.Worktree) == target {
+				matches = append(matches, w)
+			}
+		}
+	}
+	return matches, nil
 }

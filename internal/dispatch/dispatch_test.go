@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
@@ -39,7 +40,15 @@ func (g *fakeGit) WorktreeRemove(repoDir, path string, force bool) error {
 	g.Removed = append(g.Removed, path)
 	return os.RemoveAll(path)
 }
-func (g *fakeGit) OriginURL(repoDir string) string { return g.origin }
+func (g *fakeGit) OriginURL(repoDir string) string                   { return g.origin }
+func (g *fakeGit) BranchExists(repoDir, branch string) (bool, error) { return true, nil }
+func (g *fakeGit) WorktreeList(repoDir string) ([]git.WorktreeInfo, error) {
+	return nil, nil
+}
+func (g *fakeGit) ListBranches(repoDir string) ([]string, error) {
+	return nil, nil
+}
+func (g *fakeGit) CheckoutBranch(repoDir, branch string) error { return nil }
 
 type launchCall struct {
 	Dir     string

@@ -374,3 +374,50 @@ func TestWork_AgentCommandRespectsAgentFlag(t *testing.T) {
 		t.Errorf("devin command must not use agy -i flag; got:\n%s", log)
 	}
 }
+
+func TestResume_CLI(t *testing.T) {
+	repo := initRepo(t)
+	deps, fake, _ := workflowDeps(t, repo)
+	fake.Issues[36] = ports.Issue{Number: 36, Title: "ports adapter", Body: "body", State: "OPEN"}
+
+	// Start work initially
+	if _, err := executeWith(t, deps, "work", "36"); err != nil {
+		t.Fatalf("work 36: %v", err)
+	}
+
+	// Resume by issue number
+	out, err := executeWith(t, deps, "resume", "36")
+	if err != nil {
+		t.Fatalf("resume 36: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Issue #36") || !strings.Contains(out, "issue/36-ports-adapter") {
+		t.Errorf("resume output missing issue/branch:\n%s", out)
+	}
+
+	// Resume by branch name
+	out, err = executeWith(t, deps, "resume", "issue/36-ports-adapter")
+	if err != nil {
+		t.Fatalf("resume branch: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "issue/36-ports-adapter") {
+		t.Errorf("resume branch output missing branch:\n%s", out)
+	}
+}
+
+func TestStatus_ShowsResumeInstruction(t *testing.T) {
+	repo := initRepo(t)
+	deps, _, _ := workflowDeps(t, repo)
+	if _, err := executeWith(t, deps, "work", "36"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := executeWith(t, deps, "status")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	want := "Next: resume with lead resume 36"
+	if !strings.Contains(out, want) {
+		t.Errorf("status output missing %q, got:\n%s", want, out)
+	}
+}
+

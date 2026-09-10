@@ -355,6 +355,17 @@ func (f *FakeGhClient) PrInfo(ctx context.Context, pr int) (ports.PRInfo, error)
 	return f.PR, nil
 }
 
+// PrHeadBranch returns PR.HeadRefName.
+func (f *FakeGhClient) PrHeadBranch(ctx context.Context, pr int) (string, error) {
+	if f.PRErr != nil {
+		return "", f.PRErr
+	}
+	if f.PR.Number == pr && f.PR.HeadRefName != "" {
+		return f.PR.HeadRefName, nil
+	}
+	return f.PR.HeadRefName, nil
+}
+
 // PrBody returns PrBodies[pr] (or PrBodyErr / unknown-number error)
 // and records the call.
 func (f *FakeGhClient) PrBody(ctx context.Context, pr int) (string, error) {

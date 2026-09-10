@@ -188,3 +188,35 @@ func TestBranchName(t *testing.T) {
 		t.Errorf("BranchName empty title = %q, want issue/9-untitled", got)
 	}
 }
+
+func TestCheckoutBranchAndListBranches(t *testing.T) {
+	repo := initRepo(t)
+	r := New()
+	if err := r.CreateBranch(repo, "branch-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateBranch(repo, "branch-b"); err != nil {
+		t.Fatal(err)
+	}
+	branches, err := r.ListBranches(repo)
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	foundA, foundB := false, false
+	for _, b := range branches {
+		if b == "branch-a" {
+			foundA = true
+		}
+		if b == "branch-b" {
+			foundB = true
+		}
+	}
+	if !foundA || !foundB {
+		t.Errorf("ListBranches = %v, want branch-a and branch-b", branches)
+	}
+
+	if err := r.CheckoutBranch(repo, "branch-a"); err != nil {
+		t.Fatalf("CheckoutBranch: %v", err)
+	}
+}
+

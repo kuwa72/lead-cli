@@ -193,3 +193,62 @@ func TestCheckTransition(t *testing.T) {
 		}
 	}
 }
+
+func TestRepairUpsert(t *testing.T) {
+	s := tempStore(t)
+	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.Path, []byte("{corrupt-json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := Workflow{Issue: 42, Branch: "issue/42-fix", Status: StatusInProgress}
+	if err := s.RepairUpsert(w); err != nil {
+		t.Fatalf("RepairUpsert on corrupt file: %v", err)
+	}
+	got, ok, err := s.Get(42, "")
+	if err != nil || !ok {
+		t.Fatalf("Get after RepairUpsert = %+v, %v, %v", got, ok, err)
+	}
+	if got.Branch != "issue/42-fix" {
+		t.Errorf("got branch %q, want issue/42-fix", got.Branch)
+	}
+}
+
+func TestFindByTarget(t *testing.T) {
+	s := tempStore(t)
+	w1 := Workflow{Issue: 10, Branch: "issue/10-feature", PullRequests: []PRRef{{Number: 100}}}
+	w2 := Workflow{Issue: 20, Branch: "issue/20-bug", Worktree: "/path/to/wt-20"}
+	if err := s.Upsert(w1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Upsert(w2); err != nil {
+		t.Fatal(err)
+	}
+
+	// numeric issue
+	m, err := s.FindByTarget("10")
+	if err != nil || len(m) != 1 || m[0].Issue != 10 {
+		t.Errorf("FindByTarget(10) = %+v, %v; want w1", m, err)
+	}
+	// numeric with #
+	m, err = s.FindByTarget("#10")
+	if err != nil || len(m) != 1 || m[0].Issue != 10 {
+		t.Errorf("FindByTarget(#10) = %+v, %v; want w1", m, err)
+	}
+	// PR number
+	m, err = s.FindByTarget("100")
+	if err != nil || len(m) != 1 || m[0].Issue != 10 {
+		t.Errorf("FindByTarget(100) = %+v, %v; want w1", m, err)
+	}
+	// branch name
+	m, err = s.FindByTarget("issue/20-bug")
+	if err != nil || len(m) != 1 || m[0].Issue != 20 {
+		t.Errorf("FindByTarget(branch) = %+v, %v; want w2", m, err)
+	}
+	// worktree path
+	m, err = s.FindByTarget("/path/to/wt-20")
+	if err != nil || len(m) != 1 || m[0].Issue != 20 {
+		t.Errorf("FindByTarget(worktree) = %+v, %v; want w2", m, err)
+	}
+}
