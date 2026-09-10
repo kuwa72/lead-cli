@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/muesli/termenv"
@@ -68,6 +69,7 @@ const (
 type inputState struct {
 	prompt       string
 	text         []rune
+	cursor       int
 	submit       func(text string) tea.Cmd
 	targetNumber int    // issue number being acted on, 0 for actions without a target (s)
 	action       string // "send" or "reject"; drives the input footer
@@ -603,6 +605,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input = inputState{
 			action: "send",
 			prompt: "New issue — one-liner (Enter to file needs-review, Esc cancel) > ",
+			cursor: 0,
 			submit: func(text string) tea.Cmd {
 				if text == "" {
 					return func() tea.Msg { return doneMsg{status: "Empty one-liner; nothing filed."} }
@@ -674,6 +677,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			action:       "reject",
 			targetNumber: number,
 			prompt:       fmt.Sprintf("Reject #%d — reason (empty closes without comment, Esc cancel) > ", number),
+			cursor:       0,
 			submit: func(text string) tea.Cmd {
 				return func() tea.Msg {
 					ctx := context.Background()
@@ -697,6 +701,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			action:       "send",
 			targetNumber: number,
 			prompt:       fmt.Sprintf("Reply #%d (Enter to send, Esc cancel) > ", number),
+			cursor:       0,
 			submit: func(text string) tea.Cmd {
 				if text == "" {
 					return func() tea.Msg { return doneMsg{status: "Empty comment; nothing sent."} }
@@ -744,6 +749,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			action:       "send",
 			targetNumber: number,
 			prompt:       fmt.Sprintf("Bug report #%d — one-liner (Enter to file follow-up, Esc cancel) > ", number),
+			cursor:       0,
 			submit: func(text string) tea.Cmd {
 				if text == "" {
 					return func() tea.Msg { return doneMsg{status: "Empty one-liner; nothing filed."} }
@@ -995,20 +1001,127 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.pendingOps[targetNumber] = true
 		}
 		return m, submit(text)
-	case tea.KeyBackspace:
-		if n := len(m.input.text); n > 0 {
-			m.input.text = m.input.text[:n-1]
+	case tea.KeyLeft:
+		if m.input.cursor > 0 {
+			m.input.cursor--
+		}
+		return m, nil
+	case tea.KeyRight:
+		if m.input.cursor < len(m.input.text) {
+			m.input.cursor++
+		}
+		return m, nil
+	case tea.KeyHome, tea.KeyCtrlA:
+		m.input.cursor = 0
+		return m, nil
+	case tea.KeyEnd, tea.KeyCtrlE:
+		m.input.cursor = len(m.input.text)
+		return m, nil
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		if m.input.cursor > len(m.input.text) {
+			m.input.cursor = len(m.input.text)
+		}
+		if m.input.cursor > 0 {
+			m.input.text = append(m.input.text[:m.input.cursor-1], m.input.text[m.input.cursor:]...)
+			m.input.cursor--
+		}
+		return m, nil
+	case tea.KeyDelete, tea.KeyCtrlD:
+		if m.input.cursor < 0 {
+			m.input.cursor = 0
+		}
+		if m.input.cursor < len(m.input.text) {
+			m.input.text = append(m.input.text[:m.input.cursor], m.input.text[m.input.cursor+1:]...)
+		}
+		return m, nil
+	case tea.KeyCtrlU:
+		if m.input.cursor > len(m.input.text) {
+			m.input.cursor = len(m.input.text)
+		}
+		if m.input.cursor > 0 {
+			m.input.text = append([]rune{}, m.input.text[m.input.cursor:]...)
+			m.input.cursor = 0
+		}
+		return m, nil
+	case tea.KeyCtrlK:
+		if m.input.cursor < 0 {
+			m.input.cursor = 0
+		}
+		if m.input.cursor < len(m.input.text) {
+			m.input.text = append([]rune{}, m.input.text[:m.input.cursor]...)
+		}
+		return m, nil
+	case tea.KeyCtrlW:
+		if m.input.cursor > len(m.input.text) {
+			m.input.cursor = len(m.input.text)
+		}
+		if m.input.cursor > 0 {
+			idx := m.input.cursor
+			for idx > 0 && unicode.IsSpace(m.input.text[idx-1]) {
+				idx--
+			}
+			for idx > 0 && !unicode.IsSpace(m.input.text[idx-1]) {
+				idx--
+			}
+			m.input.text = append(m.input.text[:idx], m.input.text[m.input.cursor:]...)
+			m.input.cursor = idx
 		}
 		return m, nil
 	case tea.KeyRunes, tea.KeySpace:
+		var runes []rune
 		if msg.Type == tea.KeySpace {
-			m.input.text = append(m.input.text, ' ')
+			runes = []rune{' '}
 		} else {
-			m.input.text = append(m.input.text, msg.Runes...)
+			runes = msg.Runes
+		}
+		if len(runes) > 0 {
+			if m.input.cursor < 0 {
+				m.input.cursor = 0
+			}
+			if m.input.cursor > len(m.input.text) {
+				m.input.cursor = len(m.input.text)
+			}
+			newText := make([]rune, 0, len(m.input.text)+len(runes))
+			newText = append(newText, m.input.text[:m.input.cursor]...)
+			newText = append(newText, runes...)
+			newText = append(newText, m.input.text[m.input.cursor:]...)
+			m.input.text = newText
+			m.input.cursor += len(runes)
 		}
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m Model) renderInputLine() string {
+	text := m.input.text
+	cursor := m.input.cursor
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(text) {
+		cursor = len(text)
+	}
+
+	before := string(text[:cursor])
+	var cur, after string
+
+	if cursor < len(text) {
+		ch := string(text[cursor])
+		if m.theme != nil {
+			cur = m.theme.Cursor(ch)
+		} else {
+			cur = "\x1b[7m" + ch + "\x1b[0m"
+		}
+		after = string(text[cursor+1:])
+	} else {
+		if m.theme != nil {
+			cur = m.theme.Cursor(" ")
+		} else {
+			cur = "\x1b[7m \x1b[0m"
+		}
+	}
+	return m.input.prompt + before + cur + after
 }
 
 func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1077,6 +1190,13 @@ func (m Model) rule() string {
 	return strings.Repeat(char, w)
 }
 
+func (m Model) now() time.Time {
+	if m.opts.Now != nil {
+		return m.opts.Now()
+	}
+	return time.Now()
+}
+
 func (m Model) headerLine(w int) string {
 	left := "lead"
 	if m.opts.Repo != "" {
@@ -1085,7 +1205,7 @@ func (m Model) headerLine(w int) string {
 	right := fmt.Sprintf("Running %d / parallel %d", m.runningCount(), m.opts.Parallel)
 	if m.loading {
 		right += "   ⟳ Loading…"
-	} else if age := relAge(m.refreshedAt, m.opts.Now()); age != "" {
+	} else if age := relAge(m.refreshedAt, m.now()); age != "" {
 		right += "   ⟳ " + age
 	}
 	leftSpace := w - cellWidth(right)
@@ -1222,7 +1342,7 @@ func (m Model) viewList() string {
 
 	b.WriteString(m.ruleW(w) + "\n")
 	if m.mode == modeInput {
-		fmt.Fprintf(&b, "%s%s▏\n", m.input.prompt, string(m.input.text))
+		b.WriteString(m.renderInputLine() + "\n")
 	} else {
 		b.WriteString(m.statusLine(w) + "\n")
 	}
