@@ -55,6 +55,12 @@ type Options struct {
 	Theme string
 	// Cache is the persistent issue cache store (issue #140).
 	Cache *CacheStore
+	// Agent is the active coding agent (agy/claude/codex/devin/opencode/gemini).
+	Agent string
+	// AgentMode is the active agent dispatch mode (batch/dangerous/interactive).
+	AgentMode string
+	// OnConfigChange is invoked when the user toggles Agent or AgentMode via keyboard.
+	OnConfigChange func(agent, mode string)
 }
 
 type mode int
@@ -108,6 +114,8 @@ type Model struct {
 	theme             *Theme       // nil-safe; set by Run/RunHeadless
 	helpReturnMode    mode         // mode to restore when help is dismissed
 	statusGen         int          // generation counter for status auto-clear
+	agent             string       // active agent
+	agentMode         string       // active agent mode
 }
 
 // Messages.
@@ -203,6 +211,14 @@ func New(opts Options) Model {
 		previewCache: make(map[int]previewSnapshot),
 		pendingOps:   make(map[int]bool),
 		theme:        NewTheme(ModeTerminal, termenv.Ascii, nil),
+		agent:        opts.Agent,
+		agentMode:    opts.AgentMode,
+	}
+	if m.agent == "" {
+		m.agent = "agy"
+	}
+	if m.agentMode == "" {
+		m.agentMode = "batch"
 	}
 	if opts.Seen != nil {
 		shown, err := opts.Seen.HelpShown()
@@ -226,6 +242,44 @@ func (m Model) Init() tea.Cmd {
 func (m Model) tickCmd() tea.Cmd {
 	return tea.Tick(m.opts.Refresh, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
+
+// Agent returns the currently selected coding agent.
+func (m Model) Agent() string {
+	if m.agent == "" {
+		return "agy"
+	}
+	return m.agent
+}
+
+// AgentMode returns the currently selected agent dispatch mode.
+func (m Model) AgentMode() string {
+	if m.agentMode == "" {
+		return "batch"
+	}
+	return m.agentMode
+}
+
+var availableAgentModes = []string{"batch", "dangerous", "interactive"}
+var availableAgents = []string{"agy", "claude", "codex", "devin", "opencode", "gemini"}
+
+func nextAgentMode(cur string) string {
+	for i, mode := range availableAgentModes {
+		if mode == cur {
+			return availableAgentModes[(i+1)%len(availableAgentModes)]
+		}
+	}
+	return availableAgentModes[0]
+}
+
+func nextAgent(cur string) string {
+	for i, ag := range availableAgents {
+		if ag == cur {
+			return availableAgents[(i+1)%len(availableAgents)]
+		}
+	}
+	return availableAgents[0]
+}
+
 
 func (m Model) loadCmd() tea.Cmd {
 	opts := m.opts
@@ -598,6 +652,18 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		return m.openAgentsMd()
+	case "m":
+		m.agentMode = nextAgentMode(m.AgentMode())
+		if m.opts.OnConfigChange != nil {
+			m.opts.OnConfigChange(m.Agent(), m.agentMode)
+		}
+		return m, m.setStatus(fmt.Sprintf("Agent mode: %s", m.agentMode))
+	case "g":
+		m.agent = nextAgent(m.Agent())
+		if m.opts.OnConfigChange != nil {
+			m.opts.OnConfigChange(m.agent, m.AgentMode())
+		}
+		return m, m.setStatus(fmt.Sprintf("Agent: %s", m.agent))
 	case "s":
 		if m.opts.Say == nil {
 			return m, m.setStatus("s is not configured (no spec AI). Run `lead say \"one-liner\"` directly.")
@@ -1409,24 +1475,29 @@ func (m Model) footerTokens() []string {
 	case modeList:
 		row, ok := m.current()
 		if !ok {
-			return []string{"[s] New", "[?] Help", "[q] Quit"}
+			return []string{"[s] New", "[m] Mode: " + m.AgentMode(), "[g] Agent: " + m.Agent(), "[?] Help", "[q] Quit"}
 		}
+		var tokens []string
 		if row.IsHeader() {
 			if len(row.Section.Items) > 0 {
-				return []string{"[Enter] Toggle", "[z] Toggle all", "[s] New", "[?] Help", "[q] Quit"}
+				tokens = []string{"[Enter] Toggle", "[z] Toggle all", "[s] New"}
+			} else {
+				tokens = []string{"[s] New"}
 			}
-			return []string{"[s] New", "[?] Help", "[q] Quit"}
+		} else {
+			switch row.Item.Kind {
+			case KindNeedsReview:
+				tokens = []string{"[Enter] Open", "[a] Approve", "[t] Reply"}
+			case KindBlocked:
+				tokens = []string{"[Enter] Open", "[t] Reply", "[p] Peek"}
+			case KindMerged:
+				tokens = []string{"[Enter] Open", "[n] Report bug", "[c] Mark seen"}
+			case KindRunning:
+				tokens = []string{"[Enter] Open", "[p] Peek", "[o] Browser"}
+			}
 		}
-		switch row.Item.Kind {
-		case KindNeedsReview:
-			return []string{"[Enter] Open", "[a] Approve", "[t] Reply", "[?] Help", "[q] Quit"}
-		case KindBlocked:
-			return []string{"[Enter] Open", "[t] Reply", "[p] Peek", "[?] Help", "[q] Quit"}
-		case KindMerged:
-			return []string{"[Enter] Open", "[n] Report bug", "[c] Mark seen", "[?] Help", "[q] Quit"}
-		case KindRunning:
-			return []string{"[Enter] Open", "[p] Peek", "[o] Browser", "[?] Help", "[q] Quit"}
-		}
+		tokens = append(tokens, "[m] Mode: "+m.AgentMode(), "[g] Agent: "+m.Agent(), "[?] Help", "[q] Quit")
+		return tokens
 	}
 	return []string{"[?] Help", "[q] Quit"}
 }
@@ -1502,6 +1573,8 @@ func (m Model) viewHelp() string {
 		"",
 		"Global",
 		"  [s] New issue from one-liner",
+		"  [m] Toggle agent mode (batch/dangerous/interactive)",
+		"  [g] Toggle agent (agy/claude/codex/devin/opencode/gemini)",
 		"  [r] Open AGENTS.md",
 		"  [R] Reload inbox",
 		"  [?] Toggle this help",
