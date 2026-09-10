@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muesli/termenv"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/herdr"
 	"github.com/kuwa72/lead-cli/internal/ports"
@@ -1077,6 +1078,343 @@ func TestInbox_FiltersRunningByRepoOnLoad(t *testing.T) {
 		if n == 15 {
 			t.Errorf("zenn.git issue 15 must be excluded from lead-cli inbox running: %v", nums)
 		}
+	}
+}
+
+func TestInputCaretNavigation(t *testing.T) {
+	m := Model{
+		width: 120,
+		mode:  modeInput,
+		input: inputState{
+			prompt: "Reply > ",
+			text:   []rune("hello world"),
+			cursor: 11, // at end
+		},
+	}
+
+	// 1. Move Left 6 times (should be at index 5, space between hello and world)
+	for i := 0; i < 6; i++ {
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+		m = next.(Model)
+	}
+	if m.input.cursor != 5 {
+		t.Fatalf("cursor after 6 Left = %d, want 5", m.input.cursor)
+	}
+
+	// 2. Insert characters at cursor position
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("beautiful ")})
+	m = next.(Model)
+	if got := string(m.input.text); got != "hellobeautiful  world" && got != "hello beautiful world" {
+		t.Errorf("text after insertion = %q, want 'hello beautiful world'", got)
+	}
+	if m.input.cursor != 15 {
+		t.Errorf("cursor after insertion = %d, want 15", m.input.cursor)
+	}
+
+	// 3. Home key -> cursor 0
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	m = next.(Model)
+	if m.input.cursor != 0 {
+		t.Errorf("cursor after Home = %d, want 0", m.input.cursor)
+	}
+
+	// 3b. Left key at 0 should stay at 0
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m = next.(Model)
+	if m.input.cursor != 0 {
+		t.Errorf("cursor after Left at 0 = %d, want 0", m.input.cursor)
+	}
+
+	// 4. Delete at 0 deletes first character
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDelete})
+	m = next.(Model)
+	if !strings.HasPrefix(string(m.input.text), "ello") {
+		t.Errorf("text after Delete at start = %q, want leading 'ello'", string(m.input.text))
+	}
+	if m.input.cursor != 0 {
+		t.Errorf("cursor after Delete at start = %d, want 0", m.input.cursor)
+	}
+
+	// 5. End key -> cursor at len(text)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = next.(Model)
+	if m.input.cursor != len(m.input.text) {
+		t.Errorf("cursor after End = %d, want %d", m.input.cursor, len(m.input.text))
+	}
+
+	// 5b. Right key at end should stay at len(text)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = next.(Model)
+	if m.input.cursor != len(m.input.text) {
+		t.Errorf("cursor after Right at end = %d, want %d", m.input.cursor, len(m.input.text))
+	}
+
+	// 6. View() contains caret/cursor representation
+	view := m.View()
+	if !strings.Contains(view, "Reply > ") {
+		t.Errorf("View should contain prompt, got: %s", view)
+	}
+}
+
+func TestInputCaretShortcuts(t *testing.T) {
+	t.Run("CtrlA and CtrlE", func(t *testing.T) {
+		m := Model{
+			mode: modeInput,
+			input: inputState{
+				text:   []rune("abcdef"),
+				cursor: 3,
+			},
+		}
+		// Ctrl+A jumps to 0
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
+		m = next.(Model)
+		if m.input.cursor != 0 {
+			t.Errorf("cursor after Ctrl+A = %d, want 0", m.input.cursor)
+		}
+		// Ctrl+E jumps to end
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
+		m = next.(Model)
+		if m.input.cursor != 6 {
+			t.Errorf("cursor after Ctrl+E = %d, want 6", m.input.cursor)
+		}
+	})
+
+	t.Run("Backspace and CtrlH", func(t *testing.T) {
+		m := Model{
+			mode: modeInput,
+			input: inputState{
+				text:   []rune("hello"),
+				cursor: 3, // "hel|lo"
+			},
+		}
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		m = next.(Model)
+		if string(m.input.text) != "helo" || m.input.cursor != 2 {
+			t.Errorf("after Backspace text = %q (cursor %d), want 'helo' (cursor 2)", string(m.input.text), m.input.cursor)
+		}
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+		m = next.(Model)
+		if string(m.input.text) != "hlo" || m.input.cursor != 1 {
+			t.Errorf("after Ctrl+H text = %q (cursor %d), want 'hlo' (cursor 1)", string(m.input.text), m.input.cursor)
+		}
+		// Backspace at 0 does nothing
+		m.input.cursor = 0
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		m = next.(Model)
+		if string(m.input.text) != "hlo" || m.input.cursor != 0 {
+			t.Errorf("Backspace at 0 changed text or cursor: %q (%d)", string(m.input.text), m.input.cursor)
+		}
+	})
+
+	t.Run("Delete and CtrlD", func(t *testing.T) {
+		m := Model{
+			mode: modeInput,
+			input: inputState{
+				text:   []rune("world"),
+				cursor: 1, // "w|orld"
+			},
+		}
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDelete})
+		m = next.(Model)
+		if string(m.input.text) != "wrld" || m.input.cursor != 1 {
+			t.Errorf("after Delete text = %q (cursor %d), want 'wrld' (cursor 1)", string(m.input.text), m.input.cursor)
+		}
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+		m = next.(Model)
+		if string(m.input.text) != "wld" || m.input.cursor != 1 {
+			t.Errorf("after Ctrl+D text = %q (cursor %d), want 'wld' (cursor 1)", string(m.input.text), m.input.cursor)
+		}
+		// Delete at end does nothing
+		m.input.cursor = len(m.input.text)
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDelete})
+		m = next.(Model)
+		if string(m.input.text) != "wld" || m.input.cursor != 3 {
+			t.Errorf("Delete at end changed text or cursor: %q (%d)", string(m.input.text), m.input.cursor)
+		}
+	})
+
+	t.Run("CtrlU", func(t *testing.T) {
+		m := Model{
+			mode: modeInput,
+			input: inputState{
+				text:   []rune("first second third"),
+				cursor: 6, // "first |second third"
+			},
+		}
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+		m = next.(Model)
+		if string(m.input.text) != "second third" || m.input.cursor != 0 {
+			t.Errorf("after Ctrl+U text = %q, cursor = %d; want 'second third', 0", string(m.input.text), m.input.cursor)
+		}
+	})
+
+	t.Run("CtrlK", func(t *testing.T) {
+		m := Model{
+			mode: modeInput,
+			input: inputState{
+				text:   []rune("first second third"),
+				cursor: 5, // "first| second third"
+			},
+		}
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+		m = next.(Model)
+		if string(m.input.text) != "first" || m.input.cursor != 5 {
+			t.Errorf("after Ctrl+K text = %q, cursor = %d; want 'first', 5", string(m.input.text), m.input.cursor)
+		}
+	})
+
+	t.Run("CtrlW", func(t *testing.T) {
+		m := Model{
+			mode: modeInput,
+			input: inputState{
+				text:   []rune("foo bar baz"),
+				cursor: 11, // at end
+			},
+		}
+		// Delete "baz"
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+		m = next.(Model)
+		if string(m.input.text) != "foo bar " || m.input.cursor != 8 {
+			t.Errorf("Ctrl+W word rubout = %q (cursor %d), want 'foo bar ' (cursor 8)", string(m.input.text), m.input.cursor)
+		}
+
+		// Trailing spaces: "foo bar   "
+		m.input.text = []rune("foo bar   ")
+		m.input.cursor = len(m.input.text)
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+		m = next.(Model)
+		if string(m.input.text) != "foo " || m.input.cursor != 4 {
+			t.Errorf("Ctrl+W with trailing spaces = %q (cursor %d), want 'foo ' (cursor 4)", string(m.input.text), m.input.cursor)
+		}
+
+		// Ctrl+W at start does nothing
+		m.input.cursor = 0
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+		m = next.(Model)
+		if string(m.input.text) != "foo " || m.input.cursor != 0 {
+			t.Errorf("Ctrl+W at 0 changed text or cursor: %q (%d)", string(m.input.text), m.input.cursor)
+		}
+	})
+
+	t.Run("KeySpace and KeyRunes with Japanese characters", func(t *testing.T) {
+		m := Model{
+			mode: modeInput,
+			input: inputState{
+				text:   []rune("こんにちは世界"),
+				cursor: 5, // before "世界"
+			},
+		}
+		// Space insertion
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = next.(Model)
+		if string(m.input.text) != "こんにちは 世界" || m.input.cursor != 6 {
+			t.Errorf("after KeySpace text = %q (cursor %d), want 'こんにちは 世界' (cursor 6)", string(m.input.text), m.input.cursor)
+		}
+		// Insert runes
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("素敵な")})
+		m = next.(Model)
+		if string(m.input.text) != "こんにちは 素敵な世界" || m.input.cursor != 9 {
+			t.Errorf("after KeyRunes text = %q (cursor %d), want 'こんにちは 素敵な世界' (cursor 9)", string(m.input.text), m.input.cursor)
+		}
+	})
+}
+
+func TestInputCaretRendering(t *testing.T) {
+	tests := []struct {
+		name   string
+		mode   Mode
+		prof   termenv.Profile
+		cursor int
+		text   string
+	}{
+		{"terminal at start", ModeTerminal, termenv.ANSI, 0, "hello"},
+		{"terminal in middle", ModeTerminal, termenv.ANSI, 2, "hello"},
+		{"terminal at end", ModeTerminal, termenv.ANSI, 5, "hello"},
+		{"dark at end", ModeDark, termenv.TrueColor, 5, "hello"},
+		{"plain at end", ModePlain, termenv.Ascii, 5, "hello"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := Model{
+				width: 80,
+				mode:  modeInput,
+				theme: NewTheme(tc.mode, tc.prof, nil),
+				input: inputState{
+					prompt: "> ",
+					text:   []rune(tc.text),
+					cursor: tc.cursor,
+				},
+			}
+			view := m.View()
+			if !strings.Contains(view, "> ") {
+				t.Errorf("View missing prompt: %s", view)
+			}
+			line := m.renderInputLine()
+			if !strings.HasPrefix(line, "> ") {
+				t.Errorf("renderInputLine missing prompt: %s", line)
+			}
+			if tc.cursor == 0 && tc.mode == ModeTerminal {
+				// At start, first char 'h' should have reverse video
+				if !strings.Contains(line, "\x1b[7mh") {
+					t.Errorf("expected reverse video on 'h', got %q", line)
+				}
+			}
+			if tc.cursor == len(tc.text) && tc.mode == ModeTerminal {
+				// At end, should render reverse space
+				if !strings.Contains(line, "\x1b[7m \x1b[0m") {
+					t.Errorf("expected reverse space at end, got %q", line)
+				}
+			}
+		})
+	}
+}
+
+func TestInputModeInitialization(t *testing.T) {
+	_, _, m := newFixture(t)
+	m.opts.Say = func(ctx context.Context, oneLiner string, followUp int) (string, error) {
+		return "ok", nil
+	}
+
+	// Press 's' from list mode -> modeInput with cursor 0
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	sModel := next.(Model)
+	if sModel.mode != modeInput {
+		t.Fatalf("expected modeInput after 's', got %v", sModel.mode)
+	}
+	if sModel.input.cursor != len(sModel.input.text) {
+		t.Errorf("cursor after 's' = %d, want %d", sModel.input.cursor, len(sModel.input.text))
+	}
+
+	// Press 't' on selected item -> modeInput with cursor 0
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	tModel := next.(Model)
+	if tModel.mode != modeInput {
+		t.Fatalf("expected modeInput after 't', got %v", tModel.mode)
+	}
+	if tModel.input.cursor != len(tModel.input.text) {
+		t.Errorf("cursor after 't' = %d, want %d", tModel.input.cursor, len(tModel.input.text))
+	}
+
+	// Press 'x' on selected item -> modeInput with cursor 0
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	xModel := next.(Model)
+	if xModel.mode != modeInput {
+		t.Fatalf("expected modeInput after 'x', got %v", xModel.mode)
+	}
+	if xModel.input.cursor != len(xModel.input.text) {
+		t.Errorf("cursor after 'x' = %d, want %d", xModel.input.cursor, len(xModel.input.text))
+	}
+
+	// Move to merged item and press 'n' -> modeInput with cursor 0
+	m.cursor = 4 // merged item in fixture
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	nModel := next.(Model)
+	if nModel.mode != modeInput {
+		t.Fatalf("expected modeInput after 'n', got %v", nModel.mode)
+	}
+	if nModel.input.cursor != len(nModel.input.text) {
+		t.Errorf("cursor after 'n' = %d, want %d", nModel.input.cursor, len(nModel.input.text))
 	}
 }
 

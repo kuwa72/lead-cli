@@ -249,6 +249,21 @@ func (t *Theme) Status(text string) string {
 	return t.Render(text, fg, TokenBgCanvas, false, false, false)
 }
 
+// Cursor renders the text/character under the input cursor. In terminal/monochrome/dark/light
+// modes it uses reverse video. In plain mode or ASCII profile it returns a visible representation.
+func (t *Theme) Cursor(text string) string {
+	if t.mode == ModePlain || t.profile == termenv.Ascii {
+		if text == "" || text == " " {
+			return "_"
+		}
+		return text
+	}
+	if text == "" {
+		text = " "
+	}
+	return t.Render(text, TokenFgPrimary, TokenBgCanvas, false, true, false)
+}
+
 // Border returns a single border character with the strong/muted token.
 func (t *Theme) Border(strong bool) string {
 	if strong {

@@ -318,11 +318,11 @@ func (m Model) bodyLines(rows []Row, top, bodyH, leftW int, c listColumns) []str
 	// Sticky section header: top row is an item whose header scrolled off.
 	if top < len(rows) && !rows[top].IsHeader() {
 		if hi := m.headerRowIndex(rows, top); hi >= 0 && hi < top {
-			lines = append(lines, m.renderRow(rows[hi], c, leftW, false, m.opts.Now()))
+			lines = append(lines, m.renderRow(rows[hi], c, leftW, false, m.now()))
 		}
 	}
 	for i := top; i < end && len(lines) < bodyH; i++ {
-		lines = append(lines, m.renderRow(rows[i], c, leftW, i == m.cursor, m.opts.Now()))
+		lines = append(lines, m.renderRow(rows[i], c, leftW, i == m.cursor, m.now()))
 	}
 	return lines
 }
