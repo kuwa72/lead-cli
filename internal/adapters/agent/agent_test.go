@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -199,3 +201,61 @@ func TestArgvForMode(t *testing.T) {
 		}
 	}
 }
+
+func TestLaunch_RunsInSpecifiedDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	pwdLog := filepath.Join(tmpDir, "pwd.log")
+	testutil.InstallDummy(t, "agy", "pwd >> "+pwdLog+"\nexit 0")
+
+	targetDir := filepath.Join(tmpDir, "worktree")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	l := &Launcher{Dir: targetDir}
+	if err := l.Launch(context.Background(), "agy", "test"); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	content, err := os.ReadFile(pwdLog)
+	if err != nil {
+		t.Fatalf("ReadFile pwd.log: %v", err)
+	}
+	gotDir := strings.TrimSpace(string(content))
+	realTarget, _ := filepath.EvalSymlinks(targetDir)
+	realGot, _ := filepath.EvalSymlinks(gotDir)
+	if realGot != realTarget {
+		t.Errorf("Launcher ran in %q, want %q", gotDir, targetDir)
+	}
+}
+
+func TestLaunchInDir_AllKnownAgents(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	for _, name := range KnownAgents {
+		pwdLog := filepath.Join(tmpDir, name+"_pwd.log")
+		testutil.InstallDummy(t, name, "pwd >> "+pwdLog+"\nexit 0")
+
+		targetDir := filepath.Join(tmpDir, "worktree-"+name)
+		if err := os.MkdirAll(targetDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		l := New()
+		if err := l.LaunchInDir(context.Background(), targetDir, name, "test", "interactive"); err != nil {
+			t.Fatalf("LaunchInDir %s: %v", name, err)
+		}
+
+		content, err := os.ReadFile(pwdLog)
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", pwdLog, err)
+		}
+		gotDir := strings.TrimSpace(string(content))
+		realTarget, _ := filepath.EvalSymlinks(targetDir)
+		realGot, _ := filepath.EvalSymlinks(gotDir)
+		if realGot != realTarget {
+			t.Errorf("LaunchInDir for %s ran in %q, want %q", name, gotDir, targetDir)
+		}
+	}
+}
+

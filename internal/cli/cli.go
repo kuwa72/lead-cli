@@ -836,14 +836,22 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 	}
 
 	out := cmd.OutOrStdout()
+	agentName, _ := flags.GetString("agent")
+	resolvedAgent := agent.Resolve(agentName)
+	launchDir := res.RepoRoot
+	if res.Worktree != "" {
+		launchDir = res.Worktree
+	}
+
 	fmt.Fprintf(out, "Issue #%d  %s  %s\n", iss.Number, res.Mode, res.Status)
 	fmt.Fprintf(out, "Branch: %s", res.Branch)
 	if res.Worktree != "" {
 		fmt.Fprintf(out, "  Worktree: %s", res.Worktree)
+	} else {
+		fmt.Fprintf(out, "  Dir: %s", launchDir)
 	}
-	fmt.Fprintln(out)
+	fmt.Fprintf(out, "  Agent: %s\n", resolvedAgent)
 
-	agentName, _ := flags.GetString("agent")
 	if res.Pane != "" {
 		fmt.Fprintf(out, "Agent already prepared in pane %s\n", res.Pane)
 	} else {
@@ -877,7 +885,7 @@ func launchAgent(ctx context.Context, out io.Writer, deps Deps, res workflow.Sta
 	if res.Worktree != "" {
 		launchDir = res.Worktree
 	}
-	command, err := agent.CommandStringForMode(agentName, buildPrompt(res.Mode, iss, res.RepoRoot), agentMode)
+	command, err := agent.CommandStringForMode(agentName, buildPrompt(res.Mode, iss, launchDir), agentMode)
 	if err != nil {
 		return "", fmt.Errorf("work #%d: agent command: %w", iss.Number, err)
 	}
