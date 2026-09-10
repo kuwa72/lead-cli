@@ -3,6 +3,8 @@ package inbox
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ type previewSnapshot struct {
 	prErr       bool
 	comments    []ports.Comment
 	commentsErr bool
+	agentLog    string
 }
 
 // applySnapshot updates the model's current detail fields from a snapshot.
@@ -29,6 +32,7 @@ func (m *Model) applySnapshot(s previewSnapshot) {
 	m.detailPrErr = s.prErr
 	m.detailComments = s.comments
 	m.detailCommentsErr = s.commentsErr
+	m.detailAgentLog = s.agentLog
 }
 
 // cacheSnapshot stores a snapshot so returning to the same issue is instant.
@@ -92,12 +96,19 @@ func (m Model) previewLoadCmd(it Item, req int) tea.Cmd {
 		ctx := context.Background()
 		iss, err := gh.View(ctx, it.Number)
 		if err != nil {
-			return previewMsg{req: req, item: it, err: err}
+			if it.Kind == KindRunning {
+				iss = ports.Issue{Number: it.Number, Title: it.Title, State: "OPEN"}
+			} else {
+				return previewMsg{req: req, item: it, err: err}
+			}
 		}
 		if iss.BlockedReason == "" {
 			iss.BlockedReason = extractBlockedReason(iss.Body)
 		}
 		snap := previewSnapshot{issue: iss, prNumber: it.PRNumber}
+		if it.Kind == KindRunning && it.LogPath != "" {
+			snap.agentLog = readLogTail(it.LogPath, 50)
+		}
 		if it.PRNumber > 0 {
 			body, err := gh.PrBody(ctx, it.PRNumber)
 			if err != nil {
@@ -116,6 +127,54 @@ func (m Model) previewLoadCmd(it Item, req int) tea.Cmd {
 	}
 }
 
+// readLogTail reads up to maxLines recent lines from path safely.
+func readLogTail(path string, maxLines int) string {
+	if path == "" || maxLines <= 0 {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil || stat.Size() == 0 {
+		return ""
+	}
+
+	const maxBytes = 64 * 1024
+	offset := int64(0)
+	if stat.Size() > maxBytes {
+		offset = stat.Size() - maxBytes
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return ""
+		}
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
+	text := string(data)
+	if offset > 0 {
+		if idx := strings.IndexByte(text, '\n'); idx != -1 {
+			text = text[idx+1:]
+		}
+	}
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // loadPreviewForCurrent starts an async preview fetch for the selected item.
 func (m *Model) loadPreviewForCurrent() tea.Cmd {
 	row, ok := m.current()
@@ -123,6 +182,7 @@ func (m *Model) loadPreviewForCurrent() tea.Cmd {
 		m.detail = ports.Issue{}
 		m.detailPrNum, m.detailPrBody, m.detailOffset = 0, "", 0
 		m.detailPrErr, m.detailComments, m.detailCommentsErr = false, nil, false
+		m.detailAgentLog = ""
 		m.previewLoading = false
 		m.previewErr = nil
 		m.selectedIssue = 0
@@ -140,6 +200,7 @@ func (m *Model) loadPreviewForCurrent() tea.Cmd {
 		m.detail = ports.Issue{Number: it.Number, Title: it.Title, State: "OPEN"}
 		m.detailPrNum, m.detailPrBody, m.detailOffset = 0, "", 0
 		m.detailPrErr, m.detailComments, m.detailCommentsErr = false, nil, false
+		m.detailAgentLog = ""
 		m.previewLoading = true
 		m.previewErr = nil
 	}
@@ -365,20 +426,52 @@ func (m Model) mergedPreview(out []string, it *Item, h int) ([]string, bool) {
 }
 
 func (m Model) runningPreview(out []string, it *Item, h int) ([]string, bool) {
+	out = append(out, "Agent Live Output")
 	meta := runningMetaLine(it, m.detailPrNum, m.detailPrErr)
 	if meta != "" {
 		out = append(out, meta)
 	}
-	if len(out) >= h {
+	if it.LogPath != "" {
+		out = append(out, fmt.Sprintf("Log: %s", Sanitize(it.LogPath)))
+	}
+	remaining := h - len(out)
+	if remaining <= 0 {
 		return out, true
 	}
-	return appendSourceBody(out, m.detail.Body, "Issue", h)
+	if m.detailAgentLog != "" {
+		logLines := strings.Split(Sanitize(strings.ReplaceAll(m.detailAgentLog, "\r\n", "\n")), "\n")
+		if len(logLines) > remaining {
+			logLines = logLines[len(logLines)-remaining:]
+			out = append(out, logLines...)
+			return out, true
+		}
+		out = append(out, logLines...)
+		remaining = h - len(out)
+	} else if it.LogPath != "" {
+		if _, err := os.Stat(it.LogPath); os.IsNotExist(err) {
+			out = append(out, "(log file not found)")
+		} else {
+			out = append(out, "(log is empty)")
+		}
+		remaining--
+	} else {
+		out = append(out, "(no log file)")
+		remaining--
+	}
+	if remaining > 0 && m.detail.Body != "" {
+		lines, more := appendSourceBody(out, m.detail.Body, "Issue", remaining)
+		return lines, more
+	}
+	return out, false
 }
 
 func runningMetaLine(it *Item, prNum int, prErr bool) string {
 	parts := []string{}
 	if it.Agent != "" {
 		parts = append(parts, fmt.Sprintf("Agent: %s", Sanitize(it.Agent)))
+	}
+	if it.Pane != "" {
+		parts = append(parts, fmt.Sprintf("Pane: %s", Sanitize(it.Pane)))
 	}
 	if it.Attempts > 0 {
 		parts = append(parts, fmt.Sprintf("×%d", it.Attempts))
@@ -486,6 +579,11 @@ func (m Model) detailContent() string {
 		if meta != "" {
 			b.WriteString("Running info\n")
 			b.WriteString(meta)
+			b.WriteString("\n\n")
+		}
+		if it.Kind == KindRunning && m.detailAgentLog != "" {
+			b.WriteString("Agent Live Output\n")
+			b.WriteString(m.detailAgentLog)
 			b.WriteString("\n\n")
 		}
 	}

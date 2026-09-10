@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,6 +94,16 @@ func Drain(m Model, cmd tea.Cmd) (Model, bool) {
 func RunHeadless(m Model, keys []string, out io.Writer) error {
 	m.opts.PreviewDelay = 0
 	m.opts.Headless = true
+	if wEnv := os.Getenv("LEAD_TEST_INBOX_WIDTH"); wEnv != "" {
+		if n, err := strconv.Atoi(wEnv); err == nil && n > 0 {
+			m.width = n
+		}
+	}
+	if hEnv := os.Getenv("LEAD_TEST_INBOX_HEIGHT"); hEnv != "" {
+		if n, err := strconv.Atoi(hEnv); err == nil && n > 0 {
+			m.height = n
+		}
+	}
 	mode, profile, err := ResolveMode(m.opts.Theme, os.Getenv("NO_COLOR"), os.Getenv("COLORTERM"), os.Getenv("TERM"))
 	if err != nil {
 		return err

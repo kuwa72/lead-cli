@@ -89,6 +89,7 @@ type Model struct {
 	detailPrErr       bool
 	detailComments    []ports.Comment
 	detailCommentsErr bool
+	detailAgentLog    string
 	input             inputState
 	status            string
 	loadErr           error
@@ -426,6 +427,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail = ports.Issue{}
 		m.detailPrNum, m.detailPrBody, m.detailOffset = 0, "", 0
 		m.detailPrErr, m.detailComments, m.detailCommentsErr = false, nil, false
+		m.detailAgentLog = ""
 		wasRefreshed := !m.refreshedAt.IsZero()
 		if msg.sections != nil {
 			oldSections := m.sections
