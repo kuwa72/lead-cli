@@ -99,6 +99,12 @@ type (
 		prBody   string
 		err      error
 	}
+	previewMsg struct {
+		issue    ports.Issue
+		prNumber int
+		prBody   string
+		err      error
+	}
 	editBodyMsg struct {
 		issue ports.Issue
 		err   error
@@ -285,6 +291,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loadedMsg:
 		m.loading = false
 		m.loadErr = msg.err
+		m.detail = ports.Issue{}
+		m.detailPrNum, m.detailPrBody, m.detailOffset = 0, "", 0
 		if msg.sections != nil {
 			oldSections := m.sections
 			m.sections = msg.sections
@@ -321,6 +329,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.detail, m.detailOffset, m.detailPrNum, m.detailPrBody, m.mode = msg.issue, 0, msg.prNumber, msg.prBody, modeDetail
+		return m, nil
+	case previewMsg:
+		if msg.err != nil {
+			m.status = "エラー: " + msg.err.Error()
+			return m, nil
+		}
+		m.detail, m.detailOffset, m.detailPrNum, m.detailPrBody = msg.issue, 0, msg.prNumber, msg.prBody
 		return m, nil
 	case editBodyMsg:
 		if msg.err != nil {
@@ -372,15 +387,15 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "j", "down":
 		m.cursor++
 		m.clampCursor()
-		return m, nil
+		return m, m.loadPreviewForCurrent()
 	case "k", "up":
 		m.cursor--
 		m.clampCursor()
-		return m, nil
+		return m, m.loadPreviewForCurrent()
 	case "z", "tab":
 		m.expanded = !m.expanded
 		m.clampCursor()
-		return m, nil
+		return m, m.loadPreviewForCurrent()
 	case "R":
 		m.loading = true
 		return m, m.loadCmd()
@@ -559,6 +574,34 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m Model) previewCmd(it Item) tea.Cmd {
+	gh := m.opts.Gh
+	return func() tea.Msg {
+		ctx := context.Background()
+		iss, err := gh.View(ctx, it.Number)
+		if err != nil {
+			return previewMsg{err: err}
+		}
+		prNumber, prBody := it.PRNumber, ""
+		if prNumber > 0 {
+			if body, err := gh.PrBody(ctx, prNumber); err == nil {
+				prBody = body
+			}
+		}
+		return previewMsg{issue: iss, prNumber: prNumber, prBody: prBody}
+	}
+}
+
+func (m *Model) loadPreviewForCurrent() tea.Cmd {
+	row, ok := m.current()
+	if !ok || row.IsHeader() {
+		m.detail = ports.Issue{}
+		m.detailPrNum, m.detailPrBody, m.detailOffset = 0, "", 0
+		return nil
+	}
+	return m.previewCmd(*row.Item)
 }
 
 func (m Model) approveCmd(number int) tea.Cmd {
@@ -848,6 +891,36 @@ func (m Model) viewList() string {
 			b.WriteString(m.status + "\n")
 		}
 	}
+	if m.detail.Number > 0 {
+		b.WriteString(m.rule() + "\n")
+		b.WriteString(m.viewPreview())
+	}
+	return b.String()
+}
+
+// viewPreview renders the bottom detail pane for the currently selected issue.
+func (m Model) viewPreview() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "#%d %s  [%s]\n", m.detail.Number, m.detail.Title, m.detail.State)
+	b.WriteString(m.rule() + "\n")
+	content := m.detail.Body
+	if m.detailPrNum > 0 && strings.TrimSpace(m.detailPrBody) != "" {
+		content += "\n\n---\n## PR 本文\n\n" + m.detailPrBody
+	}
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	off := m.detailOffset
+	if off > len(lines)-1 {
+		off = max(0, len(lines)-1)
+	}
+	limit := len(lines)
+	if m.height > 0 {
+		previewHeight := max(4, m.height/2)
+		limit = min(len(lines), off+max(1, previewHeight-4))
+	}
+	for _, l := range lines[off:limit] {
+		b.WriteString(l + "\n")
+	}
+	b.WriteString(m.rule() + "\n")
 	return b.String()
 }
 
