@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/state"
 )
 
 func TestFilterUnseenMerged(t *testing.T) {
@@ -72,3 +73,37 @@ func TestBuild_CapsMergedSection(t *testing.T) {
 		t.Errorf("merged capped = %d, want %d", len(got[2].Items), MaxMergedItems)
 	}
 }
+
+func TestBuild_FiltersWorkflowsByRepo(t *testing.T) {
+	wfs := []state.Workflow{
+		{Repository: "https://github.com/kuwa72/lead-cli.git", Issue: 83, Status: state.StatusInProgress, Branch: "issue/83-mode"},
+		{Repository: "https://github.com/kuwa72/zenn.git", Issue: 15, Status: state.StatusInProgress, Branch: "issue/15-article"},
+		{Repository: "", Issue: 99, Status: state.StatusInProgress, Branch: "issue/99-local"},
+	}
+	// With repo filter "kuwa72/lead-cli", zenn.git must be excluded, local/empty repo is kept.
+	got := Build(nil, nil, nil, nil, wfs, BuildOptions{Repo: "kuwa72/lead-cli"})
+	runningItems := got[3].Items
+	if len(runningItems) != 2 {
+		t.Fatalf("running count = %d, want 2 (zenn.git excluded)", len(runningItems))
+	}
+	if runningItems[0].Number != 83 || runningItems[1].Number != 99 {
+		t.Errorf("running items = %+v, want [83, 99]", runningItems)
+	}
+}
+
+func TestBuild_FiltersClosedIssueWorkflows(t *testing.T) {
+	wfs := []state.Workflow{
+		{Issue: 36, Status: state.StatusInProgress, Branch: "issue/36-closed"},
+		{Issue: 89, Status: state.StatusInProgress, Branch: "issue/89-open"},
+	}
+	openSet := map[int]bool{89: true} // 36 is closed on GitHub
+	got := Build(nil, nil, nil, nil, wfs, BuildOptions{OpenNumbers: openSet})
+	runningItems := got[3].Items
+	if len(runningItems) != 1 {
+		t.Fatalf("running count = %d, want 1 (issue 36 excluded because closed)", len(runningItems))
+	}
+	if runningItems[0].Number != 89 {
+		t.Errorf("running item = %+v, want issue 89", runningItems[0])
+	}
+}
+

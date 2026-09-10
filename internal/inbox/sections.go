@@ -82,11 +82,21 @@ type Section struct {
 	Truncated bool
 }
 
+// BuildOptions configures filtering and context for Build.
+type BuildOptions struct {
+	Repo        string       // "owner/repo" slug; if set, wfs from other repositories are excluded
+	OpenNumbers map[int]bool // set of open issue numbers; if non-nil, issues not in this set are excluded from Running
+}
+
 // Build sections issues: `needs-review` and `blocked` come from gh label
 // listings (an issue carrying both stays in needs-review only); `merged`
 // comes from `ListMergedSince` filtered by the read-state; `running` is
 // derived locally from workflows.json (RFC §13.1).
-func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue, seen *SeenState, wfs []state.Workflow) []Section {
+func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue, seen *SeenState, wfs []state.Workflow, opts ...BuildOptions) []Section {
+	var bo BuildOptions
+	if len(opts) > 0 {
+		bo = opts[0]
+	}
 	byIssue := map[int]state.Workflow{}
 	for _, w := range wfs {
 		if w.Part == "" {
@@ -143,6 +153,14 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 	running := Section{Kind: KindRunning, Collapsed: true}
 	for _, w := range wfs {
 		if w.Status != state.StatusInProgress {
+			continue
+		}
+		if bo.Repo != "" && w.Repository != "" && w.Repository != "local" {
+			if slug := RepoSlug(w.Repository); slug != "" && slug != bo.Repo {
+				continue
+			}
+		}
+		if bo.OpenNumbers != nil && !bo.OpenNumbers[w.Issue] {
 			continue
 		}
 		it := Item{Number: w.Issue, Title: strings.TrimSpace(w.Branch), Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Pane: w.Pane, Branch: w.Branch, PRNumber: firstPRNumber(w.PullRequests), Kind: KindRunning}

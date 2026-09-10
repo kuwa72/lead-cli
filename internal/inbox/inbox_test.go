@@ -1006,3 +1006,77 @@ func TestFooter_InputMode(t *testing.T) {
 		t.Errorf("input reject footer missing labels: %q", got)
 	}
 }
+
+func TestInbox_SyncsZombieWorkflowsOnLoad(t *testing.T) {
+	gh, _, m := newFixture(t)
+	store := m.opts.Store
+	// Workflow for issue 36 is in_progress locally, but GitHub has no issue 36 open.
+	// Issue 7 is open on GitHub.
+	gh.Summaries = []ports.IssueSummary{{Number: 7, Title: "spec: add warning"}}
+	if err := store.Upsert(state.Workflow{
+		Repository: "https://github.com/kuwa72/lead-cli.git",
+		Issue:      36,
+		Status:     state.StatusInProgress,
+		Branch:     "issue/36-ports",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger loadCmd
+	m, _ = Drain(m, m.loadCmd())
+
+	// Issue 36 must not be in running section
+	for _, it := range m.sections[KindRunning].Items {
+		if it.Number == 36 {
+			t.Errorf("closed issue 36 must be excluded from running items: %+v", it)
+		}
+	}
+
+	// In the store, issue 36 workflow status must be updated to completed
+	wf, ok, err := store.Get(36, "")
+	if err != nil || !ok {
+		t.Fatalf("store.Get(36): ok=%v, err=%v", ok, err)
+	}
+	if wf.Status != state.StatusCompleted {
+		t.Errorf("store status for issue 36 = %q, want %q", wf.Status, state.StatusCompleted)
+	}
+}
+
+func TestInbox_FiltersRunningByRepoOnLoad(t *testing.T) {
+	gh, _, m := newFixture(t)
+	store := m.opts.Store
+	gh.Summaries = []ports.IssueSummary{
+		{Number: 83, Title: "lead issue"},
+		{Number: 15, Title: "zenn issue"},
+	}
+	if err := store.Upsert(state.Workflow{
+		Repository: "https://github.com/kuwa72/lead-cli.git",
+		Issue:      83,
+		Status:     state.StatusInProgress,
+		Branch:     "issue/83-lead",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Upsert(state.Workflow{
+		Repository: "https://github.com/kuwa72/zenn.git",
+		Issue:      15,
+		Status:     state.StatusInProgress,
+		Branch:     "issue/15-zenn",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = Drain(m, m.loadCmd())
+
+	running := m.sections[KindRunning].Items
+	var nums []int
+	for _, it := range running {
+		nums = append(nums, it.Number)
+	}
+	for _, n := range nums {
+		if n == 15 {
+			t.Errorf("zenn.git issue 15 must be excluded from lead-cli inbox running: %v", nums)
+		}
+	}
+}
+
