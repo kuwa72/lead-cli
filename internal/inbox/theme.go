@@ -272,9 +272,25 @@ func (t *Theme) Border(strong bool) string {
 	return t.Render("─", TokenBorderMuted, "", false, false, false)
 }
 
-// Preview renders a line of preview text.
+// Preview renders a line of preview text with diff syntax highlighting.
 func (t *Theme) Preview(text string, title bool) string {
 	if title {
+		return t.Render(text, TokenFgEmphasis, TokenBgSurface, true, false, false)
+	}
+	trimmed := strings.TrimLeft(text, " ")
+	if strings.HasPrefix(trimmed, "+") && !strings.HasPrefix(trimmed, "+++") {
+		return t.Render(text, TokenStatusSuccess, TokenBgSurface, false, false, false)
+	}
+	if strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "---") {
+		return t.Render(text, TokenStatusError, TokenBgSurface, false, false, false)
+	}
+	if strings.HasPrefix(trimmed, "@@") {
+		return t.Render(text, TokenAccentPrimary, TokenBgSurface, true, false, false)
+	}
+	if strings.HasPrefix(trimmed, "diff --git") || strings.HasPrefix(trimmed, "+++") || strings.HasPrefix(trimmed, "---") {
+		return t.Render(text, TokenFgEmphasis, TokenBgSurface, true, false, false)
+	}
+	if strings.HasPrefix(trimmed, "Changed files") || strings.HasPrefix(trimmed, "PR Diff") {
 		return t.Render(text, TokenFgEmphasis, TokenBgSurface, true, false, false)
 	}
 	return t.Render(text, TokenFgPrimary, TokenBgSurface, false, false, false)

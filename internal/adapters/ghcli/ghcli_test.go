@@ -548,3 +548,26 @@ func TestBrowseIssue_OpensWebView(t *testing.T) {
 		}
 	}
 }
+
+func TestPrDiff_CallsGhWithExpectedArgs(t *testing.T) {
+	body := "if [ \"$1 $2 $3\" = \"pr diff 42\" ]; then printf 'diff --git a/foo.go b/foo.go\\n+line'\n" +
+		"else echo \"unexpected: $@\" >&2; exit 3\nfi"
+	logPath := testutil.InstallDummy(t, "gh", body)
+	testutil.ClearLog(t, logPath)
+
+	got, err := New().PrDiff(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("PrDiff: %v", err)
+	}
+	want := "diff --git a/foo.go b/foo.go\n+line"
+	if got != want {
+		t.Errorf("PrDiff = %q, want %q", got, want)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, wantArg := range []string{"<pr>", "<diff>", "<42>"} {
+		if !strings.Contains(log, wantArg) {
+			t.Errorf("gh args log missing %q, got:\n%s", wantArg, log)
+		}
+	}
+}
+

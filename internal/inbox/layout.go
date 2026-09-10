@@ -354,14 +354,21 @@ func (m Model) previewLines(w, h int) []string {
 	}
 	var lines []string
 	lines = append(lines, truncTail(Sanitize(m.detail.Title), w))
-	content, more := m.previewContent(max(0, h-2)) // reserve title + Enter hint
+	content, more := m.previewContent(max(0, h+m.previewOffset+20))
+	if m.previewOffset > 0 {
+		if m.previewOffset < len(content) {
+			content = content[m.previewOffset:]
+		} else if len(content) > 0 {
+			content = content[len(content)-1:]
+		}
+	}
 	for _, l := range content {
 		if len(lines) >= h {
 			break
 		}
 		lines = append(lines, truncTail(Sanitize(l), w))
 	}
-	if more && len(lines) < h {
+	if (more || m.previewOffset > 0) && len(lines) < h {
 		lines = append(lines, "Enter: Full details")
 	}
 	for len(lines) < h {

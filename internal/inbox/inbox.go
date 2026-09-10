@@ -96,6 +96,9 @@ type Model struct {
 	detailComments    []ports.Comment
 	detailCommentsErr bool
 	detailAgentLog    string
+	detailPrDiff      string
+	detailPrDiffErr   bool
+	previewOffset     int
 	input             inputState
 	status            string
 	loadErr           error
@@ -136,6 +139,8 @@ type (
 		prNumber    int
 		prBody      string
 		prErr       bool
+		prDiff      string
+		prDiffErr   bool
 		comments    []ports.Comment
 		commentsErr bool
 		err         error
@@ -532,6 +537,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailPrErr = msg.prErr
 		m.detailComments = msg.comments
 		m.detailCommentsErr = msg.commentsErr
+		m.detailPrDiff = msg.prDiff
+		m.detailPrDiffErr = msg.prDiffErr
 		m.mode = modeDetail
 		return m, nil
 	case previewMsg:
@@ -629,21 +636,43 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "j", "down":
+		m.previewOffset = 0
 		m.cursor++
 		m.clampCursor()
 		m.scrollToCursor()
 		return m, m.loadPreviewForCurrent()
 	case "k", "up":
+		m.previewOffset = 0
 		m.cursor--
 		m.clampCursor()
 		m.scrollToCursor()
 		return m, m.loadPreviewForCurrent()
+	case "J":
+		m.previewOffset++
+		return m, nil
+	case "K":
+		if m.previewOffset > 0 {
+			m.previewOffset--
+		}
+		return m, nil
+	case "ctrl+d":
+		m.previewOffset += 5
+		return m, nil
+	case "ctrl+u":
+		if m.previewOffset > 5 {
+			m.previewOffset -= 5
+		} else {
+			m.previewOffset = 0
+		}
+		return m, nil
 	case "z", "tab":
+		m.previewOffset = 0
 		m.expanded = !m.expanded
 		m.clampCursor()
 		m.scrollToCursor()
 		return m, m.loadPreviewForCurrent()
 	case "R":
+		m.previewOffset = 0
 		m.loading = true
 		return m, m.loadCmd()
 	case "?":
@@ -860,6 +889,12 @@ func (m Model) openDetailCmd(it Item) tea.Cmd {
 				msg.prErr = true
 			} else {
 				msg.prBody = body
+			}
+			diff, err := gh.PrDiff(ctx, it.PRNumber)
+			if err != nil {
+				msg.prDiffErr = true
+			} else {
+				msg.prDiff = diff
 			}
 		}
 		comments, err := gh.IssueComments(ctx, it.Number)
@@ -1558,6 +1593,7 @@ func (m Model) viewHelp() string {
 		m.rule(),
 		"Move",
 		"  [j/k] or [↑/↓]    Move up/down (headers and issues)",
+		"  [J/K]             Scroll preview pane down/up",
 		"  [Enter/space/→/l] Toggle section or open selected issue",
 		"  [z/Tab]           Toggle all sections",
 		"",

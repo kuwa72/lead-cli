@@ -288,3 +288,132 @@ func TestPreview_KindRunningHandlesEmptyOrMissingLog(t *testing.T) {
 	}
 }
 
+func TestPreview_NeedsReview_ShowsFilesAndDiff(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 130
+	m.height = 30
+
+	diffContent := "diff --git a/pkg/foo.go b/pkg/foo.go\n" +
+		"--- a/pkg/foo.go\n" +
+		"+++ b/pkg/foo.go\n" +
+		"@@ -1,3 +1,4 @@\n" +
+		" existing\n" +
+		"+newly added code line\n" +
+		"-old removed line\n"
+	gh.PrDiffs = map[int]string{77: diffContent}
+
+	store := m.opts.Store
+	if err := store.Upsert(state.Workflow{
+		Issue:        7,
+		Status:       state.StatusAwaitingReview,
+		Agent:        "agy",
+		PullRequests: []state.PRRef{{Number: 77, Status: "open"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = Drain(m, m.loadCmd())
+
+	v := m.View()
+	if !strings.Contains(v, "Changed files") {
+		t.Errorf("preview should contain 'Changed files', got:\n%s", v)
+	}
+	if !strings.Contains(v, "pkg/foo.go") {
+		t.Errorf("preview should contain 'pkg/foo.go', got:\n%s", v)
+	}
+	if !strings.Contains(v, "+newly added code line") {
+		t.Errorf("preview should contain '+newly added code line', got:\n%s", v)
+	}
+}
+
+func TestPreview_ScrollWithShiftJK(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 130
+	m.height = 30
+
+	var diffLines []string
+	diffLines = append(diffLines, "diff --git a/main.go b/main.go")
+	for i := 1; i <= 30; i++ {
+		diffLines = append(diffLines, "+line number "+string(rune('A'+i)))
+	}
+	gh.PrDiffs = map[int]string{77: strings.Join(diffLines, "\n")}
+
+	store := m.opts.Store
+	if err := store.Upsert(state.Workflow{
+		Issue:        7,
+		Status:       state.StatusAwaitingReview,
+		Agent:        "agy",
+		PullRequests: []state.PRRef{{Number: 77, Status: "open"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = Drain(m, m.loadCmd())
+
+	initialView := m.View()
+	if !strings.Contains(initialView, "+line number B") {
+		t.Fatalf("expected early diff line in initial view, got:\n%s", initialView)
+	}
+
+	// Press J (Shift+j) to scroll down preview pane.
+	m = press(t, m, "J")
+	if m.previewOffset <= 0 {
+		t.Errorf("expected previewOffset > 0 after pressing J, got %d", m.previewOffset)
+	}
+
+	// Press K (Shift+k) to scroll up preview pane.
+	m = press(t, m, "K")
+	if m.previewOffset != 0 {
+		t.Errorf("expected previewOffset == 0 after pressing K, got %d", m.previewOffset)
+	}
+}
+
+func TestDetail_NeedsReview_ShowsDiff(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 130
+	m.height = 30
+
+	diffContent := "diff --git a/pkg/bar.go b/pkg/bar.go\n" +
+		"--- a/pkg/bar.go\n" +
+		"+++ b/pkg/bar.go\n" +
+		"@@ -10,3 +10,4 @@\n" +
+		"+newly added bar line\n"
+	gh.PrDiffs = map[int]string{77: diffContent}
+
+	store := m.opts.Store
+	if err := store.Upsert(state.Workflow{
+		Issue:        7,
+		Status:       state.StatusAwaitingReview,
+		Agent:        "agy",
+		PullRequests: []state.PRRef{{Number: 77, Status: "open"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = Drain(m, m.loadCmd())
+	// Enter opens full detail view.
+	m = press(t, m, "enter")
+	if m.mode != modeDetail {
+		t.Fatalf("expected modeDetail, got %v", m.mode)
+	}
+
+	v := m.View()
+	if !strings.Contains(v, "Changed files") {
+		t.Errorf("detail should contain 'Changed files', got:\n%s", v)
+	}
+	if !strings.Contains(v, "pkg/bar.go") {
+		t.Errorf("detail should contain 'pkg/bar.go', got:\n%s", v)
+	}
+	if !strings.Contains(v, "+newly added bar line") {
+		t.Errorf("detail should contain '+newly added bar line', got:\n%s", v)
+	}
+
+	// Down scrolls detailOffset
+	m = press(t, m, "j")
+	if m.detailOffset != 1 {
+		t.Errorf("expected detailOffset == 1, got %d", m.detailOffset)
+	}
+}
+
+
+
