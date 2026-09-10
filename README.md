@@ -68,3 +68,4 @@ lead setup --write
 - `AGENTS.md` is the single entry point for project conventions.
 - Work follows the issue-driven TDD, branch-per-PR, CI-wait, squash-merge flow in `AGENTS.md`.
 - The full inbox UX spec is in `docs/rfc-inbox-ux.md`.
+- Self-hosting and dogfooding workflow is documented in `docs/selfhost.md`.
