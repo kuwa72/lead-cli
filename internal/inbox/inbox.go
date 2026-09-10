@@ -13,6 +13,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/kuwa72/lead-cli/internal/dispatch"
+	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 )
@@ -61,6 +62,8 @@ type Options struct {
 	AgentMode string
 	// OnConfigChange is invoked when the user toggles Agent or AgentMode via keyboard.
 	OnConfigChange func(agent, mode string)
+	// Notifier sends desktop/terminal notifications on milestone events (issue #145).
+	Notifier notify.Notifier
 }
 
 type mode int
@@ -119,6 +122,9 @@ type Model struct {
 	statusGen         int          // generation counter for status auto-clear
 	agent             string       // active agent
 	agentMode         string       // active agent mode
+	knownNeedsReview  map[int]bool // tracked needs-review issues for completion notify
+	knownBlocked      map[int]bool // tracked blocked issues for completion notify
+	hasInitialLoad    bool         // suppresses notifications on initial load
 }
 
 // Messages.
@@ -208,16 +214,21 @@ func New(opts Options) Model {
 	if initialSections == nil {
 		initialSections = Build(nil, nil, nil, nil, nil)
 	}
+	if opts.Notifier == nil {
+		opts.Notifier = notify.New(notify.Options{})
+	}
 	m := Model{
-		opts:         opts,
-		sections:     initialSections,
-		status:       initialStatus,
-		loading:      true,
-		previewCache: make(map[int]previewSnapshot),
-		pendingOps:   make(map[int]bool),
-		theme:        NewTheme(ModeTerminal, termenv.Ascii, nil),
-		agent:        opts.Agent,
-		agentMode:    opts.AgentMode,
+		opts:             opts,
+		sections:         initialSections,
+		status:           initialStatus,
+		loading:          true,
+		previewCache:     make(map[int]previewSnapshot),
+		pendingOps:       make(map[int]bool),
+		knownNeedsReview: make(map[int]bool),
+		knownBlocked:     make(map[int]bool),
+		theme:            NewTheme(ModeTerminal, termenv.Ascii, nil),
+		agent:            opts.Agent,
+		agentMode:        opts.AgentMode,
 	}
 	if m.agent == "" {
 		m.agent = "agy"
@@ -500,6 +511,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.refreshedAt = m.opts.Now()
+			m.checkNotifications(msg.sections)
 			m.restoreSelection(oldRow)
 			m.scrollToCursor()
 		}
@@ -1664,3 +1676,50 @@ func RepoSlug(url string) string {
 	}
 	return parts[len(parts)-2] + "/" + parts[len(parts)-1]
 }
+
+func (m *Model) checkNotifications(sections []Section) {
+	currentReview := make(map[int]bool)
+	currentBlocked := make(map[int]bool)
+
+	for _, sec := range sections {
+		switch sec.Kind {
+		case KindNeedsReview:
+			for _, it := range sec.Items {
+				currentReview[it.Number] = true
+				if m.hasInitialLoad && !m.knownNeedsReview[it.Number] {
+					m.notifyItem("Needs Review", it)
+				}
+			}
+		case KindBlocked:
+			for _, it := range sec.Items {
+				currentBlocked[it.Number] = true
+				if m.hasInitialLoad && !m.knownBlocked[it.Number] {
+					m.notifyItem("Agent Blocked", it)
+				}
+			}
+		}
+	}
+	m.knownNeedsReview = currentReview
+	m.knownBlocked = currentBlocked
+	m.hasInitialLoad = true
+}
+
+func (m Model) notifyItem(kind string, it Item) {
+	if m.opts.Notifier == nil {
+		return
+	}
+	title := fmt.Sprintf("%s: #%d %s", kind, it.Number, it.Title)
+	msg := ""
+	if it.Agent != "" {
+		msg = fmt.Sprintf("Agent: %s", it.Agent)
+	}
+	if it.PRNumber > 0 {
+		if msg != "" {
+			msg += fmt.Sprintf(" (PR #%d)", it.PRNumber)
+		} else {
+			msg = fmt.Sprintf("PR #%d", it.PRNumber)
+		}
+	}
+	_ = m.opts.Notifier.Notify(title, msg)
+}
+
