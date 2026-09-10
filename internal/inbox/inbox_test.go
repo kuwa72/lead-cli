@@ -567,10 +567,10 @@ func TestKeyQ_Quits(t *testing.T) {
 
 func TestFooter_ContextDependentActions(t *testing.T) {
 	want := map[Kind]string{
-		KindNeedsReview: "[Enter] Open   [a] Approve   [t] Reply   [?] Help   [q] Quit",
-		KindBlocked:     "[Enter] Open   [t] Reply   [p] Peek   [?] Help   [q] Quit",
-		KindMerged:      "[Enter] Open   [n] Report bug   [c] Mark seen   [?] Help   [q] Quit",
-		KindRunning:     "[Enter] Open   [p] Peek   [o] Browser   [?] Help   [q] Quit",
+		KindNeedsReview: "[Enter] Open   [a] Approve   [t] Reply   [m] Mode: batch   [g] Agent: agy   [?] Help   [q] Quit",
+		KindBlocked:     "[Enter] Open   [t] Reply   [p] Peek   [m] Mode: batch   [g] Agent: agy   [?] Help   [q] Quit",
+		KindMerged:      "[Enter] Open   [n] Report bug   [c] Mark seen   [m] Mode: batch   [g] Agent: agy   [?] Help   [q] Quit",
+		KindRunning:     "[Enter] Open   [p] Peek   [o] Browser   [m] Mode: batch   [g] Agent: agy   [?] Help   [q] Quit",
 	}
 	for kind, expected := range want {
 		m := Model{sections: []Section{{Kind: kind, Items: []Item{{Number: 1, Kind: kind}}}}, width: 120, expanded: true}
@@ -580,7 +580,7 @@ func TestFooter_ContextDependentActions(t *testing.T) {
 		}
 	}
 	empty := Model{sections: []Section{{Kind: KindNeedsReview}}, width: 120}
-	if got, want := empty.footer(), "[s] New   [?] Help   [q] Quit"; got != want {
+	if got, want := empty.footer(), "[s] New   [m] Mode: batch   [g] Agent: agy   [?] Help   [q] Quit"; got != want {
 		t.Errorf("empty footer = %q, want %q", got, want)
 	}
 }
@@ -1417,4 +1417,70 @@ func TestInputModeInitialization(t *testing.T) {
 		t.Errorf("cursor after 'n' = %d, want %d", nModel.input.cursor, len(nModel.input.text))
 	}
 }
+
+func TestInbox_AgentAndModeToggle(t *testing.T) {
+	var savedAgent, savedMode string
+	m := New(Options{
+		Headless:  true,
+		Agent:     "agy",
+		AgentMode: "batch",
+		OnConfigChange: func(agent, mode string) {
+			savedAgent = agent
+			savedMode = mode
+		},
+	})
+	m.width = 120
+
+	// Initial values
+	if m.Agent() != "agy" {
+		t.Errorf("initial agent = %q, want 'agy'", m.Agent())
+	}
+	if m.AgentMode() != "batch" {
+		t.Errorf("initial mode = %q, want 'batch'", m.AgentMode())
+	}
+
+	// Press 'm' to toggle mode (batch -> dangerous)
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m = next.(Model)
+	if m.AgentMode() != "dangerous" {
+		t.Errorf("mode after 1st 'm' = %q, want 'dangerous'", m.AgentMode())
+	}
+	if savedMode != "dangerous" {
+		t.Errorf("savedMode = %q, want 'dangerous'", savedMode)
+	}
+
+	// Press 'm' again (dangerous -> interactive)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m = next.(Model)
+	if m.AgentMode() != "interactive" {
+		t.Errorf("mode after 2nd 'm' = %q, want 'interactive'", m.AgentMode())
+	}
+
+	// Press 'm' again (interactive -> batch)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m = next.(Model)
+	if m.AgentMode() != "batch" {
+		t.Errorf("mode after 3rd 'm' = %q, want 'batch'", m.AgentMode())
+	}
+
+	// Press 'g' to toggle agent (agy -> claude)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = next.(Model)
+	if m.Agent() != "claude" {
+		t.Errorf("agent after 1st 'g' = %q, want 'claude'", m.Agent())
+	}
+	if savedAgent != "claude" {
+		t.Errorf("savedAgent = %q, want 'claude'", savedAgent)
+	}
+
+	// Check footer tokens include Mode and Agent
+	footer := m.footer()
+	if !strings.Contains(footer, "[m] Mode") {
+		t.Errorf("footer should contain '[m] Mode', got: %s", footer)
+	}
+	if !strings.Contains(footer, "[g] Agent") {
+		t.Errorf("footer should contain '[g] Agent', got: %s", footer)
+	}
+}
+
 

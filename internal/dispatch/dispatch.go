@@ -46,6 +46,7 @@ const (
 type Options struct {
 	Parallel     int
 	Agent        string // headless implementation agent (agents.impl)
+	AgentMode    string // headless dispatch mode (batch or dangerous; default batch)
 	ReadyLabel   string
 	BlockedLabel string
 	MaxAttempts  int

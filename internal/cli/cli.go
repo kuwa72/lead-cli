@@ -632,6 +632,22 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		return errors.New("lead: the inbox needs an interactive terminal (stdin/stdout are not a TTY); run `lead --help` for subcommands")
 	}
 
+	configDir := filepath.Dir(deps.stateFile())
+	configFile := filepath.Join(configDir, "inbox-config.json")
+	var cfg struct {
+		Agent     string `json:"agent"`
+		AgentMode string `json:"agent_mode"`
+	}
+	if data, err := os.ReadFile(configFile); err == nil {
+		_ = json.Unmarshal(data, &cfg)
+	}
+	if cfg.Agent != "" {
+		opts.Agent = cfg.Agent
+	}
+	if cfg.AgentMode != "" {
+		opts.AgentMode = cfg.AgentMode
+	}
+
 	dctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
 	d := &dispatch.Dispatcher{
@@ -641,12 +657,24 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		Launcher: deps.launcher(),
 		Out:      io.Discard,
 		Opts: dispatch.Options{
-			Parallel: parallel,
-			LogDir:   filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
-			WorkDir:  cwd,
+			Parallel:  parallel,
+			Agent:     opts.Agent,
+			AgentMode: opts.AgentMode,
+			LogDir:    filepath.Join(configDir, "logs"),
+			WorkDir:   cwd,
 		},
 	}
 	opts.RunningCount = d.RunningCount
+	opts.OnConfigChange = func(agent, mode string) {
+		cfg.Agent = agent
+		cfg.AgentMode = mode
+		if raw, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+			_ = os.MkdirAll(configDir, 0o755)
+			_ = os.WriteFile(configFile, raw, 0o644)
+		}
+		d.Opts.Agent = agent
+		d.Opts.AgentMode = mode
+	}
 
 	if err := d.Preflight(dctx); err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), err)
