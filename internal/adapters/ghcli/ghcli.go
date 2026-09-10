@@ -213,6 +213,15 @@ func (c *Client) PrBody(ctx context.Context, pr int) (string, error) {
 	return raw.Body, nil
 }
 
+// PrDiff runs `gh pr diff <pr>`.
+func (c *Client) PrDiff(ctx context.Context, pr int) (string, error) {
+	out, err := c.run(ctx, "pr", "diff", strconv.Itoa(pr))
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
 // PrMerge runs `gh pr merge <pr> --squash --delete-branch` (squash default).
 func (c *Client) PrMerge(ctx context.Context, pr int) error {
 	_, err := c.run(ctx, "pr", "merge", strconv.Itoa(pr), "--squash", "--delete-branch")

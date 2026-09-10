@@ -115,6 +115,11 @@ type FakeGhClient struct {
 	PrBodyErr    error
 	PrBodyCalls  []int
 
+	// PrDiffs feeds PrDiff: pr number → diff string.
+	PrDiffs     map[int]string
+	PrDiffErr   error
+	PrDiffCalls []int
+
 	MergeErr error
 
 	// AutoMergeAllowed gates policy auto (repo setting).
@@ -377,6 +382,19 @@ func (f *FakeGhClient) PrBody(ctx context.Context, pr int) (string, error) {
 		return body, nil
 	}
 	return "", fmt.Errorf("fake gh: PR #%d not found", pr)
+}
+
+// PrDiff returns PrDiffs[pr] (or PrDiffErr / unknown-number error)
+// and records the call.
+func (f *FakeGhClient) PrDiff(ctx context.Context, pr int) (string, error) {
+	f.PrDiffCalls = append(f.PrDiffCalls, pr)
+	if f.PrDiffErr != nil {
+		return "", f.PrDiffErr
+	}
+	if diff, ok := f.PrDiffs[pr]; ok {
+		return diff, nil
+	}
+	return "", fmt.Errorf("fake gh: PR #%d diff not found", pr)
 }
 
 // PrMerge records the call (or returns MergeErr).

@@ -22,6 +22,8 @@ type previewSnapshot struct {
 	comments    []ports.Comment
 	commentsErr bool
 	agentLog    string
+	prDiff      string
+	prDiffErr   bool
 }
 
 // applySnapshot updates the model's current detail fields from a snapshot.
@@ -33,6 +35,8 @@ func (m *Model) applySnapshot(s previewSnapshot) {
 	m.detailComments = s.comments
 	m.detailCommentsErr = s.commentsErr
 	m.detailAgentLog = s.agentLog
+	m.detailPrDiff = s.prDiff
+	m.detailPrDiffErr = s.prDiffErr
 }
 
 // cacheSnapshot stores a snapshot so returning to the same issue is instant.
@@ -116,6 +120,12 @@ func (m Model) previewLoadCmd(it Item, req int) tea.Cmd {
 			} else {
 				snap.prBody = body
 			}
+			diff, err := gh.PrDiff(ctx, it.PRNumber)
+			if err != nil {
+				snap.prDiffErr = true
+			} else {
+				snap.prDiff = diff
+			}
 		}
 		comments, err := gh.IssueComments(ctx, it.Number)
 		if err != nil {
@@ -183,6 +193,9 @@ func (m *Model) loadPreviewForCurrent() tea.Cmd {
 		m.detailPrNum, m.detailPrBody, m.detailOffset = 0, "", 0
 		m.detailPrErr, m.detailComments, m.detailCommentsErr = false, nil, false
 		m.detailAgentLog = ""
+		m.detailPrDiff = ""
+		m.detailPrDiffErr = false
+		m.previewOffset = 0
 		m.previewLoading = false
 		m.previewErr = nil
 		m.selectedIssue = 0
@@ -201,6 +214,9 @@ func (m *Model) loadPreviewForCurrent() tea.Cmd {
 		m.detailPrNum, m.detailPrBody, m.detailOffset = 0, "", 0
 		m.detailPrErr, m.detailComments, m.detailCommentsErr = false, nil, false
 		m.detailAgentLog = ""
+		m.detailPrDiff = ""
+		m.detailPrDiffErr = false
+		m.previewOffset = 0
 		m.previewLoading = true
 		m.previewErr = nil
 	}
@@ -340,7 +356,7 @@ func (m Model) previewContent(h int) ([]string, bool) {
 	more := false
 	switch kind {
 	case KindNeedsReview:
-		out, more = appendSourceBody(out, m.detail.Body, "Issue", h)
+		out, more = m.reviewPreview(out, row.Item, h)
 	case KindBlocked:
 		out, more = m.blockedPreview(out, row.Item, h)
 	case KindMerged:
@@ -351,6 +367,98 @@ func (m Model) previewContent(h int) ([]string, bool) {
 		out, more = appendSourceBody(out, m.detail.Body, "Issue", h)
 	}
 	return out, more
+}
+
+type diffFileStat struct {
+	name      string
+	additions int
+	deletions int
+}
+
+func parseDiffStats(diff string) ([]diffFileStat, []string) {
+	if diff == "" {
+		return nil, nil
+	}
+	lines := strings.Split(strings.ReplaceAll(diff, "\r\n", "\n"), "\n")
+	var stats []diffFileStat
+	var curFile *diffFileStat
+	var cleanedLines []string
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "diff --git ") {
+			parts := strings.Fields(line)
+			name := ""
+			if len(parts) >= 4 {
+				name = strings.TrimPrefix(parts[3], "b/")
+			}
+			stats = append(stats, diffFileStat{name: name})
+			curFile = &stats[len(stats)-1]
+			cleanedLines = append(cleanedLines, line)
+		} else if strings.HasPrefix(line, "+++ ") || strings.HasPrefix(line, "--- ") {
+			cleanedLines = append(cleanedLines, line)
+		} else if strings.HasPrefix(line, "@@") {
+			cleanedLines = append(cleanedLines, line)
+		} else if strings.HasPrefix(line, "+") {
+			if curFile != nil {
+				curFile.additions++
+			}
+			cleanedLines = append(cleanedLines, line)
+		} else if strings.HasPrefix(line, "-") {
+			if curFile != nil {
+				curFile.deletions++
+			}
+			cleanedLines = append(cleanedLines, line)
+		} else {
+			if line != "" {
+				cleanedLines = append(cleanedLines, line)
+			}
+		}
+	}
+	return stats, cleanedLines
+}
+
+func (m Model) reviewPreview(out []string, it *Item, h int) ([]string, bool) {
+	if m.detailPrNum > 0 && m.detailPrDiff != "" {
+		stats, diffLines := parseDiffStats(m.detailPrDiff)
+		if len(stats) > 0 {
+			out = append(out, fmt.Sprintf("Changed files (%d):", len(stats)))
+			for _, st := range stats {
+				if len(out) >= h {
+					return out, true
+				}
+				out = append(out, fmt.Sprintf("  • %s (+%d, -%d)", st.name, st.additions, st.deletions))
+			}
+		}
+		if len(diffLines) > 0 {
+			if len(out) < h {
+				out = append(out, fmt.Sprintf("PR Diff (#%d):", m.detailPrNum))
+			}
+			for _, dl := range diffLines {
+				if len(out) >= h {
+					return out, true
+				}
+				out = append(out, dl)
+			}
+		}
+		if len(out) >= h {
+			return out, true
+		}
+		if m.detail.Body != "" {
+			rem := h - len(out)
+			lines, more := appendSourceBody(out, m.detail.Body, "Issue", rem)
+			return lines, more
+		}
+		return out, false
+	} else if m.detailPrNum > 0 && m.detailPrDiffErr {
+		out = append(out, fmt.Sprintf("PR diff unavailable (#%d)", m.detailPrNum))
+		rem := h - len(out)
+		if rem > 0 && m.detail.Body != "" {
+			lines, more := appendSourceBody(out, m.detail.Body, "Issue", rem)
+			return lines, more
+		}
+		return out, false
+	}
+	return appendSourceBody(out, m.detail.Body, "Issue", h)
 }
 
 func (m Model) blockedPreview(out []string, it *Item, h int) ([]string, bool) {
@@ -553,6 +661,23 @@ func (m Model) detailContent() string {
 			b.WriteString("\n\n")
 		} else {
 			fmt.Fprintf(&b, "## PR body · PR #%d (no body)\n\n", m.detailPrNum)
+		}
+		if m.detailPrDiffErr {
+			fmt.Fprintf(&b, "## PR diff · PR details unavailable (#%d)\n\n", m.detailPrNum)
+		} else if m.detailPrDiff != "" {
+			fmt.Fprintf(&b, "## PR diff · PR #%d\n\n", m.detailPrNum)
+			stats, diffLines := parseDiffStats(m.detailPrDiff)
+			if len(stats) > 0 {
+				b.WriteString(fmt.Sprintf("Changed files (%d):\n", len(stats)))
+				for _, st := range stats {
+					b.WriteString(fmt.Sprintf("  • %s (+%d, -%d)\n", st.name, st.additions, st.deletions))
+				}
+				b.WriteString("\n")
+			}
+			for _, dl := range diffLines {
+				b.WriteString(dl + "\n")
+			}
+			b.WriteString("\n")
 		}
 	} else {
 		b.WriteString("No linked PR\n\n")
