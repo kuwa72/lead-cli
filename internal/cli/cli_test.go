@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/testutil"
 	"github.com/kuwa72/lead-cli/internal/workflow"
@@ -25,6 +26,14 @@ func (g *fakeGitRunner) WorktreeAdd(repoDir, path, branch string) error {
 }
 func (g *fakeGitRunner) WorktreeRemove(repoDir, path string, force bool) error { return nil }
 func (g *fakeGitRunner) OriginURL(repoDir string) string                       { return g.origin }
+func (g *fakeGitRunner) BranchExists(repoDir, branch string) (bool, error)     { return true, nil }
+func (g *fakeGitRunner) WorktreeList(repoDir string) ([]git.WorktreeInfo, error) {
+	return nil, nil
+}
+func (g *fakeGitRunner) ListBranches(repoDir string) ([]string, error) {
+	return nil, nil
+}
+func (g *fakeGitRunner) CheckoutBranch(repoDir, branch string) error { return nil }
 
 var _ workflow.GitRunner = (*fakeGitRunner)(nil)
 

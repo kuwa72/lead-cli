@@ -183,6 +183,21 @@ func (c *Client) PrInfo(ctx context.Context, pr int) (ports.PRInfo, error) {
 	}, nil
 }
 
+// PrHeadBranch runs `gh pr view <pr> --json headRefName` and returns the branch name.
+func (c *Client) PrHeadBranch(ctx context.Context, pr int) (string, error) {
+	out, err := c.run(ctx, "pr", "view", strconv.Itoa(pr), "--json", "headRefName")
+	if err != nil {
+		return "", err
+	}
+	var raw struct {
+		HeadRefName string `json:"headRefName"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return "", fmt.Errorf("gh pr view %d: decode JSON: %w", pr, err)
+	}
+	return raw.HeadRefName, nil
+}
+
 // PrBody runs `gh pr view <pr> --json body` and returns the body field.
 func (c *Client) PrBody(ctx context.Context, pr int) (string, error) {
 	out, err := c.run(ctx, "pr", "view", strconv.Itoa(pr), "--json", "body")

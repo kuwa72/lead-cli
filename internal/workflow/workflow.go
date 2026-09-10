@@ -13,7 +13,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/state"
 )
 
-// GitRunner abstracts the git operations Start needs.
+// GitRunner abstracts the git operations Start and Resume need.
 // *git.Runner implements it.
 type GitRunner interface {
 	RepoRoot(dir string) (string, error)
@@ -21,6 +21,10 @@ type GitRunner interface {
 	WorktreeAdd(repoDir, path, branch string) error
 	WorktreeRemove(repoDir, path string, force bool) error
 	OriginURL(repoDir string) string
+	BranchExists(repoDir, branch string) (bool, error)
+	WorktreeList(repoDir string) ([]git.WorktreeInfo, error)
+	ListBranches(repoDir string) ([]string, error)
+	CheckoutBranch(repoDir, branch string) error
 }
 
 // StartOptions controls one Start call.

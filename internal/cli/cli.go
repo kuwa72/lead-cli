@@ -310,6 +310,25 @@ issue. Normal operation is ` + "`lead dispatch`" + `, which needs no human step.
 	runCmd := newRunCmd("run", false)
 	workCmd := newRunCmd("work", true)
 
+	resumeCmd := &cobra.Command{
+		Use:   "resume <issue|branch|pr>",
+		Short: "Resume work on an existing issue, branch, or PR",
+		Long: `Reconnect safely to existing work without creating any new branch
+or PR. The target can be an issue number, branch name, or PR number.
+If the state file is corrupted, --repair reconstructs the state record from
+Git and GitHub.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runResume(cmd, deps, args[0])
+		},
+	}
+	resumeCmd.Flags().String("worktree", "", "use or create isolated worktree: bare flag = auto path, or --worktree=<path>")
+	resumeCmd.Flags().Lookup("worktree").NoOptDefVal = "auto"
+	resumeCmd.Flags().String("agent", "", "coding agent (default: agy or previous agent)")
+	resumeCmd.Flags().String("agent-mode", "", "agent execution mode (interactive|batch|dangerous)")
+	resumeCmd.Flags().Bool("repair", false, "reconstruct state file from Git/GitHub if corrupt or missing")
+	resumeCmd.Flags().String("prompt-template", "", "prompt template name (resolves from prompts/<name>.md or built-in)")
+
 	dispatchCmd := &cobra.Command{
 		Use:   "dispatch",
 		Short: "Hand ready issues to headless agents (worktree per issue)",
@@ -539,7 +558,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, initCmd, lgtmCmd, unlgtmCmd)
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, resumeCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, initCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	return root
 }
@@ -871,6 +890,95 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 	return nil
 }
 
+// runResume implements `lead resume <issue|branch|pr>`:
+// Reconnect safely to existing work without creating new branches or PRs.
+func runResume(cmd *cobra.Command, deps Deps, target string) error {
+	flags := cmd.Flags()
+	repair, _ := flags.GetBool("repair")
+	agentName, _ := flags.GetString("agent")
+	agentMode, _ := flags.GetString("agent-mode")
+	promptTemplate, _ := flags.GetString("prompt-template")
+
+	worktreeOpt := ""
+	if wtFlag := flags.Lookup("worktree"); wtFlag != nil && wtFlag.Changed {
+		worktreeOpt = wtFlag.Value.String()
+		if worktreeOpt == "" {
+			worktreeOpt = "auto"
+		}
+	}
+
+	cwd, err := deps.workDir()
+	if err != nil {
+		return fmt.Errorf("resume: working directory: %w", err)
+	}
+
+	store := &state.Store{Path: deps.stateFile()}
+	res, err := workflow.Resume(cmd.Context(), deps.gitRunner(), store, deps.gh(), workflow.ResumeOptions{
+		Target:         target,
+		WorkDir:        cwd,
+		Worktree:       worktreeOpt,
+		Agent:          agentName,
+		AgentMode:      agentMode,
+		PromptTemplate: promptTemplate,
+		Repair:         repair,
+	})
+	if err != nil {
+		return err
+	}
+
+	out := cmd.OutOrStdout()
+	if agentName == "" {
+		agentName = res.Agent
+	}
+	resolvedAgent := agent.Resolve(agentName)
+	launchDir := res.RepoRoot
+	if res.Worktree != "" {
+		launchDir = res.Worktree
+	}
+
+	if res.Issue.Number > 0 {
+		fmt.Fprintf(out, "Issue #%d  %s  %s\n", res.Issue.Number, res.Mode, res.Status)
+	} else {
+		fmt.Fprintf(out, "Branch %s  %s  %s\n", res.Branch, res.Mode, res.Status)
+	}
+	fmt.Fprintf(out, "Branch: %s", res.Branch)
+	if res.Worktree != "" {
+		fmt.Fprintf(out, "  Worktree: %s", res.Worktree)
+	} else {
+		fmt.Fprintf(out, "  Dir: %s", launchDir)
+	}
+	fmt.Fprintf(out, "  Agent: %s\n", resolvedAgent)
+
+	if res.Pane != "" {
+		fmt.Fprintf(out, "Agent already prepared in pane %s\n", res.Pane)
+	} else {
+		effectiveMode := agentMode
+		if effectiveMode == "" {
+			effectiveMode = res.AgentMode
+		}
+		if effectiveMode == "" {
+			effectiveMode = "interactive"
+		}
+		pane, err := launchAgent(cmd.Context(), out, deps, workflow.StartResult{
+			Branch: res.Branch, Worktree: res.Worktree, Status: res.Status,
+			Repository: res.Repository, Mode: res.Mode, RepoRoot: res.RepoRoot,
+			Pane: res.Pane, AgentMode: effectiveMode,
+		}, agentName, res.Issue, effectiveMode, promptTemplate)
+		if err != nil {
+			return err
+		}
+		if res.Issue.Number > 0 {
+			if w, ok, err := store.Get(res.Issue.Number, ""); err == nil && ok {
+				w.Pane = pane
+				_ = store.Upsert(w)
+			}
+		}
+	}
+
+	fmt.Fprintln(out, "Next: review the prompt, launch the agent, then `lead status`.")
+	return nil
+}
+
 func buildPrompt(opts prompter.PromptOptions, iss ports.Issue) string {
 	opts.Number = iss.Number
 	opts.Title = iss.Title
@@ -947,6 +1055,15 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 			fmt.Fprintf(out, "  Worktree: %s", w.Worktree)
 		}
 		fmt.Fprintln(out)
+		if w.Status != state.StatusClosed && w.Status != state.StatusCompleted {
+			target := strconv.Itoa(w.Issue)
+			if w.Issue <= 0 && w.Branch != "" {
+				target = w.Branch
+			} else if w.Part != "" {
+				target = fmt.Sprintf("%d:%s", w.Issue, w.Part)
+			}
+			fmt.Fprintf(out, "Next: resume with lead resume %s\n", target)
+		}
 	}
 	return nil
 }

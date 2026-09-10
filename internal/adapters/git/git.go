@@ -90,6 +90,28 @@ func (r *Runner) CreateBranch(repoDir, branch string) error {
 	return err
 }
 
+// CheckoutBranch checks out existing branch without resetting or creating.
+func (r *Runner) CheckoutBranch(repoDir, branch string) error {
+	_, err := r.run(context.Background(), repoDir, "checkout", branch)
+	return err
+}
+
+// ListBranches returns all local branch names in repoDir.
+func (r *Runner) ListBranches(repoDir string) ([]string, error) {
+	out, err := r.run(context.Background(), repoDir, "branch", "--format=%(refname:short)")
+	if err != nil {
+		return nil, err
+	}
+	var branches []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			branches = append(branches, line)
+		}
+	}
+	return branches, nil
+}
+
 // WorktreeInfo is one entry of `git worktree list --porcelain`.
 type WorktreeInfo struct {
 	Path   string

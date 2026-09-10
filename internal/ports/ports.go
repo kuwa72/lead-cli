@@ -42,6 +42,8 @@ type GhClient interface {
 	PrChecks(ctx context.Context, pr int) ([]PRCheck, error)
 	// PrInfo mirrors `gh pr view <pr> --json number,state,mergeable,mergeStateStatus`.
 	PrInfo(ctx context.Context, pr int) (PRInfo, error)
+	// PrHeadBranch mirrors `gh pr view <pr> --json headRefName`.
+	PrHeadBranch(ctx context.Context, pr int) (string, error)
 	// PrBody mirrors `gh pr view <pr> --json body`.
 	PrBody(ctx context.Context, pr int) (string, error)
 	// PrMerge mirrors `gh pr merge <pr> --squash --delete-branch`.
@@ -132,6 +134,7 @@ type PRInfo struct {
 	State            string
 	Mergeable        string
 	MergeStateStatus string
+	HeadRefName      string
 }
 
 // Direction is the herdr pane split direction.
