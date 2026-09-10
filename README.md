@@ -38,10 +38,12 @@ Sections:
 
 | Command | Purpose |
 |---|---|
-| `lead run <n>` | manually start an issue with an interactive agent |
+| `lead run [n]` | start an issue with an interactive agent (`--mode implement/review`, interactive picker without `n`) |
+| `lead lgtm <n>` | add `lgtm` label and post LGTM comment |
+| `lead unlgtm <n>` | remove `lgtm` label |
 | `lead dispatch` | hand `ready` issues to headless agents |
-| `lead say <one-liner>` | create `needs-review` issues from a one-liner |
 | `lead status` | show active workflows |
+| `lead say <one-liner>` | create `needs-review` issues from a one-liner |
 | `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
 | `lead clean <n>` | remove the workflow worktree and state |
 | `lead init` | install the `AGENTS.md` management block |

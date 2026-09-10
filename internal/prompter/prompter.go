@@ -5,6 +5,8 @@ package prompter
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 	"unicode/utf8"
@@ -111,3 +113,97 @@ func LintTitle(title string) []string {
 	}
 	return problems
 }
+
+// IssuePromptInput holds the variables exposed to workflow prompt templates.
+type IssuePromptInput struct {
+	Number int
+	Title  string
+	Body   string
+}
+
+const defaultImplementPromptTemplate = `あなたはコーディングエージェントです。以下のGitHub IssueをTDD（テスト駆動開発）で実装してください。
+
+## 対象Issue
+- Number: #{{.Number}}
+- Title: {{.Title}}
+- Body:
+{{.Body}}
+
+## 実装手順
+1. test/ に失敗するテストを追加し、Redを確認する。
+2. 最小限の実装を行い、Greenを確認する。
+3. リファクタリングを行い、テストがパスし続けることを確認する。
+4. 全テストをパスさせ、PRを作成する。
+`
+
+const defaultReviewPromptTemplate = `あなたはIssueレビュー・品質改善エージェントです。以下のGitHub Issueの内容を精査し、改善・LGTM判定を行ってください。
+
+## レビュー対象Issue
+- Number: #{{.Number}}
+- Title: {{.Title}}
+- Body:
+{{.Body}}
+
+## レビュー観点
+1. 目的・背景が明確か
+2. 受入条件（Acceptance Criteria）が検証可能な形で書かれているか
+3. テスト方針が示されているか
+4. 適切なスコープに収まっているか
+
+## 判定・操作
+- 必要に応じて Issue 本文をより明確に改善してください。
+- レビューがOKであれば、以下を実行して lgtm ラベルを付与し、LGTM コメントを残してください:
+  lead lgtm {{.Number}}
+- 追加確認が必要な場合は Issue にコメントを残し、needs-review ラベルを維持してください。
+`
+
+// RenderWorkflowPrompt renders the agent prompt for a workflow given its mode (implement|review),
+// issue details, and an optional repository root directory for prompt template overrides.
+func RenderWorkflowPrompt(mode string, number int, title, body, repoDir string) (string, error) {
+	if mode == "" {
+		mode = "implement"
+	}
+	tplText := ""
+	// 1. Try <repoDir>/prompts/<mode>.md
+	if repoDir != "" {
+		p := filepath.Join(repoDir, "prompts", mode+".md")
+		if data, err := os.ReadFile(p); err == nil {
+			tplText = string(data)
+		}
+	}
+	// 2. Try ~/.config/lead/prompts/<mode>.md
+	if tplText == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			p := filepath.Join(home, ".config", "lead", "prompts", mode+".md")
+			if data, err := os.ReadFile(p); err == nil {
+				tplText = string(data)
+			}
+		}
+	}
+	// 3. Fallback to built-in templates
+	if tplText == "" {
+		switch mode {
+		case "review":
+			tplText = defaultReviewPromptTemplate
+		default:
+			tplText = defaultImplementPromptTemplate
+		}
+	}
+
+	tpl, err := template.New(mode).Parse(tplText)
+	if err != nil {
+		return "", fmt.Errorf("prompter: parse template for %q: %w", mode, err)
+	}
+
+	input := IssuePromptInput{
+		Number: number,
+		Title:  title,
+		Body:   body,
+	}
+	var sb strings.Builder
+	if err := tpl.Execute(&sb, input); err != nil {
+		return "", fmt.Errorf("prompter: execute template: %w", err)
+	}
+	return sb.String(), nil
+}
+

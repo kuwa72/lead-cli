@@ -27,6 +27,7 @@ const (
 // Modes of work (RFC §3).
 const (
 	ModeImplement = "implement"
+	ModeReview    = "review"
 	ModeSplit     = "split"
 	ModeResearch  = "research"
 	ModeDocs      = "docs"

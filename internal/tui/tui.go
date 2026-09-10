@@ -1,5 +1,5 @@
-// Package tui defines the embedded issue-picker contract (issue #37).
-// The terminal UI is a go-fzf adapter (internal/adapters/fzf); all logic
+// Package tui defines the embedded issue-picker contract.
+// The terminal UI is a Bubble Tea selector (BubbleteaSelector); all logic
 // here is TTY-free and covered by headless tests with FakeSelector.
 package tui
 

@@ -1,1 +1,4 @@
 dist/
+.agents/
+.serena/
+skills-lock.json
