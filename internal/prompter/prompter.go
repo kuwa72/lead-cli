@@ -116,9 +116,26 @@ func LintTitle(title string) []string {
 
 // IssuePromptInput holds the variables exposed to workflow prompt templates.
 type IssuePromptInput struct {
-	Number int
-	Title  string
-	Body   string
+	Number    int
+	Title     string
+	Body      string
+	Branch    string
+	Mode      string
+	AgentMode string
+	Rules     string
+}
+
+// PromptOptions specifies the input and template selection for workflow prompts (issue #84).
+type PromptOptions struct {
+	Template  string // template name; if empty, defaults to Mode (or "implement")
+	Mode      string
+	Number    int
+	Title     string
+	Body      string
+	Branch    string
+	AgentMode string
+	RepoDir   string
+	Rules     string
 }
 
 const defaultImplementPromptTemplate = `あなたはコーディングエージェントです。以下のGitHub IssueをTDD（テスト駆動開発）で実装してください。
@@ -128,7 +145,10 @@ const defaultImplementPromptTemplate = `あなたはコーディングエージ�
 - Title: {{.Title}}
 - Body:
 {{.Body}}
-
+{{if .Rules}}
+## プロジェクト規約
+{{.Rules}}
+{{end}}
 ## 実装手順
 1. test/ に失敗するテストを追加し、Redを確認する。
 2. 最小限の実装を行い、Greenを確認する。
@@ -157,24 +177,33 @@ const defaultReviewPromptTemplate = `あなたはIssueレビュー・品質改�
 - 追加確認が必要な場合は Issue にコメントを残し、needs-review ラベルを維持してください。
 `
 
-// RenderWorkflowPrompt renders the agent prompt for a workflow given its mode (implement|review),
-// issue details, and an optional repository root directory for prompt template overrides.
-func RenderWorkflowPrompt(mode string, number int, title, body, repoDir string) (string, error) {
+// RenderWorkflowPromptWithOptions renders the agent prompt based on PromptOptions.
+// Resolution order for templates:
+//  1. <repoDir>/prompts/<templateName>.md
+//  2. ~/.config/lead/prompts/<templateName>.md
+//  3. Built-in templates ("review", fallback to "implement")
+func RenderWorkflowPromptWithOptions(opts PromptOptions) (string, error) {
+	mode := opts.Mode
 	if mode == "" {
 		mode = "implement"
 	}
+	tplName := opts.Template
+	if tplName == "" {
+		tplName = mode
+	}
+
 	tplText := ""
-	// 1. Try <repoDir>/prompts/<mode>.md
-	if repoDir != "" {
-		p := filepath.Join(repoDir, "prompts", mode+".md")
+	// 1. Try <repoDir>/prompts/<templateName>.md
+	if opts.RepoDir != "" {
+		p := filepath.Join(opts.RepoDir, "prompts", tplName+".md")
 		if data, err := os.ReadFile(p); err == nil {
 			tplText = string(data)
 		}
 	}
-	// 2. Try ~/.config/lead/prompts/<mode>.md
+	// 2. Try ~/.config/lead/prompts/<templateName>.md
 	if tplText == "" {
 		if home, err := os.UserHomeDir(); err == nil {
-			p := filepath.Join(home, ".config", "lead", "prompts", mode+".md")
+			p := filepath.Join(home, ".config", "lead", "prompts", tplName+".md")
 			if data, err := os.ReadFile(p); err == nil {
 				tplText = string(data)
 			}
@@ -182,7 +211,7 @@ func RenderWorkflowPrompt(mode string, number int, title, body, repoDir string) 
 	}
 	// 3. Fallback to built-in templates
 	if tplText == "" {
-		switch mode {
+		switch tplName {
 		case "review":
 			tplText = defaultReviewPromptTemplate
 		default:
@@ -190,20 +219,43 @@ func RenderWorkflowPrompt(mode string, number int, title, body, repoDir string) 
 		}
 	}
 
-	tpl, err := template.New(mode).Parse(tplText)
+	rules := opts.Rules
+	if rules == "" && opts.RepoDir != "" {
+		if data, err := os.ReadFile(filepath.Join(opts.RepoDir, "AGENTS.md")); err == nil {
+			rules = strings.TrimSpace(string(data))
+		}
+	}
+
+	tpl, err := template.New(tplName).Parse(tplText)
 	if err != nil {
-		return "", fmt.Errorf("prompter: parse template for %q: %w", mode, err)
+		return "", fmt.Errorf("prompter: parse template for %q: %w", tplName, err)
 	}
 
 	input := IssuePromptInput{
-		Number: number,
-		Title:  title,
-		Body:   body,
+		Number:    opts.Number,
+		Title:     opts.Title,
+		Body:      opts.Body,
+		Branch:    opts.Branch,
+		Mode:      mode,
+		AgentMode: opts.AgentMode,
+		Rules:     rules,
 	}
 	var sb strings.Builder
 	if err := tpl.Execute(&sb, input); err != nil {
 		return "", fmt.Errorf("prompter: execute template: %w", err)
 	}
 	return sb.String(), nil
+}
+
+// RenderWorkflowPrompt renders the agent prompt for a workflow given its mode (implement|review),
+// issue details, and an optional repository root directory for prompt template overrides.
+func RenderWorkflowPrompt(mode string, number int, title, body, repoDir string) (string, error) {
+	return RenderWorkflowPromptWithOptions(PromptOptions{
+		Mode:    mode,
+		Number:  number,
+		Title:   title,
+		Body:    body,
+		RepoDir: repoDir,
+	})
 }
 

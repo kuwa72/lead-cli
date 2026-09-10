@@ -43,15 +43,26 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
 - エージェント選択: `--agent` → `$LEAD_SPEC_AGENT` → 既定（`agy`）。
   `agent.HeadlessArgv` の対応表にある CLI のみ。出力ログは状態ディレクトリの `logs/say-*.log`。
 
-## 2.2 ワークフロープロンプト (`prompter.RenderWorkflowPrompt`, issue #89)
+## 2.2 ワークフロープロンプト (`prompter.RenderWorkflowPromptWithOptions`, issue #84, #89)
 
 - 用途: `lead work` / `lead run` でエージェントを対話起動する際のプロンプト。
 - モード:
-  - `implement`: TDD での実装（Red/Green/Refactor、テスト全パス、PR 作成）。
+  - `implement`: TDD での実装（Red/Green/Refactor、テスト全パス、PR 作成）。リポジトリに `AGENTS.md` があれば自動でプロジェクト規約ブロックが注入される。
   - `review`: Issue 本文・受入条件の精緻化、レビュー、OK 時の `lgtm` ラベル付与と LGTM コメント。
-- テンプレート上書き:
-  - リポジトリ内 `prompts/<mode>.md` または `~/.config/lead/prompts/<mode>.md` で自由にカスタマイズ可能。
-  - テンプレート変数は Go の `text/template` 構文（`{{.Number}}`, `{{.Title}}`, `{{.Body}}`）。
+- テンプレート選択と解決順序:
+  - `--prompt-template <name>` フラグでテンプレート名を明示指定可能（省略時は `--mode` 名を使用）。
+  - 解決順序:
+    1. リポジトリ内 `<repoDir>/prompts/<name>.md`
+    2. ユーザー設定 `~/.config/lead/prompts/<name>.md`
+    3. 組み込みテンプレート（`implement`, `review`、未定義名は `implement` にフォールバック）
+  - テンプレート変数は Go の `text/template` 構文:
+    - `{{.Number}}`: Issue 番号
+    - `{{.Title}}`: Issue タイトル
+    - `{{.Body}}`: Issue 本文
+    - `{{.Branch}}`: 作業ブランチ名
+    - `{{.Mode}}`: 実行モード
+    - `{{.AgentMode}}`: エージェント実行モード (`interactive`, `batch`, `dangerous`)
+    - `{{.Rules}}`: リポジトリの `AGENTS.md` の内容（未設定時は空）
 
 ## 2.3 ラベル運用とピッカー分岐 (issue #89)
 

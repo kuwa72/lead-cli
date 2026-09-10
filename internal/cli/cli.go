@@ -302,6 +302,7 @@ issue. Normal operation is ` + "`lead dispatch`" + `, which needs no human step.
 		c.Flags().Bool("draft", false, "create PR as draft")
 		c.Flags().String("agent", "", "coding agent (default: agy)")
 		c.Flags().String("agent-mode", "interactive", "agent execution mode (interactive|batch|dangerous)")
+		c.Flags().String("prompt-template", "", "prompt template name (resolves from prompts/<name>.md or built-in)")
 		// Bare `--worktree` means "auto path under <repo>/.worktrees".
 		c.Flags().Lookup("worktree").NoOptDefVal = "auto"
 		return c
@@ -815,6 +816,7 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 	branchFlag, _ := flags.GetString("branch")
 	part, _ := flags.GetString("part")
 	agentMode, _ := flags.GetString("agent-mode")
+	promptTemplate, _ := flags.GetString("prompt-template")
 	worktreeOpt := ""
 	if wtFlag := flags.Lookup("worktree"); wtFlag != nil && wtFlag.Changed {
 		worktreeOpt = wtFlag.Value.String()
@@ -855,7 +857,7 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 	if res.Pane != "" {
 		fmt.Fprintf(out, "Agent already prepared in pane %s\n", res.Pane)
 	} else {
-		pane, err := launchAgent(cmd.Context(), out, deps, res, agentName, iss, agentMode)
+		pane, err := launchAgent(cmd.Context(), out, deps, res, agentName, iss, agentMode, promptTemplate)
 		if err != nil {
 			return err
 		}
@@ -869,8 +871,11 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 	return nil
 }
 
-func buildPrompt(mode string, iss ports.Issue, repoDir string) string {
-	if rendered, err := prompter.RenderWorkflowPrompt(mode, iss.Number, iss.Title, iss.Body, repoDir); err == nil {
+func buildPrompt(opts prompter.PromptOptions, iss ports.Issue) string {
+	opts.Number = iss.Number
+	opts.Title = iss.Title
+	opts.Body = iss.Body
+	if rendered, err := prompter.RenderWorkflowPromptWithOptions(opts); err == nil {
 		return rendered
 	}
 	prompt := fmt.Sprintf("Issue #%d: %s", iss.Number, iss.Title)
@@ -880,12 +885,19 @@ func buildPrompt(mode string, iss ports.Issue, repoDir string) string {
 	return prompt
 }
 
-func launchAgent(ctx context.Context, out io.Writer, deps Deps, res workflow.StartResult, agentName string, iss ports.Issue, agentMode string) (string, error) {
+func launchAgent(ctx context.Context, out io.Writer, deps Deps, res workflow.StartResult, agentName string, iss ports.Issue, agentMode string, promptTemplate string) (string, error) {
 	launchDir := res.RepoRoot
 	if res.Worktree != "" {
 		launchDir = res.Worktree
 	}
-	command, err := agent.CommandStringForMode(agentName, buildPrompt(res.Mode, iss, launchDir), agentMode)
+	prompt := buildPrompt(prompter.PromptOptions{
+		Template:  promptTemplate,
+		Mode:      res.Mode,
+		Branch:    res.Branch,
+		AgentMode: agentMode,
+		RepoDir:   launchDir,
+	}, iss)
+	command, err := agent.CommandStringForMode(agentName, prompt, agentMode)
 	if err != nil {
 		return "", fmt.Errorf("work #%d: agent command: %w", iss.Number, err)
 	}
