@@ -2,11 +2,14 @@ package inbox
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
 )
 
@@ -199,3 +202,89 @@ func TestPreview_CacheHit(t *testing.T) {
 		t.Errorf("too many view calls after cache hit: %v", gh.ViewCalls)
 	}
 }
+
+func TestPreview_KindRunningLoadsAndDisplaysAgentLog(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+
+	logDir := t.TempDir()
+	logPath := filepath.Join(logDir, "issue-70.log")
+	logContent := "[agy] step 1: starting task\n[agy] step 2: running test\n[agy] step 3: success\n"
+	if err := os.WriteFile(logPath, []byte(logContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := m.opts.Store
+	if err := store.Upsert(state.Workflow{
+		Issue:    70,
+		Status:   state.StatusInProgress,
+		Agent:    "agy",
+		Pane:     "w1:p70",
+		LogPath:  logPath,
+		Branch:   "issue/70-log-preview",
+		Attempts: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gh.Issues[70] = ports.Issue{Number: 70, Title: "feature: awesome log", Body: "issue body text", State: "OPEN"}
+
+	m, _ = Drain(m, m.loadCmd())
+	m = press(t, m, "z") // expand all sections
+
+	idx := m.rowIndex(KindRunning, 70)
+	for m.cursor < idx {
+		m = press(t, m, "j")
+	}
+
+	row, ok := m.current()
+	if !ok || row.IsHeader() || row.Item.Number != 70 {
+		t.Fatalf("expected cursor on #70, got %+v", row)
+	}
+
+	v := m.View()
+	if !strings.Contains(v, "Agent Live Output") {
+		t.Errorf("preview should contain 'Agent Live Output', got:\n%s", v)
+	}
+	if !strings.Contains(v, "[agy] step 3: success") {
+		t.Errorf("preview should contain log line '[agy] step 3: success', got:\n%s", v)
+	}
+	if !strings.Contains(v, "Agent: agy") {
+		t.Errorf("preview should contain 'Agent: agy', got:\n%s", v)
+	}
+}
+
+func TestPreview_KindRunningHandlesEmptyOrMissingLog(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+
+	missingPath := filepath.Join(t.TempDir(), "nonexistent.log")
+	store := m.opts.Store
+	if err := store.Upsert(state.Workflow{
+		Issue:   71,
+		Status:  state.StatusInProgress,
+		Agent:   "codex",
+		LogPath: missingPath,
+		Branch:  "issue/71-empty",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gh.Issues[71] = ports.Issue{Number: 71, Title: "feature: missing log", Body: "issue body", State: "OPEN"}
+
+	m, _ = Drain(m, m.loadCmd())
+	m = press(t, m, "z")
+	idx := m.rowIndex(KindRunning, 71)
+	for m.cursor < idx {
+		m = press(t, m, "j")
+	}
+
+	v := m.View()
+	if !strings.Contains(v, "Agent Live Output") {
+		t.Errorf("preview should still show 'Agent Live Output' header, got:\n%s", v)
+	}
+	if !strings.Contains(v, "Agent: codex") {
+		t.Errorf("preview should show 'Agent: codex', got:\n%s", v)
+	}
+}
+
