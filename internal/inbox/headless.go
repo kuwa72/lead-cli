@@ -52,7 +52,7 @@ func ParseKey(tok string) (tea.KeyMsg, error) {
 		"enter": tea.KeyEnter, "esc": tea.KeyEsc, "escape": tea.KeyEsc,
 		"up": tea.KeyUp, "down": tea.KeyDown, "left": tea.KeyLeft, "right": tea.KeyRight,
 		"tab": tea.KeyTab, "backspace": tea.KeyBackspace, "ctrl+c": tea.KeyCtrlC,
-		"space": tea.KeySpace,
+		"space": tea.KeySpace, "pgup": tea.KeyPgUp, "pgdown": tea.KeyPgDown,
 	}
 	if kt, ok := named[strings.ToLower(tok)]; ok {
 		return tea.KeyMsg{Type: kt}, nil
@@ -92,6 +92,7 @@ func Drain(m Model, cmd tea.Cmd) (Model, bool) {
 // the final screen to out (LEAD_TEST_INBOX_KEYS hook for shell tests).
 func RunHeadless(m Model, keys []string, out io.Writer) error {
 	m.opts.PreviewDelay = 0
+	m.opts.Headless = true
 	mode, profile, err := ResolveMode(m.opts.Theme, os.Getenv("NO_COLOR"), os.Getenv("COLORTERM"), os.Getenv("TERM"))
 	if err != nil {
 		return err

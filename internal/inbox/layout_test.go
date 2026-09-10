@@ -50,8 +50,8 @@ func TestLayout_HeightTooSmall(t *testing.T) {
 
 func TestLayout_WidthModes(t *testing.T) {
 	tests := []struct {
-		w       int
-		split   bool
+		w     int
+		split bool
 	}{
 		{80, false},
 		{119, false},
@@ -102,7 +102,7 @@ func TestLayout_ResizePreservesSelection(t *testing.T) {
 func TestLayout_SummaryLine(t *testing.T) {
 	m := newSizedFixture(t, 120, 30)
 	v := m.View()
-	for _, want := range []string{"レビュー待ち 2", "止まってる 1", "最近マージ 0", "実行中 0"} {
+	for _, want := range []string{"Needs review 2", "Blocked 1", "Merged 0", "Running 0"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("summary missing %q:\n%s", want, v)
 		}
@@ -171,7 +171,7 @@ func TestLayout_StickySectionHeader(t *testing.T) {
 	m.scrollToCursor()
 	v := m.View()
 	// The first body line should be a sticky copy of the review header.
-	if !strings.Contains(v, "レビュー待ち (22)") {
+	if !strings.Contains(v, "Needs review (22)") {
 		t.Errorf("sticky section header should stay visible, got:\n%s", v)
 	}
 }

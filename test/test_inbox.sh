@@ -151,7 +151,7 @@ grep -qxF 'GH issue edit 7 --remove-label needs-review' "$GH_LOG" || fail "needs
 grep -qxF 'GH issue edit 7 --add-label ready' "$GH_LOG" || fail "ready not added"
 grep -q 'issue close' "$GH_LOG" && fail "approve must not close"
 case "$out" in *"acme/widgets"*"#7"*) ;; *) fail "screen lacks repo header / issue row: $out";; esac
-case "$out" in *"止まってる (1)"*"#9"*) ;; *) fail "blocked section missing: $out";; esac
+case "$out" in *"Blocked (1)"*"#9"*) ;; *) fail "blocked section missing: $out";; esac
 
 # --- 3. j,a: approve second issue (8) --------------------------------------------
 : > "$GH_LOG"
@@ -208,7 +208,7 @@ grep -qxF 'GH issue view 7 --json number,title,body,state' "$GH_LOG" || fail "en
 : > "$GH_LOG"
 out="$(LEAD_TEST_INBOX_KEYS='j,j,j,enter' "$tmp/lead" 2>&1)" || fail "headless detail with PR failed"
 case "$out" in *"## Acceptance"*) ;; *) fail "detail missing issue body: $out";; esac
-case "$out" in *"PR 本文"*) ;; *) fail "detail missing PR header: $out";; esac
+case "$out" in *"PR body"*) ;; *) fail "detail missing PR header: $out";; esac
 case "$out" in *"- [ ] task A"*) ;; *) fail "detail missing PR checklist: $out";; esac
 case "$out" in *"（PR 未記録）"*) fail "detail should not show 'no PR' when linked: $out";; esac
 grep -qxF 'GH issue view 9 --json number,title,body,state' "$GH_LOG" || fail "enter did not fetch issue #9: $(cat "$GH_LOG")"
@@ -251,7 +251,7 @@ LEAD_TEST_INBOX_KEYS=bogus-key "$tmp/lead" >/dev/null 2>&1 && fail "unknown key 
 # --- 14.5. header selection and per-section toggle ----------------------------------
 : > "$GH_LOG"
 out="$(LEAD_TEST_INBOX_KEYS='up,enter,q' "$tmp/lead" 2>&1)" || fail "header toggle failed"
-case "$out" in *"▸ レビュー待ち (2)"*) ;; *) fail "review header not collapsed: $out";; esac
+case "$out" in *"▸ Needs review (2)"*) ;; *) fail "review header not collapsed: $out";; esac
 grep -qE 'issue view|issue edit|issue close|issue comment' "$GH_LOG" && fail "header enter must not call gh issue: $(cat "$GH_LOG")"
 
 # --- 15. merged section: recently closed issues show, c confirms and hides them ----
@@ -262,7 +262,7 @@ cat > "$seen_dir/inbox-seen.json" <<'EOF'
 EOF
 
 out="$(LEAD_TEST_INBOX_KEYS='z,q' "$tmp/lead" 2>&1)" || fail "headless merged show failed"
-case "$out" in *"最近マージ (1)"*"#42"*"feat: merged"*) ;; *) fail "merged issue #42 not shown: $out";; esac
+case "$out" in *"Merged (1)"*"#42"*"feat: merged"*) ;; *) fail "merged issue #42 not shown: $out";; esac
 grep -q 'issue list --state closed' "$GH_LOG" || fail "ListMergedSince not called: $(cat "$GH_LOG")"
 
 # Reset the open timestamp and confirm the merged issue.
@@ -270,25 +270,25 @@ cat > "$seen_dir/inbox-seen.json" <<'EOF'
 {"last_seen_at":"2026-09-09T00:00:00Z","confirmed":[],"help_shown":true}
 EOF
 out="$(LEAD_TEST_INBOX_KEYS='z,j,j,j,j,j,c,q' "$tmp/lead" 2>&1)" || fail "headless c on merged failed"
-case "$out" in *"最近マージ (0)"*) ;; *) fail "merged issue still shown after c: $out";; esac
-case "$out" in *"#42 を確認しました"*) ;; *) fail "c status missing: $out";; esac
+case "$out" in *"Merged (0)"*) ;; *) fail "merged issue still shown after c: $out";; esac
+case "$out" in *"Marked #42 as seen"*) ;; *) fail "c status missing: $out";; esac
 grep -q '42' "$seen_dir/inbox-seen.json" || fail "inbox-seen not updated: $(cat "$seen_dir/inbox-seen.json")"
 
 # --- 17. first launch shows help and persists dismissal ----------------------
 rm -f "$seen_dir/inbox-seen.json"
 out="$(LEAD_TEST_INBOX_KEYS='q' "$tmp/lead" 2>&1)" || fail "headless first launch failed"
-case "$out" in *"受信箱の操作一覧"*"Issueを進める"*) ;; *) fail "first-launch help missing: $out";; esac
-case "$out" in *"q / Esc で一覧に戻る"*) ;; *) fail "help return hint missing: $out";; esac
+case "$out" in *"Inbox actions"*) ;; *) fail "first-launch help missing: $out";; esac
+case "$out" in *"Press Esc, q, or any other key to go back"*) ;; *) fail "help return hint missing: $out";; esac
 case "$(cat "$seen_dir/inbox-seen.json")" in *'"help_shown":true'*|*'"help_shown": true'*) ;; *) fail "help dismissal was not persisted: $(cat "$seen_dir/inbox-seen.json")";; esac
 
 # --- 18. second launch starts in list mode after help was dismissed -----------
 out="$(LEAD_TEST_INBOX_KEYS='q' "$tmp/lead" 2>&1)" || fail "headless second launch failed"
-case "$out" in *"受信箱の操作一覧"*) fail "help unexpectedly shown on second launch: $out";; esac
-case "$out" in *"? 操作一覧"*"q 終了"*) ;; *) fail "list footer labels missing: $out";; esac
+case "$out" in *"Inbox actions"*) fail "help unexpectedly shown on second launch: $out";; esac
+case "$out" in *"[?] Help"*"[q] Quit"*) ;; *) fail "list footer labels missing: $out";; esac
 
 # --- 18. organized help uses outcome-oriented Japanese labels ----------------
 out="$(LEAD_TEST_INBOX_KEYS='?' "$tmp/lead" 2>&1)" || fail "explicit help failed"
-for label in "Issueを進める" "エージェントを確認する" "マージ後に確認する" "全体操作" "移動" "Enter / space / → / l" "z / Tab" "p エージェント画面" "s 新規起票" "n 不具合報告" "c 確認済み" "? 操作一覧"; do
+for label in "Issue actions" "Peek agent log" "Mark as seen" "Global" "Move" "Enter/space" "z/Tab" "[p] Peek" "[s] New issue" "[n] Report bug" "[c] Mark as seen" "[?] Toggle this help"; do
   case "$out" in *"$label"*) ;; *) fail "help missing $label: $out";; esac
 done
 

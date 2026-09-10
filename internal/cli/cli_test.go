@@ -222,10 +222,10 @@ func TestBareLeadParallelFlagIsWired(t *testing.T) {
 	if got, _ := root.Flags().GetInt("parallel"); got != 3 {
 		t.Errorf("--parallel flag = %d, want 3", got)
 	}
-	if !strings.Contains(out.String(), "並列上限 3") {
+	if !strings.Contains(out.String(), "parallel 3") {
 		t.Errorf("inbox header should show parallel limit 3, got:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "実行中 0") {
+	if !strings.Contains(out.String(), "Running 0") {
 		t.Errorf("inbox header should show running count, got:\n%s", out.String())
 	}
 }

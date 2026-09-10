@@ -248,7 +248,7 @@ func (m Model) rowIndex(kind Kind, number int) int {
 	return 0
 }
 
-var blockedReasonHeading = regexp.MustCompile(`(?mi)^#{1,6}\s*(?:Blocked reason|停止理由|blocked)\s*[:：-]?\s*(.*)$`)
+var blockedReasonHeading = regexp.MustCompile(`(?mi)^#{1,6}\s*(?:Blocked reason|blocked)\s*[:：-]?\s*(.*)$`)
 
 // extractBlockedReason pulls a structured stop reason from the issue body.
 func extractBlockedReason(body string) string {
@@ -453,13 +453,13 @@ func (m Model) detailContent() string {
 	}
 	if m.detailPrNum > 0 {
 		if m.detailPrErr {
-			fmt.Fprintf(&b, "## PR 本文 · PR details unavailable (#%d)\n\n", m.detailPrNum)
+			fmt.Fprintf(&b, "## PR body · PR details unavailable (#%d)\n\n", m.detailPrNum)
 		} else if m.detailPrBody != "" {
-			fmt.Fprintf(&b, "## PR 本文 · PR #%d\n", m.detailPrNum)
+			fmt.Fprintf(&b, "## PR body · PR #%d\n", m.detailPrNum)
 			b.WriteString(m.detailPrBody)
 			b.WriteString("\n\n")
 		} else {
-			fmt.Fprintf(&b, "## PR 本文 · PR #%d (no body)\n\n", m.detailPrNum)
+			fmt.Fprintf(&b, "## PR body · PR #%d (no body)\n\n", m.detailPrNum)
 		}
 	} else {
 		b.WriteString("No linked PR\n\n")
