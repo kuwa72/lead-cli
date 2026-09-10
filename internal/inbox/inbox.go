@@ -35,7 +35,7 @@ type Options struct {
 	Now     func() time.Time
 	// Say turns a one-liner into needs-review issues via the spec AI
 	// (`lead say`, issue #94) and returns a human summary. followUp > 0
-	// files a 実機NG follow-up referencing that issue (inbox n key).
+	// files a real-device-regression follow-up referencing that issue (inbox n key).
 	// Nil disables s/n.
 	Say func(ctx context.Context, oneLiner string, followUp int) (string, error)
 	// Parallel is the dispatcher's parallel limit for the header.
@@ -48,6 +48,8 @@ type Options struct {
 	// cursor moves. Interactive runs set this to 150ms; headless tests
 	// leave it at zero so previews load synchronously.
 	PreviewDelay time.Duration
+	// Headless is set by RunHeadless to avoid blocking timers in tests.
+	Headless bool
 	// Theme is the LEAD_THEME environment value (empty = terminal default).
 	Theme string
 }
@@ -65,39 +67,42 @@ type inputState struct {
 	prompt       string
 	text         []rune
 	submit       func(text string) tea.Cmd
-	targetNumber int // issue number being acted on, 0 for actions without a target (s)
+	targetNumber int    // issue number being acted on, 0 for actions without a target (s)
+	action       string // "send" or "reject"; drives the input footer
 }
 
 // Model is the bubbletea model. Construct with New.
 type Model struct {
-	opts            Options
-	sections        []Section
-	cursor          int
-	expanded        bool
-	mode            mode
-	detail          ports.Issue
-	detailOffset    int
-	detailPrBody    string
-	detailPrNum     int
-	detailPrErr     bool
-	detailComments  []ports.Comment
+	opts              Options
+	sections          []Section
+	cursor            int
+	expanded          bool
+	mode              mode
+	detail            ports.Issue
+	detailOffset      int
+	detailPrBody      string
+	detailPrNum       int
+	detailPrErr       bool
+	detailComments    []ports.Comment
 	detailCommentsErr bool
-	input           inputState
-	status          string
-	loadErr         error
-	loading         bool
-	refreshedAt     time.Time
-	sessionSince    time.Time // loaded last_seen_at at session start; refresh uses this
-	width           int
-	height          int
-	listTop         int       // first visible row in the scrolled list body
-	selectedIssue   int       // issue number under the cursor (0 when a header is selected)
-	previewReq      int       // monotonic id to discard stale preview responses
-	previewLoading  bool
-	previewErr      error
-	previewCache    map[int]previewSnapshot
-	pendingOps      map[int]bool // issue numbers with in-flight state-changing operations
-	theme           *Theme       // nil-safe; set by Run/RunHeadless
+	input             inputState
+	status            string
+	loadErr           error
+	loading           bool
+	refreshedAt       time.Time
+	sessionSince      time.Time // loaded last_seen_at at session start; refresh uses this
+	width             int
+	height            int
+	listTop           int // first visible row in the scrolled list body
+	selectedIssue     int // issue number under the cursor (0 when a header is selected)
+	previewReq        int // monotonic id to discard stale preview responses
+	previewLoading    bool
+	previewErr        error
+	previewCache      map[int]previewSnapshot
+	pendingOps        map[int]bool // issue numbers with in-flight state-changing operations
+	theme             *Theme       // nil-safe; set by Run/RunHeadless
+	helpReturnMode    mode         // mode to restore when help is dismissed
+	statusGen         int          // generation counter for status auto-clear
 }
 
 // Messages.
@@ -146,7 +151,10 @@ type (
 		body   string
 		err    error
 	}
-	tickMsg time.Time
+	tickMsg        time.Time
+	statusClearMsg struct {
+		gen int
+	}
 )
 
 // New builds the model; call Init (or Run/RunHeadless) to load data.
@@ -322,6 +330,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tickMsg:
 		return m, tea.Batch(m.loadCmd(), m.tickCmd())
+	case statusClearMsg:
+		if msg.gen == m.statusGen {
+			m.status = ""
+		}
+		return m, nil
 	case loadedMsg:
 		m.loading = false
 		m.loadErr = msg.err
@@ -360,19 +373,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(m.pendingOps, msg.number)
 		}
 		if msg.err != nil {
-			m.status = "エラー: " + msg.err.Error()
-		} else {
-			m.status = msg.status
+			return m, m.setStatus("Error: " + msg.err.Error())
 		}
-		if msg.refresh && msg.err == nil {
+		cmd := m.setStatus(msg.status)
+		if msg.refresh {
 			m.loading = true
-			return m, m.loadCmd()
+			return m, tea.Batch(m.loadCmd(), cmd)
 		}
-		return m, nil
+		return m, cmd
 	case detailMsg:
 		if msg.err != nil {
-			m.status = "エラー: " + msg.err.Error()
-			return m, nil
+			return m, m.setStatus("Error: Could not load details. " + msg.err.Error())
 		}
 		m.detail = msg.issue
 		m.detailOffset = 0
@@ -417,8 +428,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.doApproveCmd(msg.number)
 	case editBodyMsg:
 		if msg.err != nil {
-			m.status = "エラー: " + msg.err.Error()
-			return m, nil
+			return m, m.setStatus("Error: Could not load issue. " + msg.err.Error())
 		}
 		// Remember the body we are about to edit so approveWithBodyCmd can detect
 		// concurrent changes.
@@ -427,8 +437,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.openEditorForBody(msg.issue)
 	case editedMsg:
 		if msg.err != nil {
-			m.status = "エラー: " + msg.err.Error()
-			return m, nil
+			return m, m.setStatus("Error: Editor failed. " + msg.err.Error())
 		}
 		m.pendingOps[msg.number] = true
 		return m, m.approveWithBodyCmd(msg.number, msg.body)
@@ -446,10 +455,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case modeDetail:
 			return m.updateDetail(msg)
 		case modeHelp:
-			m.mode = modeList
+			if m.helpReturnMode == modeDetail {
+				m.mode = modeDetail
+			} else {
+				m.mode = modeList
+			}
+			m.helpReturnMode = modeList
 			if m.opts.Seen != nil {
 				if err := m.opts.Seen.MarkHelpShown(); err != nil {
-					m.status = "読込エラー: " + err.Error()
+					m.setStatus("Error: Could not save help state. " + err.Error())
 				}
 			}
 			return m, nil
@@ -493,36 +507,40 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		return m, m.loadCmd()
 	case "?":
+		m.helpReturnMode = modeList
 		m.mode = modeHelp
 		return m, nil
 	case "r":
 		return m.openAgentsMd()
 	case "s":
 		if m.opts.Say == nil {
-			m.status = "s 新規起票は未設定です（spec AI なし）。`lead say \"一言\"` を直接実行できます"
-			return m, nil
+			return m, m.setStatus("s is not configured (no spec AI). Run `lead say \"one-liner\"` directly.")
 		}
 		say := m.opts.Say
 		m.mode = modeInput
-		m.input = inputState{prompt: "新規起票 — 一言（Enter でレビュー待ちを起票, Esc 取消）> ", submit: func(text string) tea.Cmd {
-			if text == "" {
-				return func() tea.Msg { return doneMsg{status: "空の一言は起票しません"} }
-			}
-			return func() tea.Msg {
-				summary, err := say(context.Background(), text, 0)
-				if err != nil {
-					return doneMsg{err: err}
+		m.input = inputState{
+			action: "send",
+			prompt: "New issue — one-liner (Enter to file needs-review, Esc cancel) > ",
+			submit: func(text string) tea.Cmd {
+				if text == "" {
+					return func() tea.Msg { return doneMsg{status: "Empty one-liner; nothing filed."} }
 				}
-				return doneMsg{status: summary, refresh: true}
-			}
-		}}
+				return func() tea.Msg {
+					summary, err := say(context.Background(), text, 0)
+					if err != nil {
+						return doneMsg{err: err}
+					}
+					return doneMsg{status: summary, refresh: true}
+				}
+			},
+		}
 		return m, nil
 	}
 
 	row, ok := m.current()
 	if !ok {
 		if key != "" {
-			m.status = "対象がありません"
+			return m, m.setStatus("No item selected")
 		}
 		return m, nil
 	}
@@ -535,7 +553,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if key != "" {
-			m.status = "区画ヘッダーが選択中です"
+			return m, m.setStatus("Section header selected")
 		}
 		return m, nil
 	}
@@ -546,23 +564,19 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.openDetailCmd(it)
 	case "a":
 		if it.Kind != KindNeedsReview {
-			m.status = fmt.Sprintf("#%d は承認対象外（レビュー待ちの Issue のみ a で ready にできます）", it.Number)
-			return m, nil
+			return m, m.setStatus(fmt.Sprintf("#%d is not needs-review (a only approves needs-review issues)", it.Number))
 		}
 		if m.pendingOps[it.Number] {
-			m.status = fmt.Sprintf("Already processing #%d", it.Number)
-			return m, nil
+			return m, m.setStatus(fmt.Sprintf("Already processing #%d", it.Number))
 		}
 		m.pendingOps[it.Number] = true
 		return m, m.startApproveCmd(it.Number)
 	case "e":
 		if it.Kind != KindNeedsReview {
-			m.status = fmt.Sprintf("#%d は編集して承認の対象外（レビュー待ちのみ）", it.Number)
-			return m, nil
+			return m, m.setStatus(fmt.Sprintf("#%d cannot be edited (e is only for needs-review issues)", it.Number))
 		}
 		if strings.TrimSpace(m.opts.Editor) == "" {
-			m.status = "$EDITOR が未設定のため e は使えません"
-			return m, nil
+			return m, m.setStatus("e requires $EDITOR")
 		}
 		return m, func() tea.Msg {
 			iss, err := gh.View(context.Background(), it.Number)
@@ -570,14 +584,14 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "x":
 		if !it.Kind.IsIssueQueue() {
-			m.status = fmt.Sprintf("#%d は却下対象外（ラベル区画の Issue のみ）", it.Number)
-			return m, nil
+			return m, m.setStatus(fmt.Sprintf("#%d cannot be rejected (x is only for label-driven issues)", it.Number))
 		}
 		number := it.Number
 		m.mode = modeInput
 		m.input = inputState{
+			action:       "reject",
 			targetNumber: number,
-			prompt:       fmt.Sprintf("却下理由 #%d（空で理由なし close, Esc 取消）> ", number),
+			prompt:       fmt.Sprintf("Reject #%d — reason (empty closes without comment, Esc cancel) > ", number),
 			submit: func(text string) tea.Cmd {
 				return func() tea.Msg {
 					ctx := context.Background()
@@ -589,7 +603,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					if err := gh.IssueClose(ctx, number); err != nil {
 						return doneMsg{err: err, number: number}
 					}
-					return doneMsg{status: fmt.Sprintf("#%d を却下（close）しました", number), refresh: true, number: number}
+					return doneMsg{status: fmt.Sprintf("Rejected #%d", number), refresh: true, number: number}
 				}
 			},
 		}
@@ -598,66 +612,59 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		number := it.Number
 		m.mode = modeInput
 		m.input = inputState{
+			action:       "send",
 			targetNumber: number,
-			prompt:       fmt.Sprintf("一言 #%d（Enter 送信, Esc 取消）> ", number),
+			prompt:       fmt.Sprintf("Reply #%d (Enter to send, Esc cancel) > ", number),
 			submit: func(text string) tea.Cmd {
 				if text == "" {
-					return func() tea.Msg { return doneMsg{status: "空のコメントは送りません"} }
+					return func() tea.Msg { return doneMsg{status: "Empty comment; nothing sent."} }
 				}
 				return func() tea.Msg {
 					if err := gh.IssueComment(context.Background(), number, text); err != nil {
 						return doneMsg{err: err, number: number}
 					}
-					return doneMsg{status: fmt.Sprintf("#%d にコメントしました", number), number: number}
+					return doneMsg{status: fmt.Sprintf("Commented on #%d", number), number: number}
 				}
 			},
 		}
 		return m, nil
 	case "o":
-		return m, func() tea.Msg {
-			if err := gh.BrowseIssue(context.Background(), it.Number); err != nil {
-				return doneMsg{err: err}
-			}
-			return doneMsg{status: fmt.Sprintf("#%d をブラウザで開きました", it.Number)}
-		}
+		return m, m.openBrowserCmd(it)
 	case "c":
 		if it.Kind != KindMerged {
-			m.status = fmt.Sprintf("#%d は確認済み対象外（最近マージの Issue のみ c で確認できます）", it.Number)
-			return m, nil
+			return m, m.setStatus(fmt.Sprintf("#%d is not merged (c only marks merged issues as seen)", it.Number))
 		}
 		if m.opts.Seen == nil {
-			m.status = "読み込み状態がありません"
-			return m, nil
+			return m, m.setStatus("Read-state tracking is not available")
 		}
 		number := it.Number
 		if m.pendingOps[number] {
-			m.status = fmt.Sprintf("Already processing #%d", number)
-			return m, nil
+			return m, m.setStatus(fmt.Sprintf("Already processing #%d", number))
 		}
 		m.pendingOps[number] = true
 		return m, func() tea.Msg {
 			if err := m.opts.Seen.Confirm(number); err != nil {
 				return doneMsg{err: err, number: number}
 			}
-			return doneMsg{status: fmt.Sprintf("#%d を確認しました", number), refresh: true, number: number}
+			return doneMsg{status: fmt.Sprintf("Marked #%d as seen", number), refresh: true, number: number}
 		}
 	case "p":
 		return m.peekItem(it)
 	case "n":
 		if m.opts.Say == nil {
-			m.status = "n 不具合報告は未設定です（spec AI なし）。`lead say --follow-up N \"一言\"` を直接実行できます"
-			return m, nil
+			return m, m.setStatus("n is not configured (no spec AI). Run `lead say --follow-up N \"one-liner\"` directly.")
 		}
 		say := m.opts.Say
 		number := it.Number
 		kind := it.Kind
 		m.mode = modeInput
 		m.input = inputState{
+			action:       "send",
 			targetNumber: number,
-			prompt:       fmt.Sprintf("不具合報告 #%d — 一言（Enter で追い Issue 起票, Esc 取消）> ", number),
+			prompt:       fmt.Sprintf("Bug report #%d — one-liner (Enter to file follow-up, Esc cancel) > ", number),
 			submit: func(text string) tea.Cmd {
 				if text == "" {
-					return func() tea.Msg { return doneMsg{status: "空の一言は起票しません"} }
+					return func() tea.Msg { return doneMsg{status: "Empty one-liner; nothing filed."} }
 				}
 				return func() tea.Msg {
 					ctx := context.Background()
@@ -709,6 +716,16 @@ func (m Model) openDetailCmd(it Item) tea.Cmd {
 	}
 }
 
+func (m Model) openBrowserCmd(it Item) tea.Cmd {
+	gh := m.opts.Gh
+	return func() tea.Msg {
+		if err := gh.BrowseIssue(context.Background(), it.Number); err != nil {
+			return doneMsg{err: err}
+		}
+		return doneMsg{status: fmt.Sprintf("Opened #%d in browser", it.Number)}
+	}
+}
+
 func (m Model) startApproveCmd(number int) tea.Cmd {
 	gh := m.opts.Gh
 	return func() tea.Msg {
@@ -741,7 +758,7 @@ func (m Model) doApprove(number int) (string, error) {
 	if err := gh.IssueAddLabel(ctx, number, LabelReady); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("#%d を承認: needs-review → ready", number), nil
+	return fmt.Sprintf("Approved #%d (needs-review → ready)", number), nil
 }
 
 func (m Model) approveWithBodyCmd(number int, body string) tea.Cmd {
@@ -802,12 +819,10 @@ func (m Model) openEditorForBody(iss ports.Issue) tea.Cmd {
 
 func (m Model) openAgentsMd() (tea.Model, tea.Cmd) {
 	if strings.TrimSpace(m.opts.Editor) == "" {
-		m.status = "$EDITOR が未設定のため r は使えません"
-		return m, nil
+		return m, m.setStatus("r requires $EDITOR")
 	}
 	if m.opts.AgentsPath == "" {
-		m.status = "AGENTS.md の場所が不明です（リポジトリ内で起動してください）"
-		return m, nil
+		return m, m.setStatus("AGENTS.md path unknown (run inside a repository)")
 	}
 	argv := editorArgv(m.opts.Editor, m.opts.AgentsPath)
 	c := exec.Command(argv[0], argv[1:]...)
@@ -816,18 +831,16 @@ func (m Model) openAgentsMd() (tea.Model, tea.Cmd) {
 		if err != nil {
 			return doneMsg{err: fmt.Errorf("editor: %w", err)}
 		}
-		return doneMsg{status: "規約を編集しました: " + path}
+		return doneMsg{status: "Updated AGENTS.md: " + path}
 	})
 }
 
 func (m Model) peekItem(it Item) (tea.Model, tea.Cmd) {
 	if it.Kind != KindRunning && it.Kind != KindBlocked {
-		m.status = fmt.Sprintf("#%d は実行中/止まってるエージェントではありません（p は実行中/止まってるエージェントのみ）", it.Number)
-		return m, nil
+		return m, m.setStatus(fmt.Sprintf("#%d is not a running or blocked agent (p only peeks running or blocked agents)", it.Number))
 	}
 	if it.LogPath == "" && it.Pane == "" {
-		m.status = fmt.Sprintf("#%d のエージェントログもペインもありません", it.Number)
-		return m, nil
+		return m, m.setStatus(fmt.Sprintf("#%d has no agent log or pane", it.Number))
 	}
 	if it.LogPath != "" {
 		return m, m.peekWithHerdrOrPager(it.Number, it.LogPath, it.Pane)
@@ -835,8 +848,7 @@ func (m Model) peekItem(it Item) (tea.Model, tea.Cmd) {
 	if m.opts.Herdr != nil {
 		return m, m.peekHerdrCmd(it.Number, "", it.Pane)
 	}
-	m.status = fmt.Sprintf("#%d のペインを開くには herdr が必要です", it.Number)
-	return m, nil
+	return m, m.setStatus(fmt.Sprintf("#%d needs herdr to open a pane", it.Number))
 }
 
 func (m Model) peekWithHerdrOrPager(number int, logPath, pane string) tea.Cmd {
@@ -851,7 +863,7 @@ func (m Model) peekWithHerdrOrPager(number int, logPath, pane string) tea.Cmd {
 		if err != nil {
 			return doneMsg{err: err}
 		}
-		return doneMsg{status: fmt.Sprintf("#%d のエージェントログを herdr タブで開きました", number)}
+		return doneMsg{status: fmt.Sprintf("Opened #%d agent log in herdr tab", number)}
 	}
 }
 
@@ -859,15 +871,15 @@ func (m Model) peekHerdrCmd(number int, logPath, pane string) tea.Cmd {
 	return func() tea.Msg {
 		err := m.opts.Herdr.Peek(context.Background(), logPath, pane)
 		if ports.IsPaneNotFound(err) {
-			return doneMsg{status: fmt.Sprintf("#%d のエージェントペインが見つかりません（セッションが変わった可能性があります）", number)}
+			return doneMsg{status: fmt.Sprintf("#%d agent pane not found (session may have changed)", number)}
 		}
 		if err != nil {
 			return doneMsg{err: err}
 		}
 		if logPath != "" {
-			return doneMsg{status: fmt.Sprintf("#%d のエージェントログを herdr タブで開きました", number)}
+			return doneMsg{status: fmt.Sprintf("Opened #%d agent log in herdr tab", number)}
 		}
-		return doneMsg{status: fmt.Sprintf("#%d のエージェント画面を herdr タブで開きました", number)}
+		return doneMsg{status: fmt.Sprintf("Opened #%d agent pane in herdr tab", number)}
 	}
 }
 
@@ -882,7 +894,7 @@ func (m Model) peekPagerCmd(number int, logPath string) tea.Cmd {
 		if err != nil {
 			return doneMsg{err: fmt.Errorf("pager: %w", err)}
 		}
-		return doneMsg{status: fmt.Sprintf("#%d のエージェントログを開きました", number)}
+		return doneMsg{status: fmt.Sprintf("Opened #%d agent log", number)}
 	})
 }
 
@@ -890,8 +902,7 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc, tea.KeyCtrlC:
 		m.mode = modeList
-		m.status = "取り消しました"
-		return m, nil
+		return m, m.setStatus("Canceled")
 	case tea.KeyEnter:
 		m.mode = modeList
 		text := strings.TrimSpace(string(m.input.text))
@@ -922,17 +933,41 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch keyString(msg) {
 	case "esc", "q", "enter":
 		m.mode = modeList
+		m.detailOffset = 0
 		return m, nil
 	case "ctrl+c":
 		return m, tea.Quit
+	case "?":
+		m.helpReturnMode = modeDetail
+		m.mode = modeHelp
+		return m, nil
+	case "o":
+		if row, ok := m.current(); ok && !row.IsHeader() {
+			return m, m.openBrowserCmd(*row.Item)
+		}
 	case "j", "down":
 		m.detailOffset++
 	case "k", "up":
 		if m.detailOffset > 0 {
 			m.detailOffset--
 		}
+	case "pgdown":
+		m.detailOffset += m.detailPageSize()
+	case "pgup":
+		if m.detailOffset > m.detailPageSize() {
+			m.detailOffset -= m.detailPageSize()
+		} else {
+			m.detailOffset = 0
+		}
 	}
 	return m, nil
+}
+
+func (m Model) detailPageSize() int {
+	if m.height > 0 {
+		return max(1, m.height-4)
+	}
+	return 10
 }
 
 // --- view ---------------------------------------------------------------------
@@ -965,9 +1000,9 @@ func (m Model) headerLine(w int) string {
 	if m.opts.Repo != "" {
 		left += " — " + Sanitize(m.opts.Repo)
 	}
-	right := fmt.Sprintf("実行中 %d / 並列上限 %d", m.runningCount(), m.opts.Parallel)
+	right := fmt.Sprintf("Running %d / parallel %d", m.runningCount(), m.opts.Parallel)
 	if m.loading {
-		right += "   ⟳ 読込中"
+		right += "   ⟳ Loading…"
 	} else if age := relAge(m.refreshedAt, m.opts.Now()); age != "" {
 		right += "   ⟳ " + age
 	}
@@ -1017,15 +1052,30 @@ func (m Model) summaryLine(w int) string {
 	return m.theme.Render(plain, TokenFgSecondary, TokenBgCanvas, false, false, false)
 }
 
+func (m *Model) setStatus(s string) tea.Cmd {
+	m.status = s
+	m.statusGen++
+	if m.opts.Headless || strings.HasPrefix(s, "Error:") || strings.HasPrefix(s, "Issue changed") {
+		return nil
+	}
+	return m.statusClearCmd(m.statusGen)
+}
+
+func (m Model) statusClearCmd(gen int) tea.Cmd {
+	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+		return statusClearMsg{gen: gen}
+	})
+}
+
 func (m Model) statusLine(w int) string {
 	var s string
 	switch {
 	case m.status != "":
 		s = m.status
 	case m.loadErr != nil:
-		s = "読込エラー: " + Sanitize(m.loadErr.Error())
+		s = "Error: Could not load inbox. " + Sanitize(m.loadErr.Error())
 	default:
-		s = "j/k 移動  Enter 詳細  ? 操作一覧"
+		s = "j/k move  Enter open  ? help  q quit"
 	}
 	plain := padRight(truncTail(s, w), w)
 	if m.theme == nil {
@@ -1114,25 +1164,7 @@ func (m Model) bodyHeightFor(footerLines int) int {
 }
 
 func (m Model) footer() string {
-	tokens := []string{"s 新規起票", "r AGENTS.md", "R 更新", "? 操作一覧", "q 終了"}
-	if row, ok := m.current(); ok {
-		if row.IsHeader() {
-			if len(row.Section.Items) > 0 {
-				tokens = []string{"Enter 開閉", "→ 開閉", "z 全開閉", "? 操作一覧", "q 終了"}
-			}
-		} else {
-			switch row.Item.Kind {
-			case KindNeedsReview:
-				tokens = []string{"a 承認", "e 編集", "t コメント", "x 却下", "Enter 詳細", "? 操作一覧", "q 終了"}
-			case KindBlocked:
-				tokens = []string{"t 再指示", "p エージェント画面", "x 却下", "Enter 詳細", "? 操作一覧", "q 終了"}
-			case KindMerged:
-				tokens = []string{"c 確認済み", "n 不具合報告", "p エージェント画面", "o ブラウザ", "Enter 詳細", "? 操作一覧", "q 終了"}
-			case KindRunning:
-				tokens = []string{"p エージェント画面", "o ブラウザ", "Enter 詳細", "? 操作一覧", "q 終了"}
-			}
-		}
-	}
+	tokens := m.footerTokens()
 	width := m.width
 	if width <= 0 {
 		width = 78
@@ -1159,6 +1191,40 @@ func (m Model) footer() string {
 		return plain
 	}
 	return m.theme.Render(plain, TokenFgSecondary, TokenBgCanvas, false, false, false)
+}
+
+func (m Model) footerTokens() []string {
+	switch m.mode {
+	case modeInput:
+		if m.input.action == "reject" {
+			return []string{"[Enter] Reject", "[Esc] Cancel"}
+		}
+		return []string{"[Enter] Send", "[Esc] Cancel"}
+	case modeDetail:
+		return []string{"[↑/↓] Scroll", "[PgUp/PgDn] Page", "[o] Browser", "[?] Help", "[Esc] Back"}
+	case modeList:
+		row, ok := m.current()
+		if !ok {
+			return []string{"[s] New", "[?] Help", "[q] Quit"}
+		}
+		if row.IsHeader() {
+			if len(row.Section.Items) > 0 {
+				return []string{"[Enter] Toggle", "[z] Toggle all", "[s] New", "[?] Help", "[q] Quit"}
+			}
+			return []string{"[s] New", "[?] Help", "[q] Quit"}
+		}
+		switch row.Item.Kind {
+		case KindNeedsReview:
+			return []string{"[Enter] Open", "[a] Approve", "[t] Reply", "[?] Help", "[q] Quit"}
+		case KindBlocked:
+			return []string{"[Enter] Open", "[t] Reply", "[p] Peek", "[?] Help", "[q] Quit"}
+		case KindMerged:
+			return []string{"[Enter] Open", "[n] Report bug", "[c] Mark seen", "[?] Help", "[q] Quit"}
+		case KindRunning:
+			return []string{"[Enter] Open", "[p] Peek", "[o] Browser", "[?] Help", "[q] Quit"}
+		}
+	}
+	return []string{"[?] Help", "[q] Quit"}
 }
 
 func itemMeta(it Item, now time.Time) string {
@@ -1203,7 +1269,7 @@ func (m Model) viewDetail() string {
 		b.WriteString(l + "\n")
 	}
 	b.WriteString(m.rule() + "\n")
-	b.WriteString("j/k スクロール  Esc/q 戻る\n")
+	b.WriteString(m.footer() + "\n")
 	out := b.String()
 	if m.theme != nil {
 		out = m.theme.Render(out, TokenFgPrimary, TokenBgSurface, false, false, false)
@@ -1213,37 +1279,39 @@ func (m Model) viewDetail() string {
 
 func (m Model) viewHelp() string {
 	out := strings.Join([]string{
-		"受信箱の操作一覧",
+		"Inbox actions",
 		m.rule(),
-		"Issueを進める",
-		"  a  承認 — レビュー待ちを完了にする",
-		"  e  編集 — 本文を直してから承認する",
-		"  t  コメント — Issue に指示や補足を送る",
-		"  x  却下 — 理由を残して Issue を閉じる",
-		"  Enter  詳細 — Issue 本文と関連情報を読む",
+		"Move",
+		"  [j/k] or [↑/↓]    Move up/down (headers and issues)",
+		"  [Enter/space/→/l] Toggle section or open selected issue",
+		"  [z/Tab]           Toggle all sections",
 		"",
-		"エージェントを確認する",
-		"  p エージェント画面 — 実行中/停止中の画面を開く",
+		"Issue actions",
+		"  [a] Approve           needs-review issues only",
+		"  [e] Edit then approve needs-review issues only",
+		"  [t] Reply / comment   any issue",
+		"  [x] Reject / close    any issue with optional reason",
+		"  [p] Peek agent log    running or blocked agents only",
+		"  [o] Open in browser   any issue",
+		"  [c] Mark as seen      merged issues only",
+		"  [n] Report bug         merged issues only",
 		"",
-		"マージ後に確認する",
-		"  c 確認済み — マージ済みの Issue を一覧から外す",
-		"  n 不具合報告 — 元 Issue を参照する追い Issue を起票する",
-		"  o  ブラウザ — Issue のページを開く",
+		"Global",
+		"  [s] New issue from one-liner",
+		"  [r] Open AGENTS.md",
+		"  [R] Reload inbox",
+		"  [?] Toggle this help",
+		"  [q] Quit inbox",
 		"",
-		"全体操作",
-		"  s 新規起票 — 一言からレビュー待ちの Issue を起票する",
-		"  r  AGENTS.md — プロジェクトのルールを開く",
-		"  R  更新 — 最新の一覧を読み直す",
-		"  ?  操作一覧 — この画面を開く",
-		"  q  終了 — 受信箱を閉じる",
-		"",
-		"移動",
-		"  j/k  上下に移動する（区画ヘッダーと Issue 行を連続）",
-		"  Enter / space / → / l  区画を開閉する",
-		"  z / Tab  すべての区画を開閉する",
+		"Detail (full-screen)",
+		"  [j/k] or [↑/↓]  Scroll",
+		"  [PgUp/PgDn]     Page",
+		"  [o] Open in browser",
+		"  [?] This help",
+		"  [Esc/q] Back to list",
 		"",
 		m.rule(),
-		"q / Esc で一覧に戻る（その他のキーでも戻ります）",
+		"Press Esc, q, or any other key to go back",
 		"",
 	}, "\n")
 	if m.theme != nil {
@@ -1252,7 +1320,7 @@ func (m Model) viewHelp() string {
 	return out
 }
 
-// relAge renders "N秒前"-style ages; zero time yields "".
+// relAge renders compact ages ("1m"-style); zero time yields "".
 func relAge(t, now time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -1260,13 +1328,13 @@ func relAge(t, now time.Time) string {
 	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
-		return fmt.Sprintf("%d秒前", int(d.Seconds()))
+		return fmt.Sprintf("%ds", int(d.Seconds()))
 	case d < time.Hour:
-		return fmt.Sprintf("%d分前", int(d.Minutes()))
+		return fmt.Sprintf("%dm", int(d.Minutes()))
 	case d < 24*time.Hour:
-		return fmt.Sprintf("%d時間前", int(d.Hours()))
+		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
-	return fmt.Sprintf("%d日前", int(d.Hours()/24))
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
 // RepoSlug extracts "owner/name" from a git remote URL ("" when unknown).

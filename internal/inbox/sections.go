@@ -38,13 +38,13 @@ const (
 func (k Kind) Title() string {
 	switch k {
 	case KindNeedsReview:
-		return "レビュー待ち"
+		return "Needs review"
 	case KindBlocked:
-		return "止まってる"
+		return "Blocked"
 	case KindMerged:
-		return "最近マージ"
+		return "Merged"
 	case KindRunning:
-		return "実行中"
+		return "Running"
 	}
 	return "?"
 }
@@ -53,7 +53,7 @@ func (k Kind) Title() string {
 // approve/reject keys (only label-driven sections do).
 func (k Kind) IsIssueQueue() bool { return k == KindNeedsReview || k == KindBlocked }
 
-// MaxMergedItems caps the "最近マージ" section to keep the inbox readable.
+// MaxMergedItems caps the "Merged" section to keep the inbox readable.
 const MaxMergedItems = 20
 
 // Item is one row. Number/Title come from gh; the rest from workflows.json.

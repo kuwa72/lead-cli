@@ -11,8 +11,8 @@ import (
 
 // minWidth/minHeight gate the dashboard layout (docs/rfc-inbox-ui-density.md §2.1).
 const (
-	minWidth  = 80
-	minHeight = 24
+	minWidth   = 80
+	minHeight  = 24
 	splitWidth = 120
 )
 
@@ -129,7 +129,7 @@ func shortAge(t, now time.Time) string {
 // listColumns holds the resolved column widths for one render pass.
 type listColumns struct {
 	issueW, titleW, updW, agentW, triesW, prW int
-	showUpd, showAgent, showTries, showPR    bool
+	showUpd, showAgent, showTries, showPR     bool
 }
 
 // listColumns resolves widths against leftW. Numeric columns expand to the
@@ -362,7 +362,7 @@ func (m Model) previewLines(w, h int) []string {
 		lines = append(lines, truncTail(Sanitize(l), w))
 	}
 	if more && len(lines) < h {
-		lines = append(lines, "Enter: 全画面詳細")
+		lines = append(lines, "Enter: Full details")
 	}
 	for len(lines) < h {
 		lines = append(lines, "")

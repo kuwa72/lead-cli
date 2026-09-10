@@ -241,7 +241,7 @@ func (t *Theme) Status(text string) string {
 		fg = TokenStatusInfo
 	case strings.HasPrefix(text, "Approved") || strings.HasPrefix(text, "Commented") || strings.HasPrefix(text, "Rejected") || strings.HasPrefix(text, "Marked"):
 		fg = TokenStatusSuccess
-	case strings.HasPrefix(text, "Error") || strings.HasPrefix(text, "Unable") || strings.HasPrefix(text, "読込エラー"):
+	case strings.HasPrefix(text, "Error") || strings.HasPrefix(text, "Unable") || strings.HasPrefix(text, "Load error"):
 		fg = TokenStatusError
 	case strings.HasPrefix(text, "Issue changed"):
 		fg = TokenStatusWarning

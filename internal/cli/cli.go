@@ -581,7 +581,7 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		for _, c := range res.Created {
 			nums = append(nums, fmt.Sprintf("#%d", c.Number))
 		}
-		return fmt.Sprintf("%s を起票（needs-review）", strings.Join(nums, ", ")), nil
+		return fmt.Sprintf("Filed %s as needs-review", strings.Join(nums, ", ")), nil
 	}
 
 	keys := os.Getenv("LEAD_TEST_INBOX_KEYS")

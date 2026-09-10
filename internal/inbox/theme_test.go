@@ -10,14 +10,14 @@ import (
 
 func TestResolveTheme(t *testing.T) {
 	tests := []struct {
-		name     string
-		theme    string
-		noColor  string
+		name      string
+		theme     string
+		noColor   string
 		colorTerm string
-		termEnv  string
-		wantMode Mode
-		wantProf termenv.Profile
-		wantErr  bool
+		termEnv   string
+		wantMode  Mode
+		wantProf  termenv.Profile
+		wantErr   bool
 	}{
 		{"default terminal", "", "", "", "xterm-256color", ModeTerminal, termenv.ANSI, false},
 		{"explicit terminal", "terminal", "", "", "xterm-256color", ModeTerminal, termenv.ANSI, false},
@@ -64,7 +64,7 @@ func TestSanitizeStripsControlSequences(t *testing.T) {
 
 func TestPlainRenderNoSGRAndASCII(t *testing.T) {
 	th := NewTheme(ModePlain, termenv.Ascii, nil)
-	got := th.Render("▾ 止まってる (1) …", TokenFgPrimary, TokenBgCanvas, true, false, false)
+	got := th.Render("▾ Blocked (1) …", TokenFgPrimary, TokenBgCanvas, true, false, false)
 	if strings.Contains(got, "\x1b") {
 		t.Errorf("plain output contains escape: %q", got)
 	}

@@ -109,12 +109,14 @@ func newFixture(t *testing.T) (*testutil.FakeGhClient, *fakeShell, Model) {
 	}
 	sh := &fakeShell{}
 	m := New(Options{
-		Gh:         gh,
-		Store:      store,
-		Shell:      sh,
-		Editor:     "fake-editor",
-		AgentsPath: filepath.Join(t.TempDir(), "AGENTS.md"),
-		Repo:       "kuwa72/lead-cli",
+		Gh:           gh,
+		Store:        store,
+		Shell:        sh,
+		Editor:       "fake-editor",
+		AgentsPath:   filepath.Join(t.TempDir(), "AGENTS.md"),
+		Repo:         "kuwa72/lead-cli",
+		PreviewDelay: 0,
+		Headless:     true,
 	})
 	m = drive(t, m, nil, m.Init())
 	return gh, sh, m
@@ -315,7 +317,7 @@ func TestDetail_MergesPrBody(t *testing.T) {
 	if !strings.Contains(v, "blocked body") {
 		t.Errorf("detail view missing issue body, got:\n%s", v)
 	}
-	if !strings.Contains(v, "## PR 本文") {
+	if !strings.Contains(v, "## PR body") {
 		t.Errorf("detail view missing PR header, got:\n%s", v)
 	}
 	if !strings.Contains(v, "- [ ] task A") || !strings.Contains(v, "- [x] task B") {
@@ -349,7 +351,7 @@ func TestKeyP_OnlyRunningOrBlockedAgents(t *testing.T) {
 	if len(fh.PeekCalls) != 0 {
 		t.Errorf("p on needs-review must not call Herdr: %+v", fh.PeekCalls)
 	}
-	if !strings.Contains(m.View(), "実行中/止まってる") && !strings.Contains(m.View(), "エージェント") {
+	if !strings.Contains(m.View(), "running or blocked") && !strings.Contains(m.View(), "agent") {
 		t.Errorf("p should explain it is only for running/blocked agents, got:\n%s", m.View())
 	}
 }
@@ -364,7 +366,7 @@ func TestKeyP_NoLogOrPaneShowsStatus(t *testing.T) {
 	m, _ = Drain(m, m.loadCmd())
 	m.opts.Herdr = &testutil.FakeHerdrRunner{}
 	m = press(t, m, "j", "j", "j", "p")
-	if !strings.Contains(m.View(), "ログもペインもありません") {
+	if !strings.Contains(m.View(), "has no agent log or pane") {
 		t.Errorf("p without log/pane should show a status message, got:\n%s", m.View())
 	}
 }
@@ -391,7 +393,7 @@ func TestKeyP_HerdrOpensLogInNewTab(t *testing.T) {
 			t.Errorf("herdr pane run args missing %q, got:\n%s", want, logText)
 		}
 	}
-	if !strings.Contains(m.View(), "herdr タブ") {
+	if !strings.Contains(m.View(), "Opened #9 agent log in herdr tab") {
 		t.Errorf("status should report herdr tab, got:\n%s", m.View())
 	}
 }
@@ -411,7 +413,7 @@ func TestKeyP_HerdrAttachesPaneForRunningAgent(t *testing.T) {
 	if len(fh.PeekCalls) != 1 || fh.PeekCalls[0].Pane != "w1:p70" || fh.PeekCalls[0].LogPath != "" {
 		t.Errorf("Peek calls = %+v, want Pane=w1:p70", fh.PeekCalls)
 	}
-	if !strings.Contains(m.View(), "herdr タブ") {
+	if !strings.Contains(m.View(), "Opened #70 agent pane in herdr tab") {
 		t.Errorf("status should report herdr tab, got:\n%s", m.View())
 	}
 }
@@ -432,7 +434,7 @@ func TestKeyP_FallsBackToPagerWhenHerdrUnavailable(t *testing.T) {
 	if !strings.Contains(logText, "</logs/issue-9.log>") {
 		t.Errorf("less did not receive log path, got:\n%s", logText)
 	}
-	if !strings.Contains(m.View(), "エージェントログを開きました") {
+	if !strings.Contains(m.View(), "Opened #9 agent log") {
 		t.Errorf("status should report log opened, got:\n%s", m.View())
 	}
 }
@@ -464,7 +466,7 @@ type sayCall struct {
 func fakeSay(calls *[]sayCall) func(context.Context, string, int) (string, error) {
 	return func(_ context.Context, oneLiner string, followUp int) (string, error) {
 		*calls = append(*calls, sayCall{OneLiner: oneLiner, FollowUp: followUp})
-		return "#101 を起票（needs-review）", nil
+		return "Filed #101 as needs-review", nil
 	}
 }
 
@@ -477,7 +479,7 @@ func TestKeyP_PaneNotFoundShowsStatus(t *testing.T) {
 	m, _ = Drain(m, m.loadCmd())
 	m.opts.Herdr = &testutil.FakeHerdrRunner{PeekErr: &ports.PaneNotFoundError{Pane: "wQ:pP"}}
 	m = press(t, m, "j", "j", "j", "p") // blocked #9 with pane only
-	if v := m.View(); !strings.Contains(v, "エージェントペインが見つかりません") {
+	if v := m.View(); !strings.Contains(v, "agent pane not found") {
 		t.Errorf("pane not found should show a friendly status, got:\n%s", v)
 	}
 }
@@ -524,7 +526,7 @@ func TestKeyS_EscCancels(t *testing.T) {
 	if len(calls) != 0 {
 		t.Errorf("esc must cancel: %+v", calls)
 	}
-	if v := m.View(); !strings.Contains(v, "取り消しました") {
+	if v := m.View(); !strings.Contains(v, "Canceled") {
 		t.Errorf("esc should show cancel status, got:\n%s", v)
 	}
 }
@@ -564,10 +566,10 @@ func TestKeyQ_Quits(t *testing.T) {
 
 func TestFooter_ContextDependentActions(t *testing.T) {
 	want := map[Kind]string{
-		KindNeedsReview: "a 承認   e 編集   t コメント   x 却下   Enter 詳細   ? 操作一覧   q 終了",
-		KindBlocked:     "t 再指示   p エージェント画面   x 却下   Enter 詳細   ? 操作一覧   q 終了",
-		KindMerged:      "c 確認済み   n 不具合報告   p エージェント画面   o ブラウザ   Enter 詳細   ? 操作一覧   q 終了",
-		KindRunning:     "p エージェント画面   o ブラウザ   Enter 詳細   ? 操作一覧   q 終了",
+		KindNeedsReview: "[Enter] Open   [a] Approve   [t] Reply   [?] Help   [q] Quit",
+		KindBlocked:     "[Enter] Open   [t] Reply   [p] Peek   [?] Help   [q] Quit",
+		KindMerged:      "[Enter] Open   [n] Report bug   [c] Mark seen   [?] Help   [q] Quit",
+		KindRunning:     "[Enter] Open   [p] Peek   [o] Browser   [?] Help   [q] Quit",
 	}
 	for kind, expected := range want {
 		m := Model{sections: []Section{{Kind: kind, Items: []Item{{Number: 1, Kind: kind}}}}, width: 120, expanded: true}
@@ -577,7 +579,7 @@ func TestFooter_ContextDependentActions(t *testing.T) {
 		}
 	}
 	empty := Model{sections: []Section{{Kind: KindNeedsReview}}, width: 120}
-	if got, want := empty.footer(), "s 新規起票   r AGENTS.md   R 更新   ? 操作一覧   q 終了"; got != want {
+	if got, want := empty.footer(), "[s] New   [?] Help   [q] Quit"; got != want {
 		t.Errorf("empty footer = %q, want %q", got, want)
 	}
 }
@@ -598,19 +600,19 @@ func TestFooter_WrapsToTerminalWidth(t *testing.T) {
 
 func TestFirstLaunchHelpIsDismissedAndPersisted(t *testing.T) {
 	seen := &SeenStore{Path: filepath.Join(t.TempDir(), "inbox-seen.json")}
-	m := New(Options{Seen: seen, Shell: &fakeShell{}})
-	if !strings.Contains(m.View(), "Issueを進める") {
+	m := New(Options{Seen: seen, Shell: &fakeShell{}, Headless: true})
+	if !strings.Contains(m.View(), "Inbox actions") {
 		t.Fatalf("first launch did not start in help: %s", m.View())
 	}
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if strings.Contains(next.(Model).View(), "Issueを進める") {
+	if strings.Contains(next.(Model).View(), "Inbox actions") {
 		t.Fatal("Esc did not leave help")
 	}
 	if shown, err := seen.HelpShown(); err != nil || !shown {
 		t.Fatalf("help dismissal not persisted: %v, %v", shown, err)
 	}
-	second := New(Options{Seen: seen, Shell: &fakeShell{}})
-	if strings.Contains(second.View(), "Issueを進める") {
+	second := New(Options{Seen: seen, Shell: &fakeShell{}, Headless: true})
+	if strings.Contains(second.View(), "Inbox actions") {
 		t.Fatal("second launch unexpectedly started in help")
 	}
 }
@@ -618,7 +620,7 @@ func TestFirstLaunchHelpIsDismissedAndPersisted(t *testing.T) {
 func TestView_ListsSectionsInOrderWithCounts(t *testing.T) {
 	_, _, m := newFixture(t)
 	v := m.View()
-	for _, want := range []string{"kuwa72/lead-cli", "レビュー待ち (2)", "止まってる (1)", "最近マージ (0)", "実行中 (0)", "#7", "#8", "#9", "claude", "a 承認"} {
+	for _, want := range []string{"kuwa72/lead-cli", "Needs review (2)", "Blocked (1)", "Merged (0)", "Running (0)", "#7", "#8", "#9", "claude", "[a] Approve"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view missing %q:\n%s", want, v)
 		}
@@ -630,7 +632,7 @@ func TestView_ListsSectionsInOrderWithCounts(t *testing.T) {
 
 func TestListError_IsShownNotFatal(t *testing.T) {
 	gh := &testutil.FakeGhClient{LabelListErr: errors.New("gh: not logged in")}
-	m := New(Options{Gh: gh, Shell: &fakeShell{}})
+	m := New(Options{Gh: gh, Shell: &fakeShell{}, Headless: true})
 	m, _ = Drain(m, m.Init())
 	if !strings.Contains(m.View(), "gh: not logged in") {
 		t.Errorf("list error should be visible, got:\n%s", m.View())
@@ -648,6 +650,8 @@ func TestParseKey(t *testing.T) {
 		"up":        {Type: tea.KeyUp},
 		"backspace": {Type: tea.KeyBackspace},
 		"ctrl+c":    {Type: tea.KeyCtrlC},
+		"pgup":      {Type: tea.KeyPgUp},
+		"pgdown":    {Type: tea.KeyPgDown},
 	}
 	for in, want := range cases {
 		got, err := ParseKey(in)
@@ -696,8 +700,8 @@ func TestRepoSlug(t *testing.T) {
 
 func TestRelAge(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
-	if got := relAge(now.Add(-3*time.Minute), now); got != "3分前" {
-		t.Errorf("relAge = %q, want 3分前", got)
+	if got := relAge(now.Add(-3*time.Minute), now); got != "3m" {
+		t.Errorf("relAge = %q, want 3m", got)
 	}
 	if got := relAge(time.Time{}, now); got != "" {
 		t.Errorf("relAge(zero) = %q, want empty", got)
@@ -723,13 +727,15 @@ func newMergedFixture(t *testing.T) (*testutil.FakeGhClient, *fakeShell, *SeenSt
 	}
 	sh := &fakeShell{}
 	m := New(Options{
-		Gh:         gh,
-		Store:      store,
-		Seen:       seen,
-		Shell:      sh,
-		Editor:     "fake-editor",
-		AgentsPath: filepath.Join(t.TempDir(), "AGENTS.md"),
-		Repo:       "kuwa72/lead-cli",
+		Gh:           gh,
+		Store:        store,
+		Seen:         seen,
+		Shell:        sh,
+		Editor:       "fake-editor",
+		AgentsPath:   filepath.Join(t.TempDir(), "AGENTS.md"),
+		Repo:         "kuwa72/lead-cli",
+		PreviewDelay: 0,
+		Headless:     true,
 	})
 	m = drive(t, m, nil, m.Init())
 	return gh, sh, seen, m
@@ -749,10 +755,10 @@ func TestKeyC_ConfirmsMergedAndRefreshes(t *testing.T) {
 		t.Errorf("confirmed = %v, want 42", st.Confirmed)
 	}
 	v := m.View()
-	if !strings.Contains(v, "最近マージ (0)") {
+	if !strings.Contains(v, "Merged (0)") {
 		t.Errorf("merged section should be empty after confirm, got:\n%s", v)
 	}
-	if !strings.Contains(v, "#42 を確認しました") {
+	if !strings.Contains(v, "Marked #42 as seen") {
 		t.Errorf("status should report #42 confirmed, got:\n%s", v)
 	}
 }
@@ -781,7 +787,7 @@ func TestKeyN_OnMergedConfirmsAndFollowsUp(t *testing.T) {
 	if !st.IsConfirmed(42) {
 		t.Errorf("n did not confirm merged issue: %+v", st.Confirmed)
 	}
-	if v := m.View(); !strings.Contains(v, "最近マージ (0)") {
+	if v := m.View(); !strings.Contains(v, "Merged (0)") {
 		t.Errorf("merged section should be empty after n follow-up, got:\n%s", v)
 	}
 }
@@ -818,7 +824,7 @@ func TestReload_PreservesSectionCollapsed(t *testing.T) {
 
 func TestHeader_EnterTogglesSection(t *testing.T) {
 	_, _, m := newFixture(t)
-	m.cursor = 0 // レビュー待ち header
+	m.cursor = 0 // Needs review header
 	m = press(t, m, "enter")
 	if !m.sections[0].Collapsed {
 		t.Fatalf("enter on header did not collapse section")
@@ -827,7 +833,7 @@ func TestHeader_EnterTogglesSection(t *testing.T) {
 	if strings.Contains(v, "#7") || strings.Contains(v, "#8") {
 		t.Errorf("collapsed section should not show its issues, got:\n%s", v)
 	}
-	if !strings.Contains(v, "▸ レビュー待ち (2)") {
+	if !strings.Contains(v, "▸ Needs review (2)") {
 		t.Errorf("collapsed header should show closed marker, got:\n%s", v)
 	}
 }
@@ -880,7 +886,7 @@ func TestIssueKeysOnHeaderDoNothing(t *testing.T) {
 	if len(gh.AddedLabels)+len(gh.RemovedLabels)+len(gh.Comments)+len(gh.Closed) != 0 {
 		t.Errorf("issue keys on header must not touch GitHub")
 	}
-	if !strings.Contains(m.View(), "区画ヘッダーが選択中です") {
+	if !strings.Contains(m.View(), "Section header selected") {
 		t.Errorf("status should explain header is selected, got:\n%s", m.View())
 	}
 }
@@ -930,5 +936,73 @@ func TestEnter_OpensFullscreenDetailFromSplit(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "spec: second") || strings.Contains(m.View(), "spec: add warning") {
 		t.Errorf("fullscreen detail should show only #8, got:\n%s", m.View())
+	}
+}
+
+func TestDetail_PgUpPgDnAndArrowsScroll(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	gh.Issues[7] = ports.Issue{Number: 7, Title: "spec: add warning", Body: strings.Repeat("line\n", 50), State: "OPEN"}
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "body", State: "OPEN"}
+	m = press(t, m, "j", "enter")
+	if m.mode != modeDetail {
+		t.Fatalf("enter did not switch to detail: mode=%v", m.mode)
+	}
+	m = press(t, m, "pgdown")
+	if m.detailOffset == 0 {
+		t.Errorf("pgdown should scroll down, got offset %d", m.detailOffset)
+	}
+	before := m.detailOffset
+	m = press(t, m, "down")
+	if m.detailOffset != before+1 {
+		t.Errorf("down should increment offset by 1, got %d", m.detailOffset)
+	}
+	m = press(t, m, "pgup")
+	if m.detailOffset >= before || m.detailOffset < 0 {
+		t.Errorf("pgup should scroll up by the same page, got %d (before %d)", m.detailOffset, before)
+	}
+	m = press(t, m, "esc")
+	if m.mode != modeList {
+		t.Fatalf("esc should return to list: mode=%v", m.mode)
+	}
+	if m.detailOffset != 0 {
+		t.Errorf("esc should reset detail offset, got %d", m.detailOffset)
+	}
+}
+
+func TestStatus_SuccessClearsAfterFiveSeconds(t *testing.T) {
+	m := New(Options{Headless: false})
+	cmd := m.setStatus("Approved #1")
+	if cmd == nil {
+		t.Fatal("setStatus should return a clear command in interactive mode")
+	}
+	// The returned command is tea.Tick(5s, ...); we cannot easily drive it here,
+	// but we can verify the statusClearMsg behavior directly.
+	gen := m.statusGen
+	next, _ := m.Update(statusClearMsg{gen: gen})
+	if next.(Model).status != "" {
+		t.Errorf("statusClearMsg with matching gen should clear status, got %q", next.(Model).status)
+	}
+}
+
+func TestStatus_ClearIgnoredWithStaleGen(t *testing.T) {
+	m := New(Options{Headless: true})
+	m.setStatus("Approved #1")
+	m.setStatus("Approved #2")
+	next, _ := m.Update(statusClearMsg{gen: 1})
+	if next.(Model).status == "" {
+		t.Error("statusClearMsg with stale gen should not clear current status")
+	}
+}
+
+func TestFooter_InputMode(t *testing.T) {
+	m := Model{width: 120, mode: modeInput, input: inputState{action: "send"}}
+	if got := m.footer(); !strings.Contains(got, "[Enter] Send") || !strings.Contains(got, "[Esc] Cancel") {
+		t.Errorf("input send footer missing labels: %q", got)
+	}
+	m.input.action = "reject"
+	if got := m.footer(); !strings.Contains(got, "[Enter] Reject") || !strings.Contains(got, "[Esc] Cancel") {
+		t.Errorf("input reject footer missing labels: %q", got)
 	}
 }

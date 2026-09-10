@@ -98,6 +98,6 @@ raise SystemExit(1)
 PY
 
 # The inbox header must reflect the dispatcher state and --parallel limit.
-case "$out" in *"実行中 1 / 並列上限 3"*) ;; *) fail "inbox header missing running=1 / parallel=3: $out";; esac
+case "$out" in *"Running 1 / parallel 3"*) ;; *) fail "inbox header missing running=1 / parallel=3: $out";; esac
 
 echo "inbox dispatch tests passed"
