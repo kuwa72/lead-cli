@@ -1,6 +1,8 @@
 package prompter
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -74,3 +76,48 @@ func TestLintTitle(t *testing.T) {
 		t.Error("LintTitle(multiline) = none, want single-line violation")
 	}
 }
+
+func TestRenderWorkflowPrompt_Implement(t *testing.T) {
+	out, err := RenderWorkflowPrompt("implement", 89, "review workflow", "body text", "")
+	if err != nil {
+		t.Fatalf("RenderWorkflowPrompt: %v", err)
+	}
+	for _, want := range []string{"#89", "review workflow", "body text", "TDD"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered implement prompt missing %q", want)
+		}
+	}
+}
+
+func TestRenderWorkflowPrompt_Review(t *testing.T) {
+	out, err := RenderWorkflowPrompt("review", 89, "review workflow", "body text", "")
+	if err != nil {
+		t.Fatalf("RenderWorkflowPrompt: %v", err)
+	}
+	for _, want := range []string{"#89", "review workflow", "body text", "lead lgtm 89"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered review prompt missing %q", want)
+		}
+	}
+}
+
+func TestRenderWorkflowPrompt_Override(t *testing.T) {
+	tmpDir := t.TempDir()
+	promptDir := filepath.Join(tmpDir, "prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	customTpl := "CUSTOM PROMPT #{{.Number}} {{.Title}}"
+	if err := os.WriteFile(filepath.Join(promptDir, "review.md"), []byte(customTpl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := RenderWorkflowPrompt("review", 89, "review workflow", "body text", tmpDir)
+	if err != nil {
+		t.Fatalf("RenderWorkflowPrompt with override: %v", err)
+	}
+	if want := "CUSTOM PROMPT #89 review workflow"; out != want {
+		t.Errorf("rendered prompt = %q, want %q", out, want)
+	}
+}
+

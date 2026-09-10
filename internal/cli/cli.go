@@ -31,7 +31,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
-	"github.com/kuwa72/lead-cli/internal/adapters/fzf"
 	"github.com/kuwa72/lead-cli/internal/adapters/ghcli"
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/adapters/herdr"
@@ -41,6 +40,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/inbox"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/projinit"
+	"github.com/kuwa72/lead-cli/internal/prompter"
 	"github.com/kuwa72/lead-cli/internal/server"
 	"github.com/kuwa72/lead-cli/internal/setup"
 	"github.com/kuwa72/lead-cli/internal/spec"
@@ -206,7 +206,7 @@ func (d Deps) selector() tui.Selector {
 		}
 		return &tui.FakeSelector{Selection: sel}
 	}
-	return fzf.New()
+	return tui.NewBubbleteaSelector()
 }
 
 // parseTestSelection parses the LEAD_TEST_SELECTION hook:
@@ -294,7 +294,7 @@ issue. Normal operation is ` + "`lead dispatch`" + `, which needs no human step.
 			},
 		}
 		// Flags per docs/rfc-25-workflow-flexibility.md §6.1.
-		c.Flags().String("mode", state.ModeImplement, "execution mode (implement|split|research|docs)")
+		c.Flags().String("mode", state.ModeImplement, "execution mode (implement|review|split|research|docs)")
 		c.Flags().String("branch", "", "use existing branch instead of creating one")
 		c.Flags().String("pr", "", "attach to existing PR instead of creating one")
 		c.Flags().String("worktree", "", "create isolated worktree: bare flag = auto path, or --worktree=<path>")
@@ -519,7 +519,25 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 	callCmd.Flags().String("args", "", "JSON object args (default {})")
 	apiCmd.AddCommand(schemaCmd, snapshotCmd, callCmd)
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, initCmd)
+	lgtmCmd := &cobra.Command{
+		Use:   "lgtm <issue-number>",
+		Short: "Add lgtm label and post LGTM comment",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runLgtm(cmd, deps, args[0])
+		},
+	}
+
+	unlgtmCmd := &cobra.Command{
+		Use:   "unlgtm <issue-number>",
+		Short: "Remove lgtm label",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runUnlgtm(cmd, deps, args[0])
+		},
+	}
+
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, initCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	return root
 }
@@ -667,7 +685,24 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 // (issue list + cached preview, then agent/browser action).
 func runWorkTUI(cmd *cobra.Command, deps Deps) error {
 	ctx := cmd.Context()
-	summaries, err := deps.gh().ListOpen(ctx)
+	mode, _ := cmd.Flags().GetString("mode")
+	var summaries []ports.IssueSummary
+	var err error
+	if mode == state.ModeReview {
+		reviewList, rerr := deps.gh().ListByLabel(ctx, inbox.LabelNeedsReview)
+		if rerr == nil && len(reviewList) > 0 {
+			summaries = reviewList
+		} else {
+			summaries, err = deps.gh().ListOpen(ctx)
+		}
+	} else {
+		lgtmList, lerr := deps.gh().ListByLabel(ctx, "lgtm")
+		if lerr == nil && len(lgtmList) > 0 {
+			summaries = lgtmList
+		} else {
+			summaries, err = deps.gh().ListOpen(ctx)
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("work: %w", err)
 	}
@@ -822,7 +857,10 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 	return nil
 }
 
-func buildPrompt(iss ports.Issue) string {
+func buildPrompt(mode string, iss ports.Issue, repoDir string) string {
+	if rendered, err := prompter.RenderWorkflowPrompt(mode, iss.Number, iss.Title, iss.Body, repoDir); err == nil {
+		return rendered
+	}
 	prompt := fmt.Sprintf("Issue #%d: %s", iss.Number, iss.Title)
 	if body := strings.TrimSpace(iss.Body); body != "" {
 		prompt += "\n\n" + body
@@ -835,7 +873,7 @@ func launchAgent(ctx context.Context, out io.Writer, deps Deps, res workflow.Sta
 	if res.Worktree != "" {
 		launchDir = res.Worktree
 	}
-	command := agent.CommandString(agentName, buildPrompt(iss))
+	command := agent.CommandString(agentName, buildPrompt(res.Mode, iss, res.RepoRoot))
 	prepared := "cd " + strconv.Quote(launchDir) + " && " + command
 
 	h := deps.herdrRunner()
@@ -1241,3 +1279,38 @@ func runProjectInit(cmd *cobra.Command, deps Deps) error {
 	}
 	return nil
 }
+
+func runLgtm(cmd *cobra.Command, deps Deps, raw string) error {
+	number, err := strconv.Atoi(raw)
+	if err != nil || number <= 0 {
+		return fmt.Errorf("invalid issue number %q", raw)
+	}
+	ctx := cmd.Context()
+	gh := deps.gh()
+	if err := gh.IssueAddLabel(ctx, number, "lgtm"); err != nil {
+		return fmt.Errorf("lgtm #%d: add label: %w", number, err)
+	}
+	// Also remove needs-review if present
+	_ = gh.IssueRemoveLabel(ctx, number, "needs-review")
+	comment := "LGTM"
+	if err := gh.IssueComment(ctx, number, comment); err != nil {
+		return fmt.Errorf("lgtm #%d: comment: %w", number, err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "approved #%d with lgtm\n", number)
+	return nil
+}
+
+func runUnlgtm(cmd *cobra.Command, deps Deps, raw string) error {
+	number, err := strconv.Atoi(raw)
+	if err != nil || number <= 0 {
+		return fmt.Errorf("invalid issue number %q", raw)
+	}
+	ctx := cmd.Context()
+	gh := deps.gh()
+	if err := gh.IssueRemoveLabel(ctx, number, "lgtm"); err != nil {
+		return fmt.Errorf("unlgtm #%d: remove label: %w", number, err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "removed lgtm from #%d\n", number)
+	return nil
+}
+

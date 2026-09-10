@@ -43,6 +43,25 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
 - エージェント選択: `--agent` → `$LEAD_SPEC_AGENT` → 既定（`agy`）。
   `agent.HeadlessArgv` の対応表にある CLI のみ。出力ログは状態ディレクトリの `logs/say-*.log`。
 
+## 2.2 ワークフロープロンプト (`prompter.RenderWorkflowPrompt`, issue #89)
+
+- 用途: `lead work` / `lead run` でエージェントを対話起動する際のプロンプト。
+- モード:
+  - `implement`: TDD での実装（Red/Green/Refactor、テスト全パス、PR 作成）。
+  - `review`: Issue 本文・受入条件の精緻化、レビュー、OK 時の `lgtm` ラベル付与と LGTM コメント。
+- テンプレート上書き:
+  - リポジトリ内 `prompts/<mode>.md` または `~/.config/lead/prompts/<mode>.md` で自由にカスタマイズ可能。
+  - テンプレート変数は Go の `text/template` 構文（`{{.Number}}`, `{{.Title}}`, `{{.Body}}`）。
+
+## 2.3 ラベル運用とピッカー分岐 (issue #89)
+
+- ラベル状態:
+  - `lgtm`: 着手可能な Issue。`lead work` の通常ピッカーに表示される。
+  - `needs-review` / ラベルなし: レビュー待ち・未レビュー Issue。`lead work --mode review` のピッカーに表示される。
+- 手動ラベル操作:
+  - `lead lgtm <number>`: `lgtm` ラベルを付与し、`LGTM` コメントを投稿する。
+  - `lead unlgtm <number>`: `lgtm` ラベルを削除する。
+
 ## 3. 振る舞い確認手順（静的 grep 禁止の代替）
 
 テンプレート変更時は次の順で確認する。
