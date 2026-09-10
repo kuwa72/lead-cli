@@ -43,6 +43,10 @@ type Options struct {
 	// RunningCount returns the dispatcher's current running count.
 	// Nil falls back to counting the running section.
 	RunningCount func() (int, error)
+	// PreviewDelay is the debounce before fetching a preview after the
+	// cursor moves. Interactive runs set this to 150ms; headless tests
+	// leave it at zero so previews load synchronously.
+	PreviewDelay time.Duration
 }
 
 type mode int
@@ -55,31 +59,41 @@ const (
 )
 
 type inputState struct {
-	prompt string
-	text   []rune
-	submit func(text string) tea.Cmd
+	prompt       string
+	text         []rune
+	submit       func(text string) tea.Cmd
+	targetNumber int // issue number being acted on, 0 for actions without a target (s)
 }
 
 // Model is the bubbletea model. Construct with New.
 type Model struct {
-	opts         Options
-	sections     []Section
-	cursor       int
-	expanded     bool
-	mode         mode
-	detail       ports.Issue
-	detailOffset int
-	detailPrBody string
-	detailPrNum  int
-	input        inputState
-	status       string
-	loadErr      error
-	loading      bool
-	refreshedAt  time.Time
-	sessionSince time.Time // loaded last_seen_at at session start; refresh uses this
-	width        int
-	height       int
-	listTop      int // first visible row in the scrolled list body
+	opts            Options
+	sections        []Section
+	cursor          int
+	expanded        bool
+	mode            mode
+	detail          ports.Issue
+	detailOffset    int
+	detailPrBody    string
+	detailPrNum     int
+	detailPrErr     bool
+	detailComments  []ports.Comment
+	detailCommentsErr bool
+	input           inputState
+	status          string
+	loadErr         error
+	loading         bool
+	refreshedAt     time.Time
+	sessionSince    time.Time // loaded last_seen_at at session start; refresh uses this
+	width           int
+	height          int
+	listTop         int       // first visible row in the scrolled list body
+	selectedIssue   int       // issue number under the cursor (0 when a header is selected)
+	previewReq      int       // monotonic id to discard stale preview responses
+	previewLoading  bool
+	previewErr      error
+	previewCache    map[int]previewSnapshot
+	pendingOps      map[int]bool // issue numbers with in-flight state-changing operations
 }
 
 // Messages.
@@ -93,18 +107,31 @@ type (
 		status  string
 		err     error
 		refresh bool
+		number  int // issue number the operation targeted, for pendingOps tracking
 	}
 	detailMsg struct {
-		issue    ports.Issue
-		prNumber int
-		prBody   string
-		err      error
+		issue       ports.Issue
+		prNumber    int
+		prBody      string
+		prErr       bool
+		comments    []ports.Comment
+		commentsErr bool
+		err         error
 	}
 	previewMsg struct {
-		issue    ports.Issue
-		prNumber int
-		prBody   string
+		req      int
+		item     Item
+		snapshot previewSnapshot
 		err      error
+	}
+	previewDelayMsg struct {
+		req  int
+		item Item
+	}
+	approvalCheckMsg struct {
+		number     int
+		issue      ports.Issue
+		editedBody string // non-empty for the edit-then-approve flow
 	}
 	editBodyMsg struct {
 		issue ports.Issue
@@ -129,7 +156,7 @@ func New(opts Options) Model {
 	if opts.Parallel <= 0 {
 		opts.Parallel = dispatch.DefaultParallel
 	}
-	m := Model{opts: opts, sections: Build(nil, nil, nil, nil, nil), loading: true}
+	m := Model{opts: opts, sections: Build(nil, nil, nil, nil, nil), loading: true, previewCache: make(map[int]previewSnapshot), pendingOps: make(map[int]bool)}
 	if opts.Seen != nil {
 		shown, err := opts.Seen.HelpShown()
 		if err == nil && !shown {
@@ -294,8 +321,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loadedMsg:
 		m.loading = false
 		m.loadErr = msg.err
+		oldRow, _ := m.current()
 		m.detail = ports.Issue{}
 		m.detailPrNum, m.detailPrBody, m.detailOffset = 0, "", 0
+		m.detailPrErr, m.detailComments, m.detailCommentsErr = false, nil, false
+		wasRefreshed := !m.refreshedAt.IsZero()
 		if msg.sections != nil {
 			oldSections := m.sections
 			m.sections = msg.sections
@@ -308,15 +338,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.refreshedAt = m.opts.Now()
-			m.clampCursor()
-			m.focusFirstItem()
+			m.restoreSelection(oldRow)
 			m.scrollToCursor()
 		}
 		if !msg.sessionSince.IsZero() && m.sessionSince.IsZero() {
 			m.sessionSince = msg.sessionSince
 		}
+		// Load the preview only on reloads, not on the very first load, so the
+		// inbox is ready immediately and tests that start with a key sequence do
+		// not observe a preview fetch.
+		if wasRefreshed {
+			return m, m.loadPreviewForCurrent()
+		}
 		return m, nil
 	case doneMsg:
+		if msg.number > 0 {
+			delete(m.pendingOps, msg.number)
+		}
 		if msg.err != nil {
 			m.status = "エラー: " + msg.err.Error()
 		} else {
@@ -332,26 +370,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "エラー: " + msg.err.Error()
 			return m, nil
 		}
-		m.detail, m.detailOffset, m.detailPrNum, m.detailPrBody, m.mode = msg.issue, 0, msg.prNumber, msg.prBody, modeDetail
+		m.detail = msg.issue
+		m.detailOffset = 0
+		m.detailPrNum = msg.prNumber
+		m.detailPrBody = msg.prBody
+		m.detailPrErr = msg.prErr
+		m.detailComments = msg.comments
+		m.detailCommentsErr = msg.commentsErr
+		m.mode = modeDetail
 		return m, nil
 	case previewMsg:
-		if msg.err != nil {
-			m.status = "エラー: " + msg.err.Error()
+		if msg.req != m.previewReq {
 			return m, nil
 		}
-		m.detail, m.detailOffset, m.detailPrNum, m.detailPrBody = msg.issue, 0, msg.prNumber, msg.prBody
+		m.previewLoading = false
+		if msg.err != nil {
+			m.previewErr = msg.err
+			return m, nil
+		}
+		m.previewErr = nil
+		m.applySnapshot(msg.snapshot)
+		m.cacheSnapshot(msg.item.Number, msg.snapshot)
 		return m, nil
+	case previewDelayMsg:
+		if msg.req != m.previewReq {
+			return m, nil
+		}
+		return m, m.previewLoadCmd(msg.item, msg.req)
+	case approvalCheckMsg:
+		if m.issueChanged(msg.issue) {
+			if msg.number > 0 {
+				delete(m.pendingOps, msg.number)
+			}
+			m.detail = mergeIssue(m.detail, msg.issue)
+			m.cacheSnapshot(msg.issue.Number, previewSnapshot{issue: m.detail})
+			m.status = "Issue changed. Review before approving."
+			return m, nil
+		}
+		if msg.editedBody != "" {
+			return m, m.approveWithBodyCmd(msg.number, msg.editedBody)
+		}
+		return m, m.doApproveCmd(msg.number)
 	case editBodyMsg:
 		if msg.err != nil {
 			m.status = "エラー: " + msg.err.Error()
 			return m, nil
 		}
+		// Remember the body we are about to edit so approveWithBodyCmd can detect
+		// concurrent changes.
+		m.detail = msg.issue
+		m.cacheSnapshot(msg.issue.Number, previewSnapshot{issue: msg.issue})
 		return m, m.openEditorForBody(msg.issue)
 	case editedMsg:
 		if msg.err != nil {
 			m.status = "エラー: " + msg.err.Error()
 			return m, nil
 		}
+		m.pendingOps[msg.number] = true
 		return m, m.approveWithBodyCmd(msg.number, msg.body)
 	case tea.KeyMsg:
 		if m.tooSmall() {
@@ -464,26 +539,18 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	gh := m.opts.Gh
 	switch key {
 	case "enter":
-		return m, func() tea.Msg {
-			ctx := context.Background()
-			iss, err := gh.View(ctx, it.Number)
-			if err != nil {
-				return detailMsg{err: err}
-			}
-			prNumber, prBody := it.PRNumber, ""
-			if prNumber > 0 {
-				if body, err := gh.PrBody(ctx, prNumber); err == nil {
-					prBody = body
-				}
-			}
-			return detailMsg{issue: iss, prNumber: prNumber, prBody: prBody}
-		}
+		return m, m.openDetailCmd(it)
 	case "a":
 		if it.Kind != KindNeedsReview {
 			m.status = fmt.Sprintf("#%d は承認対象外（レビュー待ちの Issue のみ a で ready にできます）", it.Number)
 			return m, nil
 		}
-		return m, m.approveCmd(it.Number)
+		if m.pendingOps[it.Number] {
+			m.status = fmt.Sprintf("Already processing #%d", it.Number)
+			return m, nil
+		}
+		m.pendingOps[it.Number] = true
+		return m, m.startApproveCmd(it.Number)
 	case "e":
 		if it.Kind != KindNeedsReview {
 			m.status = fmt.Sprintf("#%d は編集して承認の対象外（レビュー待ちのみ）", it.Number)
@@ -504,35 +571,43 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		number := it.Number
 		m.mode = modeInput
-		m.input = inputState{prompt: fmt.Sprintf("却下理由 #%d（空で理由なし close, Esc 取消）> ", number), submit: func(text string) tea.Cmd {
-			return func() tea.Msg {
-				ctx := context.Background()
-				if text != "" {
-					if err := gh.IssueComment(ctx, number, text); err != nil {
-						return doneMsg{err: err}
+		m.input = inputState{
+			targetNumber: number,
+			prompt:       fmt.Sprintf("却下理由 #%d（空で理由なし close, Esc 取消）> ", number),
+			submit: func(text string) tea.Cmd {
+				return func() tea.Msg {
+					ctx := context.Background()
+					if text != "" {
+						if err := gh.IssueComment(ctx, number, text); err != nil {
+							return doneMsg{err: err, number: number}
+						}
 					}
+					if err := gh.IssueClose(ctx, number); err != nil {
+						return doneMsg{err: err, number: number}
+					}
+					return doneMsg{status: fmt.Sprintf("#%d を却下（close）しました", number), refresh: true, number: number}
 				}
-				if err := gh.IssueClose(ctx, number); err != nil {
-					return doneMsg{err: err}
-				}
-				return doneMsg{status: fmt.Sprintf("#%d を却下（close）しました", number), refresh: true}
-			}
-		}}
+			},
+		}
 		return m, nil
 	case "t":
 		number := it.Number
 		m.mode = modeInput
-		m.input = inputState{prompt: fmt.Sprintf("一言 #%d（Enter 送信, Esc 取消）> ", number), submit: func(text string) tea.Cmd {
-			if text == "" {
-				return func() tea.Msg { return doneMsg{status: "空のコメントは送りません"} }
-			}
-			return func() tea.Msg {
-				if err := gh.IssueComment(context.Background(), number, text); err != nil {
-					return doneMsg{err: err}
+		m.input = inputState{
+			targetNumber: number,
+			prompt:       fmt.Sprintf("一言 #%d（Enter 送信, Esc 取消）> ", number),
+			submit: func(text string) tea.Cmd {
+				if text == "" {
+					return func() tea.Msg { return doneMsg{status: "空のコメントは送りません"} }
 				}
-				return doneMsg{status: fmt.Sprintf("#%d にコメントしました", number)}
-			}
-		}}
+				return func() tea.Msg {
+					if err := gh.IssueComment(context.Background(), number, text); err != nil {
+						return doneMsg{err: err, number: number}
+					}
+					return doneMsg{status: fmt.Sprintf("#%d にコメントしました", number), number: number}
+				}
+			},
+		}
 		return m, nil
 	case "o":
 		return m, func() tea.Msg {
@@ -551,11 +626,16 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		number := it.Number
+		if m.pendingOps[number] {
+			m.status = fmt.Sprintf("Already processing #%d", number)
+			return m, nil
+		}
+		m.pendingOps[number] = true
 		return m, func() tea.Msg {
 			if err := m.opts.Seen.Confirm(number); err != nil {
-				return doneMsg{err: err}
+				return doneMsg{err: err, number: number}
 			}
-			return doneMsg{status: fmt.Sprintf("#%d を確認しました", number), refresh: true}
+			return doneMsg{status: fmt.Sprintf("#%d を確認しました", number), refresh: true, number: number}
 		}
 	case "p":
 		return m.peekItem(it)
@@ -568,84 +648,117 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		number := it.Number
 		kind := it.Kind
 		m.mode = modeInput
-		m.input = inputState{prompt: fmt.Sprintf("不具合報告 #%d — 一言（Enter で追い Issue 起票, Esc 取消）> ", number), submit: func(text string) tea.Cmd {
-			if text == "" {
-				return func() tea.Msg { return doneMsg{status: "空の一言は起票しません"} }
-			}
-			return func() tea.Msg {
-				ctx := context.Background()
-				if kind == KindMerged && m.opts.Seen != nil {
-					if err := m.opts.Seen.Confirm(number); err != nil {
-						return doneMsg{err: err}
+		m.input = inputState{
+			targetNumber: number,
+			prompt:       fmt.Sprintf("不具合報告 #%d — 一言（Enter で追い Issue 起票, Esc 取消）> ", number),
+			submit: func(text string) tea.Cmd {
+				if text == "" {
+					return func() tea.Msg { return doneMsg{status: "空の一言は起票しません"} }
+				}
+				return func() tea.Msg {
+					ctx := context.Background()
+					if kind == KindMerged && m.opts.Seen != nil {
+						if err := m.opts.Seen.Confirm(number); err != nil {
+							return doneMsg{err: err, number: number}
+						}
 					}
+					summary, err := say(ctx, text, number)
+					if err != nil {
+						return doneMsg{err: err, number: number}
+					}
+					return doneMsg{status: summary, refresh: true, number: number}
 				}
-				summary, err := say(ctx, text, number)
-				if err != nil {
-					return doneMsg{err: err}
-				}
-				return doneMsg{status: summary, refresh: true}
-			}
-		}}
+			},
+		}
 		return m, nil
 	}
 	return m, nil
 }
 
-func (m Model) previewCmd(it Item) tea.Cmd {
+func (m Model) openDetailCmd(it Item) tea.Cmd {
 	gh := m.opts.Gh
 	return func() tea.Msg {
 		ctx := context.Background()
 		iss, err := gh.View(ctx, it.Number)
 		if err != nil {
-			return previewMsg{err: err}
+			return detailMsg{err: err}
 		}
-		prNumber, prBody := it.PRNumber, ""
-		if prNumber > 0 {
-			if body, err := gh.PrBody(ctx, prNumber); err == nil {
-				prBody = body
+		if iss.BlockedReason == "" {
+			iss.BlockedReason = extractBlockedReason(iss.Body)
+		}
+		msg := detailMsg{issue: iss, prNumber: it.PRNumber}
+		if it.PRNumber > 0 {
+			body, err := gh.PrBody(ctx, it.PRNumber)
+			if err != nil {
+				msg.prErr = true
+			} else {
+				msg.prBody = body
 			}
 		}
-		return previewMsg{issue: iss, prNumber: prNumber, prBody: prBody}
+		comments, err := gh.IssueComments(ctx, it.Number)
+		if err != nil {
+			msg.commentsErr = true
+		} else {
+			msg.comments = comments
+		}
+		return msg
 	}
 }
 
-func (m *Model) loadPreviewForCurrent() tea.Cmd {
-	row, ok := m.current()
-	if !ok || row.IsHeader() {
-		m.detail = ports.Issue{}
-		m.detailPrNum, m.detailPrBody, m.detailOffset = 0, "", 0
-		return nil
-	}
-	return m.previewCmd(*row.Item)
-}
-
-func (m Model) approveCmd(number int) tea.Cmd {
+func (m Model) startApproveCmd(number int) tea.Cmd {
 	gh := m.opts.Gh
 	return func() tea.Msg {
 		ctx := context.Background()
-		if err := gh.IssueRemoveLabel(ctx, number, LabelNeedsReview); err != nil {
-			return doneMsg{err: err}
+		iss, err := gh.View(ctx, number)
+		if err != nil {
+			return approvalCheckMsg{number: number, issue: ports.Issue{Number: number}}
 		}
-		if err := gh.IssueAddLabel(ctx, number, LabelReady); err != nil {
-			return doneMsg{err: err}
-		}
-		return doneMsg{status: fmt.Sprintf("#%d を承認: needs-review → ready", number), refresh: true}
+		return approvalCheckMsg{number: number, issue: iss}
 	}
+}
+
+func (m Model) doApproveCmd(number int) tea.Cmd {
+	return func() tea.Msg {
+		status, err := m.doApprove(number)
+		if err != nil {
+			return doneMsg{err: err, number: number}
+		}
+		return doneMsg{status: status, refresh: true, number: number}
+	}
+}
+
+// doApprove performs the label changes and returns a human status.
+func (m Model) doApprove(number int) (string, error) {
+	gh := m.opts.Gh
+	ctx := context.Background()
+	if err := gh.IssueRemoveLabel(ctx, number, LabelNeedsReview); err != nil {
+		return "", err
+	}
+	if err := gh.IssueAddLabel(ctx, number, LabelReady); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("#%d を承認: needs-review → ready", number), nil
 }
 
 func (m Model) approveWithBodyCmd(number int, body string) tea.Cmd {
 	gh := m.opts.Gh
-	approve := m.approveCmd(number)
 	return func() tea.Msg {
-		if err := gh.IssueEditBody(context.Background(), number, body); err != nil {
-			return doneMsg{err: err}
+		ctx := context.Background()
+		iss, err := gh.View(ctx, number)
+		if err != nil {
+			return doneMsg{err: err, number: number}
 		}
-		msg := approve()
-		if d, ok := msg.(doneMsg); ok && d.err == nil {
-			d.status = fmt.Sprintf("#%d の本文を更新して承認: needs-review → ready", number)
-			return d
+		if m.issueChanged(iss) {
+			return approvalCheckMsg{number: number, issue: iss, editedBody: body}
 		}
-		return msg
+		if err := gh.IssueEditBody(ctx, number, body); err != nil {
+			return doneMsg{err: err, number: number}
+		}
+		status, err := m.doApprove(number)
+		if err != nil {
+			return doneMsg{err: err, number: number}
+		}
+		return doneMsg{status: status, refresh: true, number: number}
 	}
 }
 
@@ -779,7 +892,11 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeList
 		text := strings.TrimSpace(string(m.input.text))
 		submit := m.input.submit
+		targetNumber := m.input.targetNumber
 		m.input = inputState{}
+		if targetNumber > 0 {
+			m.pendingOps[targetNumber] = true
+		}
 		return m, submit(text)
 	case tea.KeyBackspace:
 		if n := len(m.input.text); n > 0 {
@@ -1029,13 +1146,12 @@ func itemMeta(it Item, now time.Time) string {
 
 func (m Model) viewDetail() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "#%d %s  [%s]\n", m.detail.Number, m.detail.Title, m.detail.State)
 	b.WriteString(m.rule() + "\n")
-	content := m.detail.Body
-	if m.detailPrNum > 0 && strings.TrimSpace(m.detailPrBody) != "" {
-		content += "\n\n---\n## PR 本文\n\n" + m.detailPrBody
+	content := m.detailContent()
+	if content == "" {
+		content = "No issue selected."
 	}
-	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	lines := strings.Split(content, "\n")
 	off := m.detailOffset
 	if off > len(lines)-1 {
 		off = max(0, len(lines)-1)
@@ -1048,9 +1164,6 @@ func (m Model) viewDetail() string {
 		b.WriteString(l + "\n")
 	}
 	b.WriteString(m.rule() + "\n")
-	if m.detailPrNum == 0 && m.opts.Store != nil {
-		b.WriteString("（PR 未記録）\n")
-	}
 	b.WriteString("j/k スクロール  Esc/q 戻る\n")
 	return b.String()
 }

@@ -25,10 +25,12 @@ type MergedIssue struct {
 
 // Issue is the detail of `gh issue view`.
 type Issue struct {
-	Number int
-	Title  string
-	Body   string
-	State  string
+	Number        int
+	Title         string
+	Body          string
+	State         string
+	UpdatedAt     time.Time
+	BlockedReason string
 }
 
 // GhClient abstracts `gh issue list/view` (transparent auth via gh CLI)

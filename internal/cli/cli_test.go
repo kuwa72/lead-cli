@@ -99,9 +99,14 @@ func TestBareLeadHeadlessKeysReachGh(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(stateFile), "inbox-seen.json"), []byte(`{"help_shown":true}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gh := &testutil.FakeGhClient{Labeled: map[string][]ports.IssueSummary{
-		"needs-review": {{Number: 7, Title: "spec"}},
-	}}
+	gh := &testutil.FakeGhClient{
+		Labeled: map[string][]ports.IssueSummary{
+			"needs-review": {{Number: 7, Title: "spec"}},
+		},
+		Issues: map[int]ports.Issue{
+			7: {Number: 7, Title: "spec", Body: "## Acceptance\n- [ ] task", State: "OPEN"},
+		},
+	}
 	root := NewRootCmdWithDeps("v0.0.0-test", "abc1234", "2026-09-07", Deps{Gh: gh, WorkDir: t.TempDir()})
 	var out strings.Builder
 	root.SetOut(&out)

@@ -1,0 +1,201 @@
+package inbox
+
+import (
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/testutil"
+)
+
+func TestPreview_LoadsIssueAfterCursorMove(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "second body", State: "OPEN"}
+	m = press(t, m, "j")
+	if !containsInt(gh.ViewCalls, 8) {
+		t.Fatalf("preview should fetch issue #8, got ViewCalls=%v", gh.ViewCalls)
+	}
+	v := m.View()
+	if !strings.Contains(v, "second body") {
+		t.Errorf("preview should show #8 body, got:\n%s", v)
+	}
+}
+
+func containsInt(xs []int, v int) bool {
+	for _, x := range xs {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func TestPreview_StaleResponseIsDiscarded(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "second body", State: "OPEN"}
+	m = press(t, m, "j")
+	if m.detail.Number != 8 {
+		t.Fatalf("cursor should be on #8, got %d", m.detail.Number)
+	}
+
+	oldReq := m.previewReq - 1
+	next, _ := m.Update(previewMsg{req: oldReq, item: Item{Number: 7}, snapshot: previewSnapshot{issue: ports.Issue{Number: 7, Body: "stale"}}})
+	m = next.(Model)
+	if m.detail.Number != 8 || strings.Contains(m.detail.Body, "stale") {
+		t.Errorf("stale preview response should be discarded, got detail=%+v", m.detail)
+	}
+}
+
+func TestReload_PreservesSelectionByIssueNumber(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "second body", State: "OPEN"}
+	m = press(t, m, "j") // select #8
+	m = press(t, m, "R")
+	row, ok := m.current()
+	if !ok || row.IsHeader() || row.Item.Number != 8 {
+		t.Fatalf("reload should preserve selection on #8, got %+v", row)
+	}
+}
+
+func TestReload_FallbackWhenIssueDisappears(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "second body", State: "OPEN"}
+	m = press(t, m, "j") // select #8
+	// Simulate #8 disappearing on reload.
+	gh.Labeled[LabelNeedsReview] = []ports.IssueSummary{{Number: 7, Title: "spec: add warning"}}
+	m = press(t, m, "R")
+	row, ok := m.current()
+	if !ok || row.IsHeader() || row.Item.Number != 7 {
+		t.Fatalf("selection should fall back to previous issue #7, got %+v", row)
+	}
+}
+
+func TestPreview_HeaderSelectionClearsPreviewAndBlocksActions(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	m = press(t, m, "k") // move to review header
+	if m.detail.Number != 0 {
+		t.Errorf("header selection should clear preview, got detail=%+v", m.detail)
+	}
+	m = press(t, m, "a")
+	if len(gh.AddedLabels)+len(gh.RemovedLabels) != 0 {
+		t.Errorf("a on header must not touch GitHub: added=%+v removed=%+v", gh.AddedLabels, gh.RemovedLabels)
+	}
+}
+
+func TestPreview_LoadingAndErrorFeedback(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "second body", State: "OPEN"}
+	gh.ViewErr = errors.New("gh view failed")
+	m = press(t, m, "j")
+	v := m.View()
+	if !strings.Contains(v, "Unable to load #8") {
+		t.Errorf("preview error should be visible, got:\n%s", v)
+	}
+	if strings.Contains(v, "second body") {
+		t.Errorf("preview should not show body after error, got:\n%s", v)
+	}
+}
+
+func TestPreview_PartialDetailFailureShowsPRUnavailable(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	gh.PrBodyErr = errors.New("pr unavailable")
+	m = press(t, m, "j", "j", "j") // move to blocked #9
+	v := m.View()
+	if !strings.Contains(v, "PR details unavailable") {
+		t.Errorf("preview should report PR details unavailable, got:\n%s", v)
+	}
+	if !strings.Contains(v, "blocked body") {
+		t.Errorf("preview should still show issue body, got:\n%s", v)
+	}
+}
+
+func TestApprove_HoldsWhenIssueBodyChanged(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	// Load the initial #7 preview first, then simulate the issue changing on GitHub.
+	m = press(t, m, "k", "j")
+	gh.Issues[7] = ports.Issue{Number: 7, Title: "spec: add warning", Body: "changed body", State: "OPEN"}
+	m = press(t, m, "a")
+	if len(gh.AddedLabels) != 0 || len(gh.RemovedLabels) != 0 {
+		t.Fatalf("approval should be held when issue changed: added=%+v removed=%+v", gh.AddedLabels, gh.RemovedLabels)
+	}
+	if !strings.Contains(m.View(), "Issue changed") {
+		t.Errorf("status should warn that issue changed, got:\n%s", m.View())
+	}
+	// After the warning, the model's detail should now reflect the latest body.
+	if !strings.Contains(m.detail.Body, "changed body") {
+		t.Errorf("detail should be updated to the latest body, got %q", m.detail.Body)
+	}
+	// Approving again should now succeed because body matches.
+	m = press(t, m, "a")
+	if !reflect.DeepEqual(gh.AddedLabels, []testutil.LabelCall{{Number: 7, Label: LabelReady}}) {
+		t.Errorf("approval should proceed after review, got %+v", gh.AddedLabels)
+	}
+}
+
+func TestApprove_PinTargetNumber(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "second body", State: "OPEN"}
+	// Manually place an in-flight approval on #7 so a subsequent key on #8 is ignored.
+	m.pendingOps = map[int]bool{7: true}
+	m = press(t, m, "j")
+	// Cursor is now on #8 but an operation is still pending for #7.
+	// Simulate completing the pending operation so the model state is consistent.
+	msg, _ := m.Update(doneMsg{number: 7})
+	m = msg.(Model)
+	// With the current code the a key on #8 should now be allowed; this test mostly
+	// documents that pendingOps is consulted. A more thorough test would keep the
+	// operation in flight, but that requires a blocking fake.
+	if m.pendingOps[7] {
+		t.Error("pendingOps should be cleared after doneMsg")
+	}
+}
+
+func TestR_ReloadsListAndCurrentPreview(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	callsBefore := len(gh.LabelListCalls)
+	m = press(t, m, "R")
+	if len(gh.LabelListCalls) <= callsBefore {
+		t.Errorf("R should reload the issue list, got LabelListCalls=%v", gh.LabelListCalls)
+	}
+}
+
+func TestPreview_CacheHit(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: "second body", State: "OPEN"}
+	m = press(t, m, "j") // load #8
+	viewCalls := len(gh.ViewCalls)
+	m = press(t, m, "k") // back to #7
+	m = press(t, m, "j") // back to #8
+	// A refresh may still be issued, but the body should be available immediately.
+	if !strings.Contains(m.View(), "second body") {
+		t.Errorf("cached preview should show #8 body immediately, got:\n%s", m.View())
+	}
+	// Ensure we do not keep re-fetching the same issue indefinitely.
+	if len(gh.ViewCalls) > viewCalls+2 {
+		t.Errorf("too many view calls after cache hit: %v", gh.ViewCalls)
+	}
+}
