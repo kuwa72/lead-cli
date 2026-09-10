@@ -28,7 +28,10 @@ Sections:
 | `r` | open `AGENTS.md` in `$EDITOR` |
 | `s` | turn a one-liner into a new `needs-review` issue |
 | `o` | open the selected issue in a browser |
-| `Enter` | show the full issue body |
+| `m` | cycle agent dispatch mode (`batch` / `dangerous` / `interactive`) |
+| `g` | cycle active agent (`agy` / `claude` / `codex` / `devin` / etc.) |
+| `J`/`K` | scroll preview pane down/up |
+| `Enter` | show the full issue body / PR diff |
 | `z` | toggle section expand/collapse |
 | `R` | refresh |
 | `?` | show help |
