@@ -26,7 +26,7 @@ Sections:
 | `p` | peek at the agent screen with herdr or `$PAGER` |
 | `n` | report real-machine NG and spawn a follow-up issue |
 | `r` | open `AGENTS.md` in `$EDITOR` |
-| `s` | turn a one-liner into a new `needs-review` issue |
+| `s` | create a new `needs-review` issue (direct, or `!one-liner` for AI spec) |
 | `o` | open the selected issue in a browser |
 | `m` | cycle agent dispatch mode (`batch` / `dangerous` / `interactive`) |
 | `g` | cycle active agent (`agy` / `claude` / `codex` / `devin` / etc.) |

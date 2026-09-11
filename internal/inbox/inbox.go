@@ -706,25 +706,40 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.setStatus(fmt.Sprintf("Agent: %s", m.agent))
 	case "s":
-		if m.opts.Say == nil {
-			return m, m.setStatus("s is not configured (no spec AI). Run `lead say \"one-liner\"` directly.")
-		}
 		say := m.opts.Say
+		gh := m.opts.Gh
 		m.mode = modeInput
 		m.input = inputState{
 			action: "send",
-			prompt: "New issue — one-liner (Enter to file needs-review, Esc cancel) > ",
+			prompt: "New issue — title (Enter to create, !prefix for AI spec, Esc cancel) > ",
 			cursor: 0,
 			submit: func(text string) tea.Cmd {
 				if text == "" {
-					return func() tea.Msg { return doneMsg{status: "Empty one-liner; nothing filed."} }
+					return func() tea.Msg { return doneMsg{status: "Empty title; nothing filed."} }
+				}
+				if strings.HasPrefix(text, "!") {
+					if say == nil {
+						return func() tea.Msg { return doneMsg{status: "Spec AI is not configured."} }
+					}
+					oneLiner := strings.TrimSpace(strings.TrimPrefix(text, "!"))
+					if oneLiner == "" {
+						return func() tea.Msg { return doneMsg{status: "Empty one-liner; nothing filed."} }
+					}
+					return func() tea.Msg {
+						summary, err := say(context.Background(), oneLiner, 0)
+						if err != nil {
+							return doneMsg{err: err}
+						}
+						return doneMsg{status: summary, refresh: true}
+					}
 				}
 				return func() tea.Msg {
-					summary, err := say(context.Background(), text, 0)
+					ctx := context.Background()
+					ref, err := gh.IssueCreate(ctx, text, "Created from lead inbox.", []string{"needs-review"})
 					if err != nil {
 						return doneMsg{err: err}
 					}
-					return doneMsg{status: summary, refresh: true}
+					return doneMsg{status: fmt.Sprintf("Created #%d %s", ref.Number, text), refresh: true}
 				}
 			},
 		}
@@ -1111,9 +1126,23 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		text := strings.TrimSpace(string(m.input.text))
 		submit := m.input.submit
 		targetNumber := m.input.targetNumber
+		action := m.input.action
 		m.input = inputState{}
 		if targetNumber > 0 {
 			m.pendingOps[targetNumber] = true
+			if action == "reject" {
+				m.status = fmt.Sprintf("Rejecting #%d...", targetNumber)
+			} else {
+				m.status = fmt.Sprintf("Replying to #%d...", targetNumber)
+			}
+			m.loading = true
+		} else if action == "send" && text != "" {
+			if strings.HasPrefix(text, "!") {
+				m.status = "Generating issue with spec AI (this may take a minute)..."
+			} else {
+				m.status = fmt.Sprintf("Creating issue %q...", text)
+			}
+			m.loading = true
 		}
 		return m, submit(text)
 	case tea.KeyLeft:
@@ -1620,7 +1649,7 @@ func (m Model) viewHelp() string {
 		"  [n] Report bug         merged issues only",
 		"",
 		"Global",
-		"  [s] New issue from one-liner",
+		"  [s] New issue (direct create, or !one-liner for AI spec)",
 		"  [m] Toggle agent mode (batch/dangerous/interactive)",
 		"  [g] Toggle agent (agy/claude/codex/devin/opencode/gemini)",
 		"  [r] Open AGENTS.md",

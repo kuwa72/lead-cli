@@ -214,9 +214,14 @@ case "$out" in *"（PR 未記録）"*) fail "detail should not show 'no PR' when
 grep -qxF 'GH issue view 9 --json number,title,body,state' "$GH_LOG" || fail "enter did not fetch issue #9: $(cat "$GH_LOG")"
 grep -qxF 'GH pr view 99 --json body' "$GH_LOG" || fail "enter did not fetch PR body: $(cat "$GH_LOG")"
 
-# --- 10. s: 一言から needs-review Issue 起票（spec AI 経由） -------------------------
+# --- 10. s: 直接起票（デフォルト） & !prefix での spec AI 起票 -------------------------
 : > "$GH_LOG"; : > "$AGY_LOG"
-LEAD_TEST_INBOX_KEYS='s,text:add alert on zero stock,enter,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless s flow failed"
+LEAD_TEST_INBOX_KEYS='s,text:direct quick issue,enter,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless direct s flow failed"
+tr '\n' ' ' < "$GH_LOG" | grep -q 'issue create --title direct quick issue --body Created from lead inbox. --label needs-review' \
+  || fail "s did not create a direct needs-review issue: $(cat "$GH_LOG")"
+
+: > "$GH_LOG"; : > "$AGY_LOG"
+LEAD_TEST_INBOX_KEYS='s,text:!add alert on zero stock,enter,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless !s flow failed"
 grep -q 'add alert on zero stock' "$AGY_LOG" || fail "one-liner not passed to spec agent: $(cat "$AGY_LOG")"
 # --body contains a newline, so the argv record spans two log lines.
 tr '\n' ' ' < "$GH_LOG" | grep -q 'issue create --title fix(stock): warn on zero stock --body ## Acceptance - warns --label needs-review' \
