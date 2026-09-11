@@ -33,11 +33,11 @@ func TestBuild_SectionsFromLabelsAndState(t *testing.T) {
 	}
 
 	got := Build(needsReview, blocked, merged, nil, wfs)
-	if len(got) != 4 {
-		t.Fatalf("Build returned %d sections, want 4", len(got))
+	if len(got) != 5 {
+		t.Fatalf("Build returned %d sections, want 5", len(got))
 	}
-	kinds := []Kind{got[0].Kind, got[1].Kind, got[2].Kind, got[3].Kind}
-	if want := []Kind{KindNeedsReview, KindBlocked, KindMerged, KindRunning}; !reflect.DeepEqual(kinds, want) {
+	kinds := []Kind{got[0].Kind, got[1].Kind, got[2].Kind, got[3].Kind, got[4].Kind}
+	if want := []Kind{KindNeedsReview, KindBlocked, KindMerged, KindRunning, KindBacklog}; !reflect.DeepEqual(kinds, want) {
 		t.Fatalf("section order = %v, want %v", kinds, want)
 	}
 	if nums := numbers(got[0]); !reflect.DeepEqual(nums, []int{92, 93}) {
@@ -59,8 +59,8 @@ func TestBuild_SectionsFromLabelsAndState(t *testing.T) {
 	if got[3].Items[0].Agent != "agy" || got[3].Items[0].Branch != "issue/70-x" {
 		t.Errorf("running item lacks agent/branch: %+v", got[3].Items[0])
 	}
-	if got[0].Collapsed || got[1].Collapsed || !got[2].Collapsed || !got[3].Collapsed {
-		t.Errorf("collapsed flags: %v %v %v %v, want false false true true", got[0].Collapsed, got[1].Collapsed, got[2].Collapsed, got[3].Collapsed)
+	if got[0].Collapsed || got[1].Collapsed || !got[2].Collapsed || !got[3].Collapsed || !got[4].Collapsed {
+		t.Errorf("collapsed flags: %v %v %v %v %v, want false false true true true", got[0].Collapsed, got[1].Collapsed, got[2].Collapsed, got[3].Collapsed, got[4].Collapsed)
 	}
 }
 
@@ -178,6 +178,37 @@ func TestKeyA_OnBlockedIssueDoesNothingToGitHub(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "#9") {
 		t.Errorf("view should mention #9 in status, got:\n%s", m.View())
+	}
+}
+
+func TestKeyA_ApprovesBacklogIssue(t *testing.T) {
+	gh := &testutil.FakeGhClient{
+		Summaries: []ports.IssueSummary{
+			{Number: 42, Title: "backlog task"},
+		},
+		Issues: map[int]ports.Issue{
+			42: {Number: 42, Title: "backlog task", State: "OPEN"},
+		},
+	}
+	sh := &fakeShell{}
+	m := New(Options{
+		Gh:       gh,
+		Shell:    sh,
+		Headless: true,
+	})
+	m = drive(t, m, nil, m.Init())
+	// Backlog is section index 4, collapsed initially.
+	// Headers: Review (0), Blocked (0), Merged (0), Running (0), Backlog (4).
+	// Cursor starts at 0. Press "j" 4 times to reach Backlog header.
+	// Press "enter" to expand Backlog.
+	// Press "j" to select issue #42.
+	// Press "a" to approve #42.
+	m = press(t, m, "j", "j", "j", "j", "enter", "j", "a")
+	if want := []testutil.LabelCall{{Number: 42, Label: LabelReady}}; !reflect.DeepEqual(gh.AddedLabels, want) {
+		t.Errorf("AddedLabels = %+v, want %+v", gh.AddedLabels, want)
+	}
+	if !strings.Contains(m.View(), "#42") || !strings.Contains(m.View(), "ready") {
+		t.Errorf("status line should report #42 ready, got:\n%s", m.View())
 	}
 }
 
@@ -606,6 +637,7 @@ func TestKeyQ_Quits(t *testing.T) {
 func TestFooter_ContextDependentActions(t *testing.T) {
 	want := map[Kind]string{
 		KindNeedsReview: "[Enter] Open   [a] Approve   [t] Reply   [m] Mode: batch   [g] Agent: agy   [,] Settings   [?] Help   [q] Quit",
+		KindBacklog:     "[Enter] Open   [a] Approve   [t] Reply   [m] Mode: batch   [g] Agent: agy   [,] Settings   [?] Help   [q] Quit",
 		KindBlocked:     "[Enter] Open   [t] Reply   [p] Peek   [m] Mode: batch   [g] Agent: agy   [,] Settings   [?] Help   [q] Quit",
 		KindMerged:      "[Enter] Open   [n] Report bug   [c] Mark seen   [m] Mode: batch   [g] Agent: agy   [,] Settings   [?] Help   [q] Quit",
 		KindRunning:     "[Enter] Open   [p] Peek   [o] Browser   [m] Mode: batch   [g] Agent: agy   [,] Settings   [?] Help   [q] Quit",

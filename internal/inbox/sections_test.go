@@ -107,3 +107,33 @@ func TestBuild_FiltersClosedIssueWorkflows(t *testing.T) {
 	}
 }
 
+func TestBuild_IncludesBacklogSection(t *testing.T) {
+	review := []ports.IssueSummary{{Number: 1, Title: "rev"}}
+	blocked := []ports.IssueSummary{{Number: 2, Title: "blk"}}
+	open := []ports.IssueSummary{
+		{Number: 1, Title: "rev"},
+		{Number: 2, Title: "blk"},
+		{Number: 3, Title: "backlog 1"},
+		{Number: 4, Title: "backlog 2"},
+	}
+	sections := Build(review, blocked, nil, nil, nil, BuildOptions{
+		OpenIssues: open,
+	})
+	if len(sections) != 5 {
+		t.Fatalf("expected 5 sections, got %d", len(sections))
+	}
+	backlog := sections[4]
+	if backlog.Kind != KindBacklog {
+		t.Errorf("section[4] kind = %v, want KindBacklog", backlog.Kind)
+	}
+	if !backlog.Collapsed {
+		t.Errorf("backlog section should be collapsed by default")
+	}
+	if len(backlog.Items) != 2 {
+		t.Fatalf("backlog items = %d, want 2", len(backlog.Items))
+	}
+	if backlog.Items[0].Number != 3 || backlog.Items[1].Number != 4 {
+		t.Errorf("backlog items = %+v, want [3, 4]", backlog.Items)
+	}
+}
+
