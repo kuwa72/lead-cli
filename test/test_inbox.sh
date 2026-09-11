@@ -297,4 +297,9 @@ for label in "Issue actions" "Peek agent log" "Mark as seen" "Global" "Move" "En
   case "$out" in *"$label"*) ;; *) fail "help missing $label: $out";; esac
 done
 
+# --- 19. L key opens log history ----------------------------------------------
+out="$(LEAD_TEST_INBOX_KEYS='L' "$tmp/lead" 2>&1)" || fail "headless L failed"
+case "$out" in *"Event Log"*) ;; *) fail "log history view missing: $out";; esac
+
 echo "inbox tests passed"
+

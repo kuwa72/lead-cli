@@ -78,6 +78,7 @@ const (
 	modeInput
 	modeHelp
 	modeSettings
+	modeLog
 )
 
 type inputState struct {
@@ -134,14 +135,18 @@ type Model struct {
 	knownNeedsReview  map[int]bool // tracked needs-review issues for completion notify
 	knownBlocked      map[int]bool // tracked blocked issues for completion notify
 	hasInitialLoad    bool         // suppresses notifications on initial load
+	repoOpenCount     int          // total open issues in repository on GitHub
+	logs              []string     // event log / status history entries
+	logOffset         int          // scroll offset for log view
 }
 
 // Messages.
 type (
 	loadedMsg struct {
-		sections     []Section
-		err          error
-		sessionSince time.Time
+		sections      []Section
+		err           error
+		sessionSince  time.Time
+		repoOpenCount int
 	}
 	doneMsg struct {
 		status  string
@@ -255,6 +260,11 @@ func New(opts Options) Model {
 			m.mode = modeHelp
 		}
 	}
+	if opts.Repo != "" {
+		m.addLog(fmt.Sprintf("Started lead inbox for %s", opts.Repo))
+	} else {
+		m.addLog("Started lead inbox")
+	}
 	m.focusFirstItem()
 	return m
 }
@@ -367,28 +377,32 @@ func (m Model) loadCmd() tea.Cmd {
 			return loadedMsg{err: err}
 		}
 
+		var openCount int
 		var openNumbers map[int]bool
-		if openIssues, err := opts.Gh.ListOpen(ctx); err == nil && len(openIssues) > 0 {
-			openNumbers = make(map[int]bool, len(openIssues)+len(review)+len(blocked))
-			for _, iss := range openIssues {
-				openNumbers[iss.Number] = true
-			}
-			for _, iss := range review {
-				openNumbers[iss.Number] = true
-			}
-			for _, iss := range blocked {
-				openNumbers[iss.Number] = true
-			}
+		if openIssues, err := opts.Gh.ListOpen(ctx); err == nil {
+			openCount = len(openIssues)
+			if len(openIssues) > 0 {
+				openNumbers = make(map[int]bool, len(openIssues)+len(review)+len(blocked))
+				for _, iss := range openIssues {
+					openNumbers[iss.Number] = true
+				}
+				for _, iss := range review {
+					openNumbers[iss.Number] = true
+				}
+				for _, iss := range blocked {
+					openNumbers[iss.Number] = true
+				}
 
-			// Zombie workflow sync: if an in_progress workflow in this repo is no longer
-			// open on GitHub, mark it completed in the store.
-			if opts.Store != nil {
-				for i, w := range wfs {
-					if w.Status == state.StatusInProgress && !openNumbers[w.Issue] {
-						if opts.Repo == "" || w.Repository == "" || w.Repository == "local" || RepoSlug(w.Repository) == opts.Repo {
-							w.Status = state.StatusCompleted
-							wfs[i] = w
-							_ = opts.Store.Upsert(w)
+				// Zombie workflow sync: if an in_progress workflow in this repo is no longer
+				// open on GitHub, mark it completed in the store.
+				if opts.Store != nil {
+					for i, w := range wfs {
+						if w.Status == state.StatusInProgress && !openNumbers[w.Issue] {
+							if opts.Repo == "" || w.Repository == "" || w.Repository == "local" || RepoSlug(w.Repository) == opts.Repo {
+								w.Status = state.StatusCompleted
+								wfs[i] = w
+								_ = opts.Store.Upsert(w)
+							}
 						}
 					}
 				}
@@ -413,7 +427,7 @@ func (m Model) loadCmd() tea.Cmd {
 				OpenNumbers: openList,
 			})
 		}
-		return loadedMsg{sections: sections, sessionSince: sessionSince, err: loadErr}
+		return loadedMsg{sections: sections, sessionSince: sessionSince, err: loadErr, repoOpenCount: openCount}
 	}
 }
 
@@ -502,7 +516,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loadedMsg:
 		m.loading = false
 		m.loadErr = msg.err
+		m.repoOpenCount = msg.repoOpenCount
 		if msg.err != nil && len(m.sections) > 0 {
+			m.addLog("Error: " + msg.err.Error())
 			cmd := m.setStatus("offline: " + msg.err.Error())
 			return m, cmd
 		}
@@ -531,13 +547,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !msg.sessionSince.IsZero() && m.sessionSince.IsZero() {
 			m.sessionSince = msg.sessionSince
 		}
+		var reviewCount, blockedCount int
+		for _, s := range msg.sections {
+			switch s.Kind {
+			case KindNeedsReview:
+				reviewCount = len(s.Items)
+			case KindBlocked:
+				blockedCount = len(s.Items)
+			}
+		}
+		totalActive := reviewCount + blockedCount
+		var statusText string
+		if totalActive == 0 {
+			if msg.repoOpenCount > 0 {
+				statusText = fmt.Sprintf("Loaded: 0 inbox items (%d open issues in repo without lead labels)", msg.repoOpenCount)
+			} else {
+				statusText = "Loaded: 0 open issues in repo"
+			}
+		} else {
+			statusText = fmt.Sprintf("Loaded: %d needs-review, %d blocked (%d open in repo)", reviewCount, blockedCount, msg.repoOpenCount)
+		}
+		m.addLog(statusText)
+		var statusCmd tea.Cmd
+		if m.status == "" || m.status == "cached" {
+			statusCmd = m.setStatus(statusText)
+		}
 		// Load the preview only on reloads, not on the very first load, so the
 		// inbox is ready immediately and tests that start with a key sequence do
 		// not observe a preview fetch.
 		if wasRefreshed {
+			if statusCmd != nil {
+				return m, tea.Batch(statusCmd, m.loadPreviewForCurrent())
+			}
 			return m, m.loadPreviewForCurrent()
 		}
-		return m, nil
+		return m, statusCmd
 	case doneMsg:
 		if msg.number > 0 {
 			delete(m.pendingOps, msg.number)
@@ -628,6 +672,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateDetail(msg)
 		case modeSettings:
 			return m.updateSettings(msg)
+		case modeLog:
+			return m.updateLog(msg)
 		case modeHelp:
 			if m.helpReturnMode == modeDetail {
 				m.mode = modeDetail
@@ -701,6 +747,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "R":
 		m.previewOffset = 0
 		m.loading = true
+		m.status = ""
 		return m, m.loadCmd()
 	case "?":
 		m.helpReturnMode = modeList
@@ -710,6 +757,10 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openAgentsMd()
 	case ",", "S":
 		m.mode = modeSettings
+		return m, nil
+	case "L":
+		m.mode = modeLog
+		m.logOffset = 0
 		return m, nil
 	case "m":
 		m.agentMode = nextAgentMode(m.AgentMode())
@@ -1342,6 +1393,8 @@ func (m Model) View() string {
 		return m.viewDetail()
 	case modeSettings:
 		return m.viewSettings()
+	case modeLog:
+		return m.viewLog()
 	case modeHelp:
 		return m.viewHelp()
 	}
@@ -1442,10 +1495,18 @@ func (m Model) statusClearCmd(gen int) tea.Cmd {
 func (m Model) statusLine(w int) string {
 	var s string
 	switch {
+	case m.loading && m.status == "cached":
+		s = "Showing cached data (fetching latest updates from GitHub...)"
 	case m.status != "":
 		s = m.status
 	case m.loadErr != nil:
 		s = "Error: Could not load inbox. " + Sanitize(m.loadErr.Error())
+	case m.loading:
+		if m.opts.Repo != "" {
+			s = fmt.Sprintf("Fetching issues for %s from GitHub...", m.opts.Repo)
+		} else {
+			s = "Fetching issues from GitHub..."
+		}
 	default:
 		s = "j/k move  Enter open  ? help  q quit"
 	}
@@ -1574,6 +1635,8 @@ func (m Model) footerTokens() []string {
 		return []string{"[Enter] Send", "[Esc] Cancel"}
 	case modeDetail:
 		return []string{"[↑/↓] Scroll", "[PgUp/PgDn] Page", "[o] Browser", "[?] Help", "[Esc] Back"}
+	case modeLog:
+		return []string{"[↑/↓] Scroll", "[?] Help", "[Esc/q/L] Back"}
 	case modeList:
 		row, ok := m.current()
 		if !ok {
@@ -1676,6 +1739,7 @@ func (m Model) viewHelp() string {
 		"",
 		"Global",
 		"  [s] New issue (direct create, or !one-liner for AI spec)",
+		"  [L] Event log history",
 		"  [,] Settings (configure agent, mode, issue creation)",
 		"  [m] Toggle agent mode (batch/dangerous/interactive)",
 		"  [g] Toggle agent (agy/claude/codex/devin/opencode/gemini)",

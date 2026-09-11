@@ -327,10 +327,22 @@ func (m Model) bodyLines(rows []Row, top, bodyH, leftW int, c listColumns) []str
 	return lines
 }
 
+func (m Model) hasAnyItems() bool {
+	for _, s := range m.sections {
+		if len(s.Items) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // previewHeader is the column-header cell above the right preview pane.
 func (m Model) previewHeader() string {
 	row, ok := m.current()
 	if !ok || row.IsHeader() || m.detail.Number == 0 {
+		if !m.hasAnyItems() {
+			return "Inbox Status"
+		}
 		return ""
 	}
 	return Sanitize(fmt.Sprintf("#%d  %s", m.detail.Number, row.Section.Kind.Title()))
@@ -350,6 +362,30 @@ func (m Model) previewLines(w, h int) []string {
 	}
 	row, ok := m.current()
 	if !ok || row.IsHeader() || m.detail.Number == 0 {
+		if !m.hasAnyItems() {
+			var lines []string
+			lines = append(lines, "No inbox items")
+			lines = append(lines, "")
+			if m.repoOpenCount > 0 {
+				lines = append(lines, fmt.Sprintf("Repository has %d open issue(s) on GitHub,", m.repoOpenCount))
+				lines = append(lines, "but none are labeled 'needs-review' or 'blocked'.")
+			} else {
+				lines = append(lines, "No open issues in repository.")
+			}
+			lines = append(lines, "")
+			lines = append(lines, "Getting started:")
+			lines = append(lines, "  • Press 's' to create a new issue (AI / manual)")
+			lines = append(lines, "  • Run 'lead work' in terminal to pick any open issue")
+			if m.repoOpenCount > 0 {
+				lines = append(lines, "  • Label existing issue to show here:")
+				lines = append(lines, "    gh issue edit <n> --add-label needs-review")
+			}
+			lines = append(lines, "  • Press 'L' to view event log history")
+			for len(lines) < h {
+				lines = append(lines, "")
+			}
+			return lines[:h]
+		}
 		return nil
 	}
 	var lines []string
