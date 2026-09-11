@@ -32,6 +32,7 @@ const (
 	KindBlocked
 	KindMerged
 	KindRunning
+	KindBacklog
 )
 
 // Title is the section heading shown on screen.
@@ -45,13 +46,15 @@ func (k Kind) Title() string {
 		return "Merged"
 	case KindRunning:
 		return "Running"
+	case KindBacklog:
+		return "Backlog"
 	}
 	return "?"
 }
 
 // IsIssueQueue reports whether items in this section accept the
 // approve/reject keys (only label-driven sections do).
-func (k Kind) IsIssueQueue() bool { return k == KindNeedsReview || k == KindBlocked }
+func (k Kind) IsIssueQueue() bool { return k == KindNeedsReview || k == KindBlocked || k == KindBacklog }
 
 // MaxMergedItems caps the "Merged" section to keep the inbox readable.
 const MaxMergedItems = 20
@@ -84,14 +87,16 @@ type Section struct {
 
 // BuildOptions configures filtering and context for Build.
 type BuildOptions struct {
-	Repo        string       // "owner/repo" slug; if set, wfs from other repositories are excluded
-	OpenNumbers map[int]bool // set of open issue numbers; if non-nil, issues not in this set are excluded from Running
+	Repo        string               // "owner/repo" slug; if set, wfs from other repositories are excluded
+	OpenNumbers map[int]bool         // set of open issue numbers; if non-nil, issues not in this set are excluded from Running
+	OpenIssues  []ports.IssueSummary // open issues in repository for the Backlog section
 }
 
 // Build sections issues: `needs-review` and `blocked` come from gh label
 // listings (an issue carrying both stays in needs-review only); `merged`
 // comes from `ListMergedSince` filtered by the read-state; `running` is
-// derived locally from workflows.json (RFC §13.1).
+// derived locally from workflows.json (RFC §13.1); `backlog` contains
+// other open issues without lead state labels.
 func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue, seen *SeenState, wfs []state.Workflow, opts ...BuildOptions) []Section {
 	var bo BuildOptions
 	if len(opts) > 0 {
@@ -166,7 +171,22 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		it := Item{Number: w.Issue, Title: strings.TrimSpace(w.Branch), Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Pane: w.Pane, Branch: w.Branch, PRNumber: firstPRNumber(w.PullRequests), Kind: KindRunning}
 		running.Items = append(running.Items, it)
 	}
-	return []Section{review, stuck, mergedSection, running}
+
+	backlogSection := Section{Kind: KindBacklog, Collapsed: true}
+	for _, s := range bo.OpenIssues {
+		if seenNumbers[s.Number] {
+			continue
+		}
+		seenNumbers[s.Number] = true
+		backlogSection.Items = append(backlogSection.Items, enrich(Item{
+			Number:    s.Number,
+			Title:     s.Title,
+			Kind:      KindBacklog,
+			UpdatedAt: s.UpdatedAt,
+		}))
+	}
+
+	return []Section{review, stuck, mergedSection, running, backlogSection}
 }
 
 func firstPRNumber(prs []state.PRRef) int {

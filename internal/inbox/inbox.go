@@ -221,6 +221,7 @@ func New(opts Options) Model {
 			initialSections = Build(cache.Review, cache.Blocked, cache.Merged, nil, wfs, BuildOptions{
 				Repo:        opts.Repo,
 				OpenNumbers: openNums,
+				OpenIssues:  cache.OpenIssues,
 			})
 			initialStatus = "cached"
 		}
@@ -379,8 +380,10 @@ func (m Model) loadCmd() tea.Cmd {
 
 		var openCount int
 		var openNumbers map[int]bool
+		var openIssuesList []ports.IssueSummary
 		if openIssues, err := opts.Gh.ListOpen(ctx); err == nil {
 			openCount = len(openIssues)
+			openIssuesList = openIssues
 			if len(openIssues) > 0 {
 				openNumbers = make(map[int]bool, len(openIssues)+len(review)+len(blocked))
 				for _, iss := range openIssues {
@@ -412,6 +415,7 @@ func (m Model) loadCmd() tea.Cmd {
 		sections := Build(review, blocked, merged, buildSeen, wfs, BuildOptions{
 			Repo:        opts.Repo,
 			OpenNumbers: openNumbers,
+			OpenIssues:  openIssuesList,
 		})
 		if loadErr == nil && opts.Cache != nil {
 			var openList []int
@@ -425,6 +429,7 @@ func (m Model) loadCmd() tea.Cmd {
 				Blocked:     blocked,
 				Merged:      merged,
 				OpenNumbers: openList,
+				OpenIssues:  openIssuesList,
 			})
 		}
 		return loadedMsg{sections: sections, sessionSince: sessionSince, err: loadErr, repoOpenCount: openCount}
@@ -844,8 +849,8 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m, m.openDetailCmd(it)
 	case "a":
-		if it.Kind != KindNeedsReview {
-			return m, m.setStatus(fmt.Sprintf("#%d is not needs-review (a only approves needs-review issues)", it.Number))
+		if it.Kind != KindNeedsReview && it.Kind != KindBacklog {
+			return m, m.setStatus(fmt.Sprintf("#%d is not actionable with approve (a only approves needs-review or backlog issues)", it.Number))
 		}
 		if m.pendingOps[it.Number] {
 			return m, m.setStatus(fmt.Sprintf("Already processing #%d", it.Number))
@@ -1042,13 +1047,11 @@ func (m Model) doApproveCmd(number int) tea.Cmd {
 func (m Model) doApprove(number int) (string, error) {
 	gh := m.opts.Gh
 	ctx := context.Background()
-	if err := gh.IssueRemoveLabel(ctx, number, LabelNeedsReview); err != nil {
-		return "", err
-	}
+	_ = gh.IssueRemoveLabel(ctx, number, LabelNeedsReview)
 	if err := gh.IssueAddLabel(ctx, number, LabelReady); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Approved #%d (needs-review → ready)", number), nil
+	return fmt.Sprintf("Approved #%d (ready)", number), nil
 }
 
 func (m Model) approveWithBodyCmd(number int, body string) tea.Cmd {
@@ -1651,7 +1654,7 @@ func (m Model) footerTokens() []string {
 			}
 		} else {
 			switch row.Item.Kind {
-			case KindNeedsReview:
+			case KindNeedsReview, KindBacklog:
 				tokens = []string{"[Enter] Open", "[a] Approve", "[t] Reply"}
 			case KindBlocked:
 				tokens = []string{"[Enter] Open", "[t] Reply", "[p] Peek"}

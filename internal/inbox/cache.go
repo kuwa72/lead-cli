@@ -19,6 +19,7 @@ type IssueCache struct {
 	Blocked     []ports.IssueSummary `json:"blocked"`
 	Merged      []ports.MergedIssue  `json:"merged"`
 	OpenNumbers []int                `json:"open_numbers"`
+	OpenIssues  []ports.IssueSummary `json:"open_issues,omitempty"`
 }
 
 // ResolveCachePath picks the cache file location next to workflows.json.
