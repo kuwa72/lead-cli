@@ -1521,4 +1521,73 @@ func TestInbox_AgentAndModeToggle(t *testing.T) {
 	}
 }
 
+func TestLoadedMsg_SetsSummaryStatusAndLog(t *testing.T) {
+	_, _, m := newFixture(t)
+	m.status = "cached"
+
+	// Simulate loadedMsg with 0 inbox items and 5 repo open issues
+	msg := loadedMsg{
+		sections: []Section{
+			{Kind: KindNeedsReview, Items: nil},
+			{Kind: KindBlocked, Items: nil},
+			{Kind: KindMerged, Items: nil},
+			{Kind: KindRunning, Items: nil},
+		},
+		repoOpenCount: 5,
+	}
+
+	next, _ := m.Update(msg)
+	m = next.(Model)
+
+	want := "Loaded: 0 inbox items (5 open issues in repo without lead labels)"
+	if m.status != want {
+		t.Errorf("status = %q, want %q", m.status, want)
+	}
+	if len(m.Logs()) == 0 || !strings.Contains(m.Logs()[len(m.Logs())-1], "5 open issues") {
+		t.Errorf("logs should record loaded summary, got: %v", m.Logs())
+	}
+}
+
+func TestEmptyInbox_ShowsGuidanceInPreview(t *testing.T) {
+	_, _, m := newFixture(t)
+	m.sections = []Section{
+		{Kind: KindNeedsReview, Items: nil},
+		{Kind: KindBlocked, Items: nil},
+		{Kind: KindMerged, Items: nil},
+		{Kind: KindRunning, Items: nil},
+	}
+	m.repoOpenCount = 8
+	m.width = 120
+	m.height = 24
+
+	lines := m.previewLines(48, 17)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "No inbox items") || !strings.Contains(joined, "8 open issue") {
+		t.Errorf("preview should contain empty inbox guidance and repo count, got:\n%s", joined)
+	}
+}
+
+func TestKeyL_TogglesLogView(t *testing.T) {
+	_, _, m := newFixture(t)
+	m.addLog("test event 123")
+
+	// Press 'L'
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	m = next.(Model)
+	if m.mode != modeLog {
+		t.Fatalf("expected modeLog after 'L', got %v", m.mode)
+	}
+	view := m.View()
+	if !strings.Contains(view, "test event 123") {
+		t.Errorf("log view should show log entry, got:\n%s", view)
+	}
+
+	// Press 'Esc' to return to list
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if m.mode != modeList {
+		t.Errorf("expected modeList after Esc, got %v", m.mode)
+	}
+}
+
 
