@@ -62,6 +62,10 @@ type Options struct {
 	AgentMode string
 	// OnConfigChange is invoked when the user toggles Agent or AgentMode via keyboard.
 	OnConfigChange func(agent, mode string)
+	// IssueCreation controls the default behavior of 's' (direct vs ai).
+	IssueCreation string
+	// OnSettingsChange is invoked when user modifies any setting (issueCreation, agent, mode).
+	OnSettingsChange func(cfg Config)
 	// Notifier sends desktop/terminal notifications on milestone events (issue #145).
 	Notifier notify.Notifier
 }
@@ -73,6 +77,7 @@ const (
 	modeDetail
 	modeInput
 	modeHelp
+	modeSettings
 )
 
 type inputState struct {
@@ -102,6 +107,7 @@ type Model struct {
 	detailPrDiff      string
 	detailPrDiffErr   bool
 	previewOffset     int
+	previewSnapshot   previewSnapshot
 	input             inputState
 	status            string
 	loadErr           error
@@ -111,6 +117,7 @@ type Model struct {
 	width             int
 	height            int
 	listTop           int // first visible row in the scrolled list body
+	listOffset        int // scroll offset for the item list
 	selectedIssue     int // issue number under the cursor (0 when a header is selected)
 	previewReq        int // monotonic id to discard stale preview responses
 	previewLoading    bool
@@ -122,6 +129,8 @@ type Model struct {
 	statusGen         int          // generation counter for status auto-clear
 	agent             string       // active agent
 	agentMode         string       // active agent mode
+	issueCreation     string       // issue creation default ("direct" or "ai")
+	settingsCursor    int          // selected row in settings view
 	knownNeedsReview  map[int]bool // tracked needs-review issues for completion notify
 	knownBlocked      map[int]bool // tracked blocked issues for completion notify
 	hasInitialLoad    bool         // suppresses notifications on initial load
@@ -229,12 +238,16 @@ func New(opts Options) Model {
 		theme:            NewTheme(ModeTerminal, termenv.Ascii, nil),
 		agent:            opts.Agent,
 		agentMode:        opts.AgentMode,
+		issueCreation:    opts.IssueCreation,
 	}
 	if m.agent == "" {
 		m.agent = "agy"
 	}
 	if m.agentMode == "" {
 		m.agentMode = "batch"
+	}
+	if m.issueCreation == "" {
+		m.issueCreation = IssueCreationDirect
 	}
 	if opts.Seen != nil {
 		shown, err := opts.Seen.HelpShown()
@@ -613,6 +626,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateInput(msg)
 		case modeDetail:
 			return m.updateDetail(msg)
+		case modeSettings:
+			return m.updateSettings(msg)
 		case modeHelp:
 			if m.helpReturnMode == modeDetail {
 				m.mode = modeDetail
@@ -693,31 +708,36 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		return m.openAgentsMd()
+	case ",", "S":
+		m.mode = modeSettings
+		return m, nil
 	case "m":
 		m.agentMode = nextAgentMode(m.AgentMode())
-		if m.opts.OnConfigChange != nil {
-			m.opts.OnConfigChange(m.Agent(), m.agentMode)
-		}
+		m.notifyConfigChange()
 		return m, m.setStatus(fmt.Sprintf("Agent mode: %s", m.agentMode))
 	case "g":
 		m.agent = nextAgent(m.Agent())
-		if m.opts.OnConfigChange != nil {
-			m.opts.OnConfigChange(m.agent, m.AgentMode())
-		}
+		m.notifyConfigChange()
 		return m, m.setStatus(fmt.Sprintf("Agent: %s", m.agent))
 	case "s":
 		say := m.opts.Say
 		gh := m.opts.Gh
 		m.mode = modeInput
+		isAI := m.IssueCreation() == IssueCreationAI
+		prompt := "New issue — title (Enter to create, !prefix for AI spec, Esc cancel) > "
+		if isAI {
+			prompt = "New issue — AI spec (Enter to generate spec, !title for direct create, Esc cancel) > "
+		}
 		m.input = inputState{
 			action: "send",
-			prompt: "New issue — title (Enter to create, !prefix for AI spec, Esc cancel) > ",
+			prompt: prompt,
 			cursor: 0,
 			submit: func(text string) tea.Cmd {
 				if text == "" {
 					return func() tea.Msg { return doneMsg{status: "Empty title; nothing filed."} }
 				}
-				if strings.HasPrefix(text, "!") {
+				isAISubmit := (!isAI && strings.HasPrefix(text, "!")) || (isAI && !strings.HasPrefix(text, "!"))
+				if isAISubmit {
 					if say == nil {
 						return func() tea.Msg { return doneMsg{status: "Spec AI is not configured."} }
 					}
@@ -733,13 +753,14 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						return doneMsg{status: summary, refresh: true}
 					}
 				}
+				directTitle := strings.TrimSpace(strings.TrimPrefix(text, "!"))
 				return func() tea.Msg {
 					ctx := context.Background()
-					ref, err := gh.IssueCreate(ctx, text, "Created from lead inbox.", []string{"needs-review"})
+					ref, err := gh.IssueCreate(ctx, directTitle, "Created from lead inbox.", []string{"needs-review"})
 					if err != nil {
 						return doneMsg{err: err}
 					}
-					return doneMsg{status: fmt.Sprintf("Created #%d %s", ref.Number, text), refresh: true}
+					return doneMsg{status: fmt.Sprintf("Created #%d %s", ref.Number, directTitle), refresh: true}
 				}
 			},
 		}
@@ -1137,10 +1158,13 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.loading = true
 		} else if action == "send" && text != "" {
-			if strings.HasPrefix(text, "!") {
+			isAI := m.IssueCreation() == IssueCreationAI
+			isAISubmit := (!isAI && strings.HasPrefix(text, "!")) || (isAI && !strings.HasPrefix(text, "!"))
+			if isAISubmit {
 				m.status = "Generating issue with spec AI (this may take a minute)..."
 			} else {
-				m.status = fmt.Sprintf("Creating issue %q...", text)
+				displayText := strings.TrimSpace(strings.TrimPrefix(text, "!"))
+				m.status = fmt.Sprintf("Creating issue %q...", displayText)
 			}
 			m.loading = true
 		}
@@ -1316,6 +1340,8 @@ func (m Model) View() string {
 	switch m.mode {
 	case modeDetail:
 		return m.viewDetail()
+	case modeSettings:
+		return m.viewSettings()
 	case modeHelp:
 		return m.viewHelp()
 	}
@@ -1551,7 +1577,7 @@ func (m Model) footerTokens() []string {
 	case modeList:
 		row, ok := m.current()
 		if !ok {
-			return []string{"[s] New", "[m] Mode: " + m.AgentMode(), "[g] Agent: " + m.Agent(), "[?] Help", "[q] Quit"}
+			return []string{"[s] New", "[m] Mode: " + m.AgentMode(), "[g] Agent: " + m.Agent(), "[,] Settings", "[?] Help", "[q] Quit"}
 		}
 		var tokens []string
 		if row.IsHeader() {
@@ -1572,10 +1598,10 @@ func (m Model) footerTokens() []string {
 				tokens = []string{"[Enter] Open", "[p] Peek", "[o] Browser"}
 			}
 		}
-		tokens = append(tokens, "[m] Mode: "+m.AgentMode(), "[g] Agent: "+m.Agent(), "[?] Help", "[q] Quit")
+		tokens = append(tokens, "[m] Mode: "+m.AgentMode(), "[g] Agent: "+m.Agent(), "[,] Settings", "[?] Help", "[q] Quit")
 		return tokens
 	}
-	return []string{"[?] Help", "[q] Quit"}
+	return []string{"[,] Settings", "[?] Help", "[q] Quit"}
 }
 
 func itemMeta(it Item, now time.Time) string {
@@ -1650,6 +1676,7 @@ func (m Model) viewHelp() string {
 		"",
 		"Global",
 		"  [s] New issue (direct create, or !one-liner for AI spec)",
+		"  [,] Settings (configure agent, mode, issue creation)",
 		"  [m] Toggle agent mode (batch/dangerous/interactive)",
 		"  [g] Toggle agent (agy/claude/codex/devin/opencode/gemini)",
 		"  [r] Open AGENTS.md",

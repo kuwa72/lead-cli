@@ -27,6 +27,7 @@ Sections:
 | `n` | report real-machine NG and spawn a follow-up issue |
 | `r` | open `AGENTS.md` in `$EDITOR` |
 | `s` | create a new `needs-review` issue (direct, or `!one-liner` for AI spec) |
+| `,` / `S` | open Settings view (configure Issue creation default, agent, mode) |
 | `o` | open the selected issue in a browser |
 | `m` | cycle agent dispatch mode (`batch` / `dangerous` / `interactive`) |
 | `g` | cycle active agent (`agy` / `claude` / `codex` / `devin` / etc.) |

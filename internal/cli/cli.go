@@ -635,8 +635,9 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	configDir := filepath.Dir(deps.stateFile())
 	configFile := filepath.Join(configDir, "inbox-config.json")
 	var cfg struct {
-		Agent     string `json:"agent"`
-		AgentMode string `json:"agent_mode"`
+		Agent         string `json:"agent"`
+		AgentMode     string `json:"agent_mode"`
+		IssueCreation string `json:"issue_creation"`
 	}
 	if data, err := os.ReadFile(configFile); err == nil {
 		_ = json.Unmarshal(data, &cfg)
@@ -646,6 +647,9 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	}
 	if cfg.AgentMode != "" {
 		opts.AgentMode = cfg.AgentMode
+	}
+	if cfg.IssueCreation != "" {
+		opts.IssueCreation = cfg.IssueCreation
 	}
 
 	dctx, cancel := context.WithCancel(cmd.Context())
@@ -665,6 +669,17 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		},
 	}
 	opts.RunningCount = d.RunningCount
+	opts.OnSettingsChange = func(c inbox.Config) {
+		cfg.Agent = c.Agent
+		cfg.AgentMode = c.AgentMode
+		cfg.IssueCreation = c.IssueCreation
+		if raw, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+			_ = os.MkdirAll(configDir, 0o755)
+			_ = os.WriteFile(configFile, raw, 0o644)
+		}
+		d.Opts.Agent = c.Agent
+		d.Opts.AgentMode = c.AgentMode
+	}
 	opts.OnConfigChange = func(agent, mode string) {
 		cfg.Agent = agent
 		cfg.AgentMode = mode
