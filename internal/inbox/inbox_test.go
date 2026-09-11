@@ -493,11 +493,25 @@ func TestKeysNS_WithoutSayAreNoOps(t *testing.T) {
 	}
 }
 
+func TestKeyS_DirectCreate(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m = press(t, m, "s", "text:warn when stock hits zero", "enter")
+	if len(gh.Created) != 1 {
+		t.Fatalf("expected 1 created issue, got: %+v", gh.Created)
+	}
+	if gh.Created[0].Title != "warn when stock hits zero" {
+		t.Errorf("title = %q, want %q", gh.Created[0].Title, "warn when stock hits zero")
+	}
+	if !strings.Contains(m.View(), "#101") {
+		t.Errorf("status should report the created issue, got:\n%s", m.View())
+	}
+}
+
 func TestKeyS_FilesNeedsReviewIssueViaSay(t *testing.T) {
 	gh, _, m := newFixture(t)
 	var calls []sayCall
 	m.opts.Say = fakeSay(&calls)
-	m = press(t, m, "s", "text:warn when stock hits zero", "enter")
+	m = press(t, m, "s", "text:!warn when stock hits zero", "enter")
 	if want := []sayCall{{OneLiner: "warn when stock hits zero", FollowUp: 0}}; !reflect.DeepEqual(calls, want) {
 		t.Errorf("Say calls = %+v, want %+v", calls, want)
 	}
@@ -505,7 +519,31 @@ func TestKeyS_FilesNeedsReviewIssueViaSay(t *testing.T) {
 		t.Errorf("status should report the created issue, got:\n%s", m.View())
 	}
 	if len(gh.Created) != 0 {
-		t.Errorf("inbox must not create issues itself (Say owns that): %+v", gh.Created)
+		t.Errorf("inbox must not create issues itself when using ! prefix: %+v", gh.Created)
+	}
+}
+
+func TestKeyS_ImmediateFeedback(t *testing.T) {
+	_, _, m := newFixture(t)
+	m = press(t, m, "s", "text:urgent bug")
+	// Send Enter without draining the resulting async command.
+	msg, _ := ParseKey("enter")
+	next, _ := m.Update(msg)
+	m = next.(Model)
+	if !m.loading {
+		t.Errorf("expected loading=true immediately after Enter")
+	}
+	if !strings.Contains(m.status, "urgent bug") {
+		t.Errorf("expected status to mention 'urgent bug', got: %q", m.status)
+	}
+}
+
+func TestKeyS_WorksWithoutSay(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.opts.Say = nil
+	m = press(t, m, "s", "text:direct issue without say", "enter")
+	if len(gh.Created) != 1 {
+		t.Fatalf("expected direct issue create when Say is nil, got: %+v", gh.Created)
 	}
 }
 
