@@ -605,10 +605,10 @@ func TestKeyQ_Quits(t *testing.T) {
 
 func TestFooter_ContextDependentActions(t *testing.T) {
 	want := map[Kind]string{
-		KindNeedsReview: "[Enter] Open   [a] Approve   [t] Reply   [m] Mode: batch   [g] Agent: agy   [?] Help   [q] Quit",
-		KindBlocked:     "[Enter] Open   [t] Reply   [p] Peek   [m] Mode: batch   [g] Agent: agy   [?] Help   [q] Quit",
-		KindMerged:      "[Enter] Open   [n] Report bug   [c] Mark seen   [m] Mode: batch   [g] Agent: agy   [?] Help   [q] Quit",
-		KindRunning:     "[Enter] Open   [p] Peek   [o] Browser   [m] Mode: batch   [g] Agent: agy   [?] Help   [q] Quit",
+		KindNeedsReview: "[Enter] Open   [a] Approve   [t] Reply   [m] Mode: batch   [g] Agent: agy   [,] Settings   [?] Help   [q] Quit",
+		KindBlocked:     "[Enter] Open   [t] Reply   [p] Peek   [m] Mode: batch   [g] Agent: agy   [,] Settings   [?] Help   [q] Quit",
+		KindMerged:      "[Enter] Open   [n] Report bug   [c] Mark seen   [m] Mode: batch   [g] Agent: agy   [,] Settings   [?] Help   [q] Quit",
+		KindRunning:     "[Enter] Open   [p] Peek   [o] Browser   [m] Mode: batch   [g] Agent: agy   [,] Settings   [?] Help   [q] Quit",
 	}
 	for kind, expected := range want {
 		m := Model{sections: []Section{{Kind: kind, Items: []Item{{Number: 1, Kind: kind}}}}, width: 120, expanded: true}
@@ -618,7 +618,7 @@ func TestFooter_ContextDependentActions(t *testing.T) {
 		}
 	}
 	empty := Model{sections: []Section{{Kind: KindNeedsReview}}, width: 120}
-	if got, want := empty.footer(), "[s] New   [m] Mode: batch   [g] Agent: agy   [?] Help   [q] Quit"; got != want {
+	if got, want := empty.footer(), "[s] New   [m] Mode: batch   [g] Agent: agy   [,] Settings   [?] Help   [q] Quit"; got != want {
 		t.Errorf("empty footer = %q, want %q", got, want)
 	}
 }

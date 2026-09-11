@@ -58,6 +58,9 @@ func ParseKey(tok string) (tea.KeyMsg, error) {
 	if kt, ok := named[strings.ToLower(tok)]; ok {
 		return tea.KeyMsg{Type: kt}, nil
 	}
+	if strings.ToLower(tok) == "comma" {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{','}}, nil
+	}
 	return tea.KeyMsg{}, fmt.Errorf("unknown key token %q", tok)
 }
 
