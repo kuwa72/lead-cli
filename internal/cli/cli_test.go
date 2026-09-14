@@ -335,3 +335,40 @@ func TestEnableCheckSkipsLabelsWithoutRemote(t *testing.T) {
 		t.Errorf("RepoLabelsCalls = %v, want no label listing without a remote", gh.RepoLabelsCalls)
 	}
 }
+
+func TestEnableWriteCreatesMissingLabels(t *testing.T) {
+	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review"}}
+	deps := enableFixture(t, gh, "https://github.com/o/r.git")
+	out, err := runEnableCmd(t, deps, "--write", "--yes")
+	if err != nil {
+		t.Fatalf("enable --write: %v\n%s", err, out)
+	}
+	var got []string
+	for _, l := range gh.CreatedLabels {
+		got = append(got, l.Name)
+	}
+	want := []string{"ready", "blocked"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("created labels = %v, want %v (present labels must not be recreated)", got, want)
+	}
+	for _, wantLine := range []string{"label/ready: created", "label/blocked: created", "label/needs-review: ok"} {
+		if !strings.Contains(out, wantLine) {
+			t.Errorf("enable --write missing %q, got:\n%s", wantLine, out)
+		}
+	}
+}
+
+func TestEnableDryRunDoesNotCreateLabels(t *testing.T) {
+	gh := &testutil.FakeGhClient{RepoLabelNames: []string{}}
+	deps := enableFixture(t, gh, "https://github.com/o/r.git")
+	out, err := runEnableCmd(t, deps)
+	if err != nil {
+		t.Fatalf("enable dry-run: %v\n%s", err, out)
+	}
+	if len(gh.CreatedLabels) != 0 {
+		t.Errorf("dry-run created labels %v, want no creation without --write", gh.CreatedLabels)
+	}
+	if !strings.Contains(out, "label/ready: missing") {
+		t.Errorf("dry-run missing label/ready missing line, got:\n%s", out)
+	}
+}

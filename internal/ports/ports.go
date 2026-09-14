@@ -100,6 +100,18 @@ type GhClient interface {
 	// current repository (`gh` resolves it). `lead enable` checks the
 	// required workflow labels against it (issue #172).
 	RepoLabels(ctx context.Context, repo string) ([]string, error)
+	// RepoCreateLabel mirrors `gh label create <name> --color <c>
+	// --description <d>` (+ `--repo <repo>` when repo is non-empty).
+	// `lead enable --write` creates missing required labels (issue #174).
+	RepoCreateLabel(ctx context.Context, repo string, label LabelDefinition) error
+}
+
+// LabelDefinition is a GitHub issue label `lead enable` ensures exists
+// (issue #174). Color is a 6-digit hex value without '#'.
+type LabelDefinition struct {
+	Name        string
+	Color       string
+	Description string
 }
 
 // BranchProtection is what `lead doctor` / `lead dispatch` need to know

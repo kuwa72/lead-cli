@@ -586,3 +586,21 @@ func (c *Client) RepoLabels(ctx context.Context, repo string) ([]string, error) 
 	}
 	return names, nil
 }
+
+// RepoCreateLabel runs `gh label create <name> --color <c> --description
+// <d>` (scoped with `--repo <repo>` when repo is non-empty). Empty color
+// or description flags are omitted, letting gh choose defaults (issue #174).
+func (c *Client) RepoCreateLabel(ctx context.Context, repo string, label ports.LabelDefinition) error {
+	args := []string{"label", "create", label.Name}
+	if label.Color != "" {
+		args = append(args, "--color", label.Color)
+	}
+	if label.Description != "" {
+		args = append(args, "--description", label.Description)
+	}
+	if repo != "" {
+		args = append(args, "--repo", repo)
+	}
+	_, err := c.run(ctx, args...)
+	return err
+}

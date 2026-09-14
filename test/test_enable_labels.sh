@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# issue #172: `lead enable` verifies required issue labels (needs-review,
-# ready, blocked) against the repository and reports label/<name>: ok|missing.
+# issue #172/#174: `lead enable` verifies required issue labels (needs-review,
+# ready, blocked) and `lead enable --write` creates the missing ones.
 # Behavioral checks only: exit statuses, command outputs, gh argv records.
 set -euo pipefail
 
@@ -17,7 +17,8 @@ CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 export HOME="$tmp/home"
 mkdir -p "$HOME"
 
-# --- dummy gh: answers `label list` with $LEAD_TEST_LABELS JSON, logs argv ---
+# --- stateful dummy gh: `label list` reads $GH_LABEL_STATE (one name per
+# --- line), `label create <name>` appends to it; every call logs its argv.
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -27,7 +28,19 @@ if [ "${LEAD_TEST_GH_FAIL:-0}" = "1" ]; then
   exit 1
 fi
 if [ "$1" = "label" ] && [ "$2" = "list" ]; then
-  printf '%s' "$LEAD_TEST_LABELS"
+  first=1
+  printf '['
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    [ "$first" = 1 ] || printf ','
+    first=0
+    printf '{"name":"%s"}' "$name"
+  done < "$GH_LABEL_STATE"
+  printf ']'
+  exit 0
+fi
+if [ "$1" = "label" ] && [ "$2" = "create" ]; then
+  printf '%s\n' "$3" >> "$GH_LABEL_STATE"
   exit 0
 fi
 echo "unexpected gh call: $@" >&2
@@ -36,6 +49,7 @@ EOF
 chmod +x "$tmp/bin/gh"
 export PATH="$tmp/bin:$PATH"
 export GH_ARG_LOG="$tmp/gh-args.log"
+export GH_LABEL_STATE="$tmp/gh-labels.txt"
 
 proj="$tmp/project"
 mkdir -p "$proj"
@@ -46,37 +60,62 @@ git config user.name "Test"
 git remote add origin "https://github.com/o/r.git"
 
 clear_log() { : > "$GH_ARG_LOG"; }
+set_labels() { printf '%s' "$1" > "$GH_LABEL_STATE"; }
+label_count() { grep -c . "$GH_LABEL_STATE"; }
 
-# --- 1. all labels present: --check exits 0 with ok lines ---
-export LEAD_TEST_LABELS='[{"name":"needs-review"},{"name":"ready"},{"name":"blocked"}]'
+# --- 1. dry-run reports missing labels and creates nothing ---
+set_labels 'needs-review
+'
 clear_log
-"$tmp/lead" enable --write --yes >/dev/null || fail "enable --write failed"
-out="$("$tmp/lead" enable --check)" || fail "enable --check failed with all labels present: $out"
-case "$out" in *"label/needs-review: ok"*) ;; *) fail "missing label/needs-review ok line: $out";; esac
-case "$out" in *"label/ready: ok"*) ;; *) fail "missing label/ready ok line: $out";; esac
-case "$out" in *"label/blocked: ok"*) ;; *) fail "missing label/blocked ok line: $out";; esac
-case "$(cat "$GH_ARG_LOG")" in *"label"*"list"*) ;; *) fail "gh label list was not called";; esac
-case "$(cat "$GH_ARG_LOG")" in *"o/r"*) ;; *) fail "gh was not scoped to o/r";; esac
+out="$("$tmp/lead" enable)" || fail "enable dry-run failed"
+case "$out" in *"label/ready: missing"*) ;; *) fail "dry-run missing label/ready missing line: $out";; esac
+case "$out" in *"label/blocked: missing"*) ;; *) fail "dry-run missing label/blocked missing line: $out";; esac
+[ "$(label_count)" = "1" ] || fail "dry-run created labels"
+case "$(cat "$GH_ARG_LOG")" in *"create"*) fail "dry-run called gh label create";; esac
 
-# --- 2. missing label: --check exits 1 with missing lines ---
-export LEAD_TEST_LABELS='[{"name":"needs-review"},{"name":"ready"}]'
-clear_log
-out="$("$tmp/lead" enable --check 2>&1)" && fail "enable --check succeeded with a missing label"
+# --- 2. --check exits 1 with missing lines ---
+out="$("$tmp/lead" enable --check 2>&1)" && fail "enable --check succeeded with missing labels"
 case "$out" in *"label/blocked: missing"*) ;; *) fail "missing label/blocked missing line: $out";; esac
 case "$out" in *"label/needs-review: ok"*) ;; *) fail "missing label/needs-review ok line: $out";; esac
 
-# --- 3. dry-run reports label status without writing ---
-out="$("$tmp/lead" enable)" || fail "enable dry-run failed"
-case "$out" in *"label/ready: ok"*) ;; *) fail "dry-run missing label/ready ok line: $out";; esac
-case "$out" in *"label/blocked: missing"*) ;; *) fail "dry-run missing label/blocked missing line: $out";; esac
+# --- 3. --write --yes creates the missing labels ---
+clear_log
+out="$("$tmp/lead" enable --write --yes)" || fail "enable --write failed: $out"
+case "$out" in *"label/ready: created"*) ;; *) fail "missing label/ready created line: $out";; esac
+case "$out" in *"label/blocked: created"*) ;; *) fail "missing label/blocked created line: $out";; esac
+case "$out" in *"label/needs-review: ok"*) ;; *) fail "present label must stay ok: $out";; esac
+case "$(cat "$GH_ARG_LOG")" in *"label"*"<create>"*"ready"*) ;; *) fail "gh label create ready was not called";; esac
+case "$(cat "$GH_ARG_LOG")" in *"<--repo>"*"<o/r>"*) ;; *) fail "gh label create was not scoped to o/r";; esac
+[ "$(label_count)" = "3" ] || fail "expected 3 labels after --write"
 
-# --- 4. gh failure: --check warns and still exits 0 (local checks unblocked) ---
+# --- 4. --check passes once labels exist ---
+out="$("$tmp/lead" enable --check)" || fail "enable --check failed after creation: $out"
+case "$out" in *"label/ready: ok"*) ;; *) fail "missing label/ready ok line: $out";; esac
+
+# --- 5. re-run is idempotent: no changes, no re-creation ---
+clear_log
+out="$("$tmp/lead" enable --write --yes)" || fail "re-enable failed"
+case "$out" in *"no changes"*) ;; *) fail "re-enable not idempotent: $out";; esac
+case "$(cat "$GH_ARG_LOG")" in *"create"*) fail "re-enable recreated labels";; esac
+[ "$(label_count)" = "3" ] || fail "label count changed on re-enable"
+
+# --- 6. gh failure: --write still installs locally with a skip warning ---
+set_labels ''
 export LEAD_TEST_GH_FAIL=1
-out="$("$tmp/lead" enable --check)" || fail "enable --check failed on gh error (must skip with warning): $out"
+proj2="$tmp/nogithub"
+mkdir -p "$proj2"
+cd "$proj2"
+git init >/dev/null || fail "git init failed"
+git config user.email "test@example.com"
+git config user.name "Test"
+git remote add origin "https://github.com/o/r.git"
+out="$("$tmp/lead" enable --write --yes)" || fail "enable --write failed on gh error (must warn, not fail): $out"
 case "$out" in *"skip"*) ;; *) fail "gh failure missing skip warning: $out";; esac
+[ -f AGENTS.md ] || fail "local AGENTS.md was not installed on gh error"
 export LEAD_TEST_GH_FAIL=0
+cd "$proj"
 
-# --- 5. no origin remote: label check skipped, gh never called ---
+# --- 7. no origin remote: label handling skipped, gh never called ---
 git remote remove origin || fail "git remote remove failed"
 clear_log
 out="$("$tmp/lead" enable --check)" || fail "enable --check without remote failed: $out"

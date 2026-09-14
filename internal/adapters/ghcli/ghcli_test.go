@@ -612,3 +612,44 @@ func TestRepoLabels_PropagatesFailure(t *testing.T) {
 	}
 }
 
+func TestRepoCreateLabel_CreatesWithColorAndDescription(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", ":")
+	label := ports.LabelDefinition{Name: "blocked", Color: "D93F0B", Description: "Blocked by another issue"}
+	if err := New().RepoCreateLabel(context.Background(), "o/r", label); err != nil {
+		t.Fatalf("RepoCreateLabel: %v", err)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<label>", "<create>", "<blocked>", "<--color>", "<D93F0B>", "<--description>", "<Blocked by another issue>", "<--repo>", "<o/r>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+}
+
+func TestRepoCreateLabel_OmitsEmptyFlagsAndRepo(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", ":")
+	label := ports.LabelDefinition{Name: "ready"}
+	if err := New().RepoCreateLabel(context.Background(), "", label); err != nil {
+		t.Fatalf("RepoCreateLabel: %v", err)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<label>", "<create>", "<ready>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+	for _, want := range []string{"<--color>", "<--description>", "<--repo>"} {
+		if strings.Contains(log, want) {
+			t.Errorf("gh args log must omit %q, got:\n%s", want, log)
+		}
+	}
+}
+
+func TestRepoCreateLabel_PropagatesFailure(t *testing.T) {
+	testutil.InstallDummy(t, "gh", `echo "gh: label already taken" >&2; exit 1`)
+	label := ports.LabelDefinition{Name: "ready", Color: "0E8A16", Description: "Ready"}
+	if err := New().RepoCreateLabel(context.Background(), "o/r", label); err == nil {
+		t.Fatal("RepoCreateLabel on failing gh = nil, want error")
+	}
+}
+

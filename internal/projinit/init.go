@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/kuwa72/lead-cli/internal/ports"
 )
 
 //go:embed skill.md
@@ -49,13 +51,20 @@ type Target struct {
 }
 
 // RequiredIssueLabels are the GitHub issue labels the lead workflow needs
-// (dispatch queue, review flow). `lead enable` reports each as
-// `label/<name>: ok` or `label/<name>: missing` (issue #172).
-var RequiredIssueLabels = []string{"needs-review", "ready", "blocked"}
+// (dispatch queue, review flow). Colors follow GitHub's conventional
+// palette. `lead enable` reports each as `label/<name>: ok|missing`, and
+// `lead enable --write` creates the missing ones (issues #172, #174).
+var RequiredIssueLabels = []ports.LabelDefinition{
+	{Name: "needs-review", Color: "FBCA04", Description: "Waiting for review"},
+	{Name: "ready", Color: "0E8A16", Description: "Ready to be worked on"},
+	{Name: "blocked", Color: "D93F0B", Description: "Blocked by another issue"},
+}
 
-// LabelLister lists a repository's label names (satisfied by ports.GhClient).
-type LabelLister interface {
+// LabelClient lists and creates a repository's labels
+// (satisfied by ports.GhClient).
+type LabelClient interface {
 	RepoLabels(ctx context.Context, repo string) ([]string, error)
+	RepoCreateLabel(ctx context.Context, repo string, label ports.LabelDefinition) error
 }
 
 var targets = []Target{
@@ -81,9 +90,10 @@ type Options struct {
 	SkillContent []byte
 	// AgentsBlock overrides the embedded AGENTS.md snippet. Tests use it.
 	AgentsBlock []byte
-	// Gh lists repository labels for the required-labels check (issue #172).
-	// Nil skips the label check (offline / gh unavailable).
-	Gh LabelLister
+	// Gh lists and creates repository labels for the required-labels check
+	// (issues #172, #174). Nil skips the label handling
+	// (offline / gh unavailable).
+	Gh LabelClient
 	// Repo is "owner/repo" for the label check. Empty skips it
 	// (no remote: local checks only).
 	Repo string
@@ -219,48 +229,61 @@ func runInstall(root string, opts Options, wantSkill, wantAgents []byte) (Report
 		needChange = true
 	}
 
-	// Required-label status is informational only: missing labels never
-	// force a rewrite (auto-creation is out of scope for #172).
-	labelLines, _ := labelReport(opts.Gh, opts.Repo)
-	rep.Lines = append(rep.Lines, labelLines...)
-
-	if !needChange {
-		rep.Lines = append(rep.Lines, "lead-flow is already installed: no changes")
-		return rep, nil
-	}
-
 	if !opts.Write {
+		// Dry-run: read-only preview of the label status; never touches
+		// the remote.
+		labelLines, _ := labelReport(opts.Gh, opts.Repo)
+		rep.Lines = append(rep.Lines, labelLines...)
+		if !needChange {
+			rep.Lines = append(rep.Lines, "lead-flow is already installed: no changes")
+			return rep, nil
+		}
 		rep.Lines = append(rep.Lines, "dry run: no changes (pass --write to apply)")
 		return rep, nil
 	}
 
 	if !opts.Yes {
-		fmt.Fprint(os.Stderr, "Install lead-flow project configuration? [y/N] ")
-		if !ask(opts.Stdin) {
-			rep.Lines = append(rep.Lines, "aborted: no changes")
-			return rep, nil
+		// The approval gates both local writes and remote label
+		// creation: probe (read-only) whether labels are pending so an
+		// installed tree with missing labels still asks first.
+		if needChange || len(missingLabels(opts.Gh, opts.Repo)) > 0 {
+			fmt.Fprint(os.Stderr, "Install lead-flow project configuration? [y/N] ")
+			if !ask(opts.Stdin) {
+				rep.Lines = append(rep.Lines, "aborted: no changes")
+				return rep, nil
+			}
 		}
 	}
 
-	for _, t := range targets {
-		path := filepath.Join(root, t.Dir, "SKILL.md")
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return rep, fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+	if needChange {
+		for _, t := range targets {
+			path := filepath.Join(root, t.Dir, "SKILL.md")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return rep, fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+			}
+			if err := os.WriteFile(path, wantSkill, 0o644); err != nil {
+				return rep, fmt.Errorf("write %s: %w", path, err)
+			}
 		}
-		if err := os.WriteFile(path, wantSkill, 0o644); err != nil {
-			return rep, fmt.Errorf("write %s: %w", path, err)
+
+		next := UpsertBlock(normalizeLegacy(string(curAgents), block), block)
+		if err := os.MkdirAll(filepath.Dir(agentsPath), 0o755); err != nil {
+			return rep, err
+		}
+		if err := os.WriteFile(agentsPath, []byte(next), 0o644); err != nil {
+			return rep, err
 		}
 	}
 
-	next := UpsertBlock(normalizeLegacy(string(curAgents), block), block)
-	if err := os.MkdirAll(filepath.Dir(agentsPath), 0o755); err != nil {
-		return rep, err
-	}
-	if err := os.WriteFile(agentsPath, []byte(next), 0o644); err != nil {
-		return rep, err
-	}
+	// Remote labels last, after the approval above: create what is missing.
+	labelLines, labelsCreated := ensureLabels(opts.Gh, opts.Repo)
+	rep.Lines = append(rep.Lines, labelLines...)
 
-	rep.Changed = true
+	rep.Changed = needChange || labelsCreated
+	if !rep.Changed {
+		rep.Lines = append(rep.Lines, "lead-flow is already installed: no changes")
+		return rep, nil
+	}
 	rep.Lines = append(rep.Lines, "done: lead-flow is installed")
 	return rep, nil
 }
@@ -318,7 +341,7 @@ func runCheck(root string, opts Options, wantSkill, wantAgents []byte) (Report, 
 // empty repo (no remote), or a listing failure yields a skip warning with
 // ok=true so offline / unauthenticated environments never block the local
 // skill and AGENTS.md checks.
-func labelReport(gh LabelLister, repo string) (lines []string, ok bool) {
+func labelReport(gh LabelClient, repo string) (lines []string, ok bool) {
 	if gh == nil || repo == "" {
 		return []string{"labels: skip (no repository remote; local checks only)"}, true
 	}
@@ -332,14 +355,71 @@ func labelReport(gh LabelLister, repo string) (lines []string, ok bool) {
 	}
 	ok = true
 	for _, want := range RequiredIssueLabels {
-		if present[want] {
-			lines = append(lines, "label/"+want+": ok")
+		if present[want.Name] {
+			lines = append(lines, "label/"+want.Name+": ok")
 		} else {
-			lines = append(lines, "label/"+want+": missing")
+			lines = append(lines, "label/"+want.Name+": missing")
 			ok = false
 		}
 	}
 	return lines, ok
+}
+
+// missingLabels returns the required labels absent from the repository.
+// It is a read-only probe for the write-path approval gate; nil means
+// none missing — or that the check was skipped or failed (those cases
+// surface as warnings in the report, never as pending work).
+func missingLabels(gh LabelClient, repo string) []ports.LabelDefinition {
+	if gh == nil || repo == "" {
+		return nil
+	}
+	have, err := gh.RepoLabels(context.Background(), repo)
+	if err != nil {
+		return nil
+	}
+	present := make(map[string]bool, len(have))
+	for _, l := range have {
+		present[l] = true
+	}
+	var missing []ports.LabelDefinition
+	for _, want := range RequiredIssueLabels {
+		if !present[want.Name] {
+			missing = append(missing, want)
+		}
+	}
+	return missing
+}
+
+// ensureLabels creates the required labels missing from the repository and
+// returns the final per-label status lines with created=true when at least
+// one label was created. It is the write-path counterpart of labelReport:
+// `created` replaces `missing`, while listing/creation failures degrade to
+// skip warnings so remote trouble never fails the local install.
+func ensureLabels(gh LabelClient, repo string) (lines []string, created bool) {
+	if gh == nil || repo == "" {
+		return []string{"labels: skip (no repository remote; local checks only)"}, false
+	}
+	have, err := gh.RepoLabels(context.Background(), repo)
+	if err != nil {
+		return []string{fmt.Sprintf("labels: skip (could not list labels: %v)", err)}, false
+	}
+	present := make(map[string]bool, len(have))
+	for _, l := range have {
+		present[l] = true
+	}
+	for _, want := range RequiredIssueLabels {
+		if present[want.Name] {
+			lines = append(lines, "label/"+want.Name+": ok")
+			continue
+		}
+		if err := gh.RepoCreateLabel(context.Background(), repo, want); err != nil {
+			lines = append(lines, fmt.Sprintf("label/%s: create failed: %v", want.Name, err))
+			continue
+		}
+		lines = append(lines, "label/"+want.Name+": created")
+		created = true
+	}
+	return lines, created
 }
 
 func runUninstall(root string) (Report, error) {
