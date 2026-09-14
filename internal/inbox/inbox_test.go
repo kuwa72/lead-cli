@@ -893,6 +893,29 @@ func TestReload_PreservesSectionCollapsed(t *testing.T) {
 	}
 }
 
+func TestRestoreSelection_FollowsApprovedIssueToBacklog(t *testing.T) {
+	// Issue #184: approving #7 moves it from needs-review to backlog on
+	// reload. The cursor must follow it there and expand the backlog box.
+	m := Model{
+		sections: []Section{
+			{Kind: KindNeedsReview, Items: []Item{{Number: 8, Title: "second", Kind: KindNeedsReview}}},
+			{Kind: KindBlocked},
+			{Kind: KindMerged, Collapsed: true},
+			{Kind: KindRunning, Collapsed: true},
+			{Kind: KindBacklog, Collapsed: true, Items: []Item{{Number: 7, Title: "warn", Kind: KindBacklog}}},
+		},
+	}
+	old := Row{Section: &Section{Kind: KindNeedsReview}, Item: &Item{Number: 7, Kind: KindNeedsReview}}
+	m.restoreSelection(old)
+	if m.sections[4].Collapsed {
+		t.Fatal("backlog must be expanded so the approved issue is visible")
+	}
+	row, ok := m.current()
+	if !ok || row.IsHeader() || row.Item.Number != 7 || row.Section.Kind != KindBacklog {
+		t.Fatalf("cursor should follow #7 to backlog, got %+v", row)
+	}
+}
+
 func TestHeader_EnterTogglesSection(t *testing.T) {
 	_, _, m := newFixture(t)
 	m.cursor = 0 // Needs review header
