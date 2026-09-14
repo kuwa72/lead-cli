@@ -452,35 +452,23 @@ atomic swap). Brew-managed installs print ` + "`brew upgrade` guidance instead."
 	updateCmd.Flags().Bool("yes", false, "skip the replacement approval prompt")
 	updateCmd.Flags().String("version", "", "install a specific tag (default: latest)")
 
-	// `enable` is the canonical repository setup (issue #169); `init`
-	// stays as a hidden alias for scripts written before the rename
-	// (same pattern as the `run`/`work` pair).
-	newEnableCmd := func(use string, hidden bool) *cobra.Command {
-		long := `Install the /lead-flow skill and update AGENTS.md so a coding agent
+	// `enable` is the canonical repository setup (issue #169).
+	enableCmd := &cobra.Command{
+		Use:   "enable",
+		Short: "Enable this repository for the lead workflow (lead-flow skill)",
+		Long: `Install the /lead-flow skill and update AGENTS.md so a coding agent
 in this repository can run the lead issue-driven TDD workflow. Operates
 only on this repository and never touches $HOME; for user-environment
 setup (shell completions, keybinding) see ` + "`lead setup`" + `.
 Applies changes after approval (use --yes non-interactively); --dry-run
-previews without changing anything, --check verifies only.`
-		if hidden {
-			long += "\n\nAlias of `lead enable` (kept for compatibility; prefer `enable`)."
-		}
-		c := &cobra.Command{
-			Use:    use,
-			Short:  "Enable this repository for the lead workflow (lead-flow skill)",
-			Hidden: hidden,
-			Long:   long,
-			RunE: func(cmd *cobra.Command, args []string) error {
-				return runEnable(cmd, deps)
-			},
-		}
-		c.Flags().Bool("dry-run", false, "preview changes without applying them")
-		c.Flags().Bool("check", false, "verify installation only (no changes)")
-		c.Flags().Bool("yes", false, "assume yes to approval prompts")
-		return c
+previews without changing anything, --check verifies only.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runEnable(cmd, deps)
+		},
 	}
-	enableCmd := newEnableCmd("enable", false)
-	initCmd := newEnableCmd("init", true)
+	enableCmd.Flags().Bool("dry-run", false, "preview changes without applying them")
+	enableCmd.Flags().Bool("check", false, "verify installation only (no changes)")
+	enableCmd.Flags().Bool("yes", false, "assume yes to approval prompts")
 
 	disableCmd := &cobra.Command{
 		Use:   "disable",
@@ -600,7 +588,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, resumeCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, initCmd, disableCmd, lgtmCmd, unlgtmCmd)
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, resumeCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	return root
 }
@@ -1471,11 +1459,11 @@ func runClean(cmd *cobra.Command, deps Deps, raw string) error {
 	return nil
 }
 
-// runEnable implements `lead enable` (issue #169; `lead init` is a hidden
-// alias): repository-oriented agent configuration (lead-flow skill +
-// AGENTS.md managed block). Operates only on the repository, never on
-// $HOME. Applies by default after approval; --dry-run previews,
-// --check verifies (removal lives in `lead disable`).
+// runEnable implements `lead enable` (issue #169): repository-oriented
+// agent configuration (lead-flow skill + AGENTS.md managed block).
+// Operates only on the repository, never on $HOME. Applies by default
+// after approval; --dry-run previews, --check verifies
+// (removal lives in `lead disable`).
 func runEnable(cmd *cobra.Command, deps Deps) error {
 	flags := cmd.Flags()
 	dryRun, _ := flags.GetBool("dry-run")
