@@ -17,6 +17,91 @@ var (
 	testAgents = []byte("test agents block\n")
 )
 
+// fakeProtection is a narrow ProtectionClient for report tests.
+type fakeProtection struct {
+	branch    string
+	branchErr error
+	prot      ports.BranchProtection
+	protErr   error
+	auto      bool
+	autoErr   error
+}
+
+func (f fakeProtection) RepoDefaultBranch(_ context.Context, _ string) (string, error) {
+	return f.branch, f.branchErr
+}
+
+func (f fakeProtection) BranchProtection(_ context.Context, _, _ string) (ports.BranchProtection, error) {
+	return f.prot, f.protErr
+}
+
+func (f fakeProtection) RepoAllowsAutoMerge(_ context.Context, _ string) (bool, error) {
+	return f.auto, f.autoErr
+}
+
+func TestProtectionReport_OK(t *testing.T) {
+	gh := fakeProtection{branch: "main",
+		prot: ports.BranchProtection{Protected: true, RequiresPR: true, RequiredChecks: []string{"test"}},
+		auto: true}
+	lines, ok := protectionReport(gh, "o/r")
+	if !ok {
+		t.Fatalf("protected repo ok = false: %v", lines)
+	}
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"protection/branch-protection: ok",
+		"protection/required-checks: ok",
+		"protection/auto-merge: ok",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("report missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "Next:") {
+		t.Errorf("ok report must not carry fix guidance:\n%s", joined)
+	}
+}
+
+func TestProtectionReport_Missing(t *testing.T) {
+	lines, ok := protectionReport(fakeProtection{branch: "main"}, "o/r")
+	if ok {
+		t.Fatalf("unprotected repo ok = true: %v", lines)
+	}
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"protection/branch-protection: missing",
+		"protection/required-checks: missing",
+		"dispatch will not start",
+		"Next:",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("report missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestProtectionReport_Skip(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		gh   ProtectionClient
+		repo string
+	}{
+		{"nil client", nil, "o/r"},
+		{"empty repo", fakeProtection{branch: "main"}, ""},
+		{"api error", fakeProtection{branchErr: errors.New("HTTP 403")}, "o/r"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lines, ok := protectionReport(tc.gh, tc.repo)
+			if !ok {
+				t.Errorf("skip case ok = false: %v", lines)
+			}
+			if joined := strings.Join(lines, "\n"); !strings.Contains(joined, "protection: skip") {
+				t.Errorf("skip case missing skip line: %v", lines)
+			}
+		})
+	}
+}
+
 func TestRunRequiresRoot(t *testing.T) {
 	if _, err := Run(Options{}); err == nil {
 		t.Fatal("Run with empty Root = nil, want error")

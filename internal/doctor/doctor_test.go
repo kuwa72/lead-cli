@@ -201,6 +201,21 @@ func TestRun_ProtectionAPIErrorIsRequiredFailure(t *testing.T) {
 	}
 }
 
+func TestProtectionFailMentionsDispatch(t *testing.T) {
+	// Issue #197: a failing protection row must connect the cause to the
+	// visible symptom (approve does nothing because dispatch stays off).
+	d := baseDeps()
+	d.Gh = &testutil.FakeGhClient{}
+	d.Repo = "o/r"
+	rep := Run(d)
+	for _, name := range []string{CheckBranchProtection, CheckRequiredChecks} {
+		c := findCheck(rep, name)
+		if c.OK || !c.Required || !strings.Contains(c.Detail, "dispatch will not start") {
+			t.Errorf("%s = %+v, want required failure mentioning dispatch", name, c)
+		}
+	}
+}
+
 func TestReport_JSONShape(t *testing.T) {
 	rep := Run(baseDeps())
 	raw := rep.JSON()

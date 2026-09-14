@@ -63,14 +63,14 @@ func (p Protection) Checks() []Check {
 			Detail: fmt.Sprintf("%s is %s", b, how)})
 	} else {
 		out = append(out, Check{Name: CheckBranchProtection, Required: true,
-			Detail: fmt.Sprintf("%s is not protected; add a branch protection rule or ruleset requiring a pull request (Settings > Branches / Rules)", b)})
+			Detail: fmt.Sprintf("%s is not protected; add a branch protection rule or ruleset requiring a pull request (Settings > Branches / Rules); dispatch will not start unattended agents until fixed", b)})
 	}
 	if n := len(p.Branch.RequiredChecks); n > 0 {
 		out = append(out, Check{Name: CheckRequiredChecks, Required: true, OK: true,
 			Detail: fmt.Sprintf("%s requires: %s", b, strings.Join(p.Branch.RequiredChecks, ", "))})
 	} else {
 		out = append(out, Check{Name: CheckRequiredChecks, Required: true,
-			Detail: fmt.Sprintf("%s has no required status checks; mark the CI job as required so a failing build cannot be merged", b)})
+			Detail: fmt.Sprintf("%s has no required status checks; mark the CI job as required so a failing build cannot be merged; dispatch will not start unattended agents until fixed", b)})
 	}
 	if p.AutoMerge {
 		out = append(out, Check{Name: CheckAutoMerge, OK: true, Detail: "allow_auto_merge enabled"})

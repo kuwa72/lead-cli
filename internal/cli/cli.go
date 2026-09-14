@@ -1544,13 +1544,14 @@ func runEnable(cmd *cobra.Command, deps Deps) error {
 	}
 
 	rep, err := projinit.Run(projinit.Options{
-		Root:   repoRoot,
-		DryRun: dryRun,
-		Check:  check,
-		Yes:    yes,
-		Stdin:  deps.stdin(),
-		Gh:     deps.gh(),
-		Repo:   deps.repoSlug(),
+		Root:       repoRoot,
+		DryRun:     dryRun,
+		Check:      check,
+		Yes:        yes,
+		Stdin:      deps.stdin(),
+		Gh:         deps.gh(),
+		Protection: deps.gh(),
+		Repo:       deps.repoSlug(),
 	})
 	if err != nil {
 		return err
@@ -1562,6 +1563,9 @@ func runEnable(cmd *cobra.Command, deps Deps) error {
 	if check && !rep.Complete {
 		if hasMissingLabel(rep.Lines) {
 			return errors.New("required issue labels missing (see report above)")
+		}
+		if hasMissingProtection(rep.Lines) {
+			return errors.New("branch protection missing (dispatch cannot start unattended agents; see report above)")
 		}
 		return errors.New("lead-flow not installed")
 	}
@@ -1598,6 +1602,16 @@ func runDisable(cmd *cobra.Command, deps Deps) error {
 	return nil
 }
 
+// hasMissingProtection reports whether an enable report lists a required
+// branch-protection item as missing (issue #197).
+func hasMissingProtection(lines []string) bool {
+	for _, l := range lines {
+		if strings.HasPrefix(l, "protection/") && strings.Contains(l, ": missing") {
+			return true
+		}
+	}
+	return false
+}
 // hasMissingLabel reports whether an enable report lists a required
 // issue label as missing (issue #172).
 func hasMissingLabel(lines []string) bool {

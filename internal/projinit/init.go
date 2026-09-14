@@ -67,6 +67,16 @@ type LabelClient interface {
 	RepoCreateLabel(ctx context.Context, repo string, label ports.LabelDefinition) error
 }
 
+// ProtectionClient reads branch-protection state for the enable report
+// (issue #197: dispatch refuses to start without it, so `lead enable`
+// surfaces the gap with fix guidance). Satisfied by ports.GhClient;
+// nil skips the report (offline / gh unavailable).
+type ProtectionClient interface {
+	RepoDefaultBranch(ctx context.Context, repo string) (string, error)
+	BranchProtection(ctx context.Context, repo, branch string) (ports.BranchProtection, error)
+	RepoAllowsAutoMerge(ctx context.Context, repo string) (bool, error)
+}
+
 var targets = []Target{
 	{Name: "claude", Dir: claudeDir},
 	{Name: "devin", Dir: devinDir},
@@ -95,6 +105,9 @@ type Options struct {
 	// (issues #172, #174). Nil skips the label handling
 	// (offline / gh unavailable).
 	Gh LabelClient
+	// Protection reads branch-protection state for the enable report
+	// (issue #197). Nil skips the protection handling.
+	Protection ProtectionClient
 	// Repo is "owner/repo" for the label check. Empty skips it
 	// (no remote: local checks only).
 	Repo string
@@ -244,6 +257,8 @@ func runPreview(root string, opts Options, wantSkill, wantAgents []byte) (Report
 	needChange := previewLines(&rep, root, wantSkill, wantBlock(wantAgents))
 	labelLines, _ := labelReport(opts.Gh, opts.Repo)
 	rep.Lines = append(rep.Lines, labelLines...)
+	protLines, _ := protectionReport(opts.Protection, opts.Repo)
+	rep.Lines = append(rep.Lines, protLines...)
 	if !needChange {
 		rep.Lines = append(rep.Lines, "lead-flow is already installed: no changes")
 		return rep, nil
@@ -298,6 +313,12 @@ func runApply(root string, opts Options, wantSkill, wantAgents []byte) (Report, 
 	labelLines, labelsCreated := ensureLabels(opts.Gh, opts.Repo)
 	rep.Lines = append(rep.Lines, labelLines...)
 
+	// Branch protection is report-only: creating protection rules needs
+	// repository admin rights, so enable surfaces the gap with fix
+	// guidance instead of mutating security settings (issue #197).
+	protLines, _ := protectionReport(opts.Protection, opts.Repo)
+	rep.Lines = append(rep.Lines, protLines...)
+
 	rep.Changed = needChange || labelsCreated
 	if !rep.Changed {
 		rep.Lines = append(rep.Lines, "lead-flow is already installed: no changes")
@@ -349,6 +370,12 @@ func runCheck(root string, opts Options, wantSkill, wantAgents []byte) (Report, 
 		rep.Complete = false
 	}
 
+	protLines, protOK := protectionReport(opts.Protection, opts.Repo)
+	rep.Lines = append(rep.Lines, protLines...)
+	if !protOK {
+		rep.Complete = false
+	}
+
 	if !rep.Complete {
 		rep.Lines = append(rep.Lines, "Next: run `lead enable`")
 	}
@@ -380,6 +407,55 @@ func labelReport(gh LabelClient, repo string) (lines []string, ok bool) {
 			lines = append(lines, "label/"+want.Name+": missing")
 			ok = false
 		}
+	}
+	return lines, ok
+}
+
+// protectionReport checks the default-branch protection dispatch needs
+// (issue #197: unattended agents refuse to start without it).
+// ok=false means a required item is missing. A nil client, an empty repo
+// (no remote), or an inspection failure yields a skip warning with ok=true
+// so offline / unauthenticated environments never block the local checks.
+func protectionReport(gh ProtectionClient, repo string) (lines []string, ok bool) {
+	if gh == nil || repo == "" {
+		return []string{"protection: skip (no repository remote; local checks only)"}, true
+	}
+	branch, err := gh.RepoDefaultBranch(context.Background(), repo)
+	if err != nil {
+		return []string{fmt.Sprintf("protection: skip (could not inspect: %v)", err)}, true
+	}
+	bp, err := gh.BranchProtection(context.Background(), repo, branch)
+	if err != nil {
+		return []string{fmt.Sprintf("protection: skip (could not inspect: %v)", err)}, true
+	}
+	auto, err := gh.RepoAllowsAutoMerge(context.Background(), repo)
+	if err != nil {
+		return []string{fmt.Sprintf("protection: skip (could not inspect: %v)", err)}, true
+	}
+	ok = true
+	if bp.Protected {
+		how := "protected"
+		if bp.RequiresPR {
+			how += ", PR required"
+		}
+		lines = append(lines, fmt.Sprintf("protection/branch-protection: ok (%s is %s)", branch, how))
+	} else {
+		lines = append(lines, fmt.Sprintf("protection/branch-protection: missing (%s is not protected; dispatch will not start unattended agents)", branch))
+		ok = false
+	}
+	if len(bp.RequiredChecks) > 0 {
+		lines = append(lines, fmt.Sprintf("protection/required-checks: ok (%s requires: %s)", branch, strings.Join(bp.RequiredChecks, ", ")))
+	} else {
+		lines = append(lines, fmt.Sprintf("protection/required-checks: missing (%s has no required status checks; dispatch will not start unattended agents)", branch))
+		ok = false
+	}
+	if auto {
+		lines = append(lines, "protection/auto-merge: ok (allow_auto_merge enabled)")
+	} else {
+		lines = append(lines, "protection/auto-merge: off (allow_auto_merge disabled; `lead finish` will pause for a manual --merge)")
+	}
+	if !ok {
+		lines = append(lines, "Next: protect the default branch (Settings > Branches / Rules) so dispatch can start, then re-run `lead enable --check`")
 	}
 	return lines, ok
 }
