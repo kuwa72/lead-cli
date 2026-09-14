@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -124,6 +125,21 @@ func shortAge(t, now time.Time) string {
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// rowAge is the Updated column value. Running agents show last log
+// activity instead of the issue update time (issue #187): liveness at a
+// glance in narrow layouts without a preview pane.
+func rowAge(r Row, now time.Time) string {
+	if r.Item != nil && r.Section.Kind == KindRunning && r.Item.LogPath != "" {
+		if fi, err := os.Stat(r.Item.LogPath); err == nil {
+			return shortAge(fi.ModTime(), now)
+		}
+	}
+	if r.Item == nil {
+		return "-"
+	}
+	return shortAge(r.Item.UpdatedAt, now)
 }
 
 // listColumns holds the resolved column widths for one render pass.
@@ -254,7 +270,7 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 	b.WriteString(" ")
 	b.WriteString(fitLeft(title, c.titleW))
 	if c.showUpd {
-		b.WriteString(" " + fitRight(shortAge(it.UpdatedAt, now), c.updW))
+		b.WriteString(" " + fitRight(rowAge(r, now), c.updW))
 	}
 	if c.showAgent {
 		agent := Sanitize(it.Agent)

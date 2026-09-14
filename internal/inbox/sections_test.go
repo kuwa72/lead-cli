@@ -137,3 +137,22 @@ func TestBuild_IncludesBacklogSection(t *testing.T) {
 	}
 }
 
+func TestBuild_RunningCarriesStartedAt(t *testing.T) {
+	started := time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
+	wfs := []state.Workflow{
+		{Issue: 70, Status: state.StatusInProgress, Agent: "agy", Branch: "issue/70-x", StartedAt: started},
+	}
+	got := Build(nil, nil, nil, nil, wfs)
+	var running *Section
+	for i := range got {
+		if got[i].Kind == KindRunning {
+			running = &got[i]
+		}
+	}
+	if running == nil || len(running.Items) != 1 {
+		t.Fatalf("running section = %+v, want one item", running)
+	}
+	if !running.Items[0].StartedAt.Equal(started) {
+		t.Errorf("StartedAt = %v, want %v", running.Items[0].StartedAt, started)
+	}
+}

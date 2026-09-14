@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
@@ -415,5 +416,33 @@ func TestDetail_NeedsReview_ShowsDiff(t *testing.T) {
 	}
 }
 
-
-
+func TestRunningMetaLine_ShowsElapsedActivePhase(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	logPath := filepath.Join(t.TempDir(), "agent.log")
+	if err := os.WriteFile(logPath, []byte("out\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(logPath, now.Add(-5*time.Minute), now.Add(-5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	it := &Item{Number: 7, Title: "work", Kind: KindRunning, Agent: "agy", Attempts: 1, StartedAt: now.Add(-90 * time.Minute), LogPath: logPath}
+	got := runningMetaLine(it, 0, false, now)
+	for _, want := range []string{"Agent: agy", "Elapsed: 1h", "Active: 5m ago", "Phase: implementing"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("meta missing %q, got %q", want, got)
+		}
+	}
+	// PR open switches the phase; missing data omits elapsed/active.
+	it.PRNumber = 12
+	if got := runningMetaLine(it, 12, false, now); !strings.Contains(got, "Phase: PR #12") {
+		t.Errorf("meta missing PR phase, got %q", got)
+	}
+	bare := &Item{Number: 7, Title: "work", Kind: KindRunning}
+	got = runningMetaLine(bare, 0, false, now)
+	if strings.Contains(got, "Elapsed:") || strings.Contains(got, "Active:") {
+		t.Errorf("meta must omit elapsed/active without data, got %q", got)
+	}
+	if !strings.Contains(got, "Phase: implementing") {
+		t.Errorf("meta missing default phase, got %q", got)
+	}
+}

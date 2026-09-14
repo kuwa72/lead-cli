@@ -488,7 +488,7 @@ func (m Model) blockedPreview(out []string, it *Item, h int) ([]string, bool) {
 	}
 	remaining := h - len(out)
 	if remaining > 0 {
-		meta := runningMetaLine(it, m.detailPrNum, m.detailPrErr)
+		meta := runningMetaLine(it, m.detailPrNum, m.detailPrErr, m.now())
 		if meta != "" {
 			out = append(out, meta)
 		}
@@ -535,7 +535,7 @@ func (m Model) mergedPreview(out []string, it *Item, h int) ([]string, bool) {
 
 func (m Model) runningPreview(out []string, it *Item, h int) ([]string, bool) {
 	out = append(out, "Agent Live Output")
-	meta := runningMetaLine(it, m.detailPrNum, m.detailPrErr)
+	meta := runningMetaLine(it, m.detailPrNum, m.detailPrErr, m.now())
 	if meta != "" {
 		out = append(out, meta)
 	}
@@ -573,7 +573,7 @@ func (m Model) runningPreview(out []string, it *Item, h int) ([]string, bool) {
 	return out, false
 }
 
-func runningMetaLine(it *Item, prNum int, prErr bool) string {
+func runningMetaLine(it *Item, prNum int, prErr bool, now time.Time) string {
 	parts := []string{}
 	if it.Agent != "" {
 		parts = append(parts, fmt.Sprintf("Agent: %s", Sanitize(it.Agent)))
@@ -584,12 +584,26 @@ func runningMetaLine(it *Item, prNum int, prErr bool) string {
 	if it.Attempts > 0 {
 		parts = append(parts, fmt.Sprintf("×%d", it.Attempts))
 	}
+	if age := relAge(it.StartedAt, now); age != "" {
+		parts = append(parts, fmt.Sprintf("Elapsed: %s", age))
+	}
+	if it.LogPath != "" {
+		if fi, err := os.Stat(it.LogPath); err == nil {
+			mtime := fi.ModTime()
+			if mtime.After(now) {
+				mtime = now
+			}
+			parts = append(parts, fmt.Sprintf("Active: %s ago", relAge(mtime, now)))
+		}
+	}
 	if prNum > 0 {
 		if prErr {
 			parts = append(parts, fmt.Sprintf("PR details unavailable (#%d)", prNum))
 		} else {
-			parts = append(parts, fmt.Sprintf("PR #%d", prNum))
+			parts = append(parts, fmt.Sprintf("Phase: PR #%d", prNum))
 		}
+	} else {
+		parts = append(parts, "Phase: implementing")
 	}
 	if len(parts) == 0 {
 		return ""
@@ -700,7 +714,7 @@ func (m Model) detailContent() string {
 		b.WriteString("Comments unavailable\n\n")
 	}
 	if it := m.currentItem(); it != nil && (it.Kind == KindRunning || it.Kind == KindBlocked) {
-		meta := runningMetaLine(it, m.detailPrNum, m.detailPrErr)
+		meta := runningMetaLine(it, m.detailPrNum, m.detailPrErr, m.now())
 		if meta != "" {
 			b.WriteString("Running info\n")
 			b.WriteString(meta)
