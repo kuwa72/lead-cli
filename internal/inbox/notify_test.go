@@ -23,7 +23,9 @@ func (f *fakeNotifier) Notify(title, message string) error {
 	return nil
 }
 
-func TestInbox_NotifyOnNewNeedsReviewAndBlocked(t *testing.T) {
+// Blocked arrivals no longer notify from the inbox: the dispatcher that
+// caused them owns the notification (issue #189).
+func TestInbox_NotifyOnNewNeedsReviewOnly(t *testing.T) {
 	gh := &testutil.FakeGhClient{
 		Labeled: map[string][]ports.IssueSummary{
 			LabelNeedsReview: {{Number: 1, Title: "first"}},
@@ -63,24 +65,10 @@ func TestInbox_NotifyOnNewNeedsReviewAndBlocked(t *testing.T) {
 
 	m, _ = Drain(m, m.loadCmd())
 
-	if len(notifier.calls) != 2 {
-		t.Fatalf("expected 2 notifications on update, got %d (%+v)", len(notifier.calls), notifier.calls)
+	if len(notifier.calls) != 1 {
+		t.Fatalf("expected 1 notification on update, got %d (%+v)", len(notifier.calls), notifier.calls)
 	}
-
-	hasReview := false
-	hasBlocked := false
-	for _, c := range notifier.calls {
-		if c.title == "Needs Review: #2 second ready" {
-			hasReview = true
-		}
-		if c.title == "Agent Blocked: #3 third stuck" {
-			hasBlocked = true
-		}
-	}
-	if !hasReview {
+	if notifier.calls[0].title != "Needs Review: #2 second ready" {
 		t.Errorf("expected notification for Needs Review #2, got: %+v", notifier.calls)
-	}
-	if !hasBlocked {
-		t.Errorf("expected notification for Blocked #3, got: %+v", notifier.calls)
 	}
 }

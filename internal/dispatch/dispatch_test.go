@@ -864,3 +864,98 @@ func TestOnce_BlockedCommentContainsLogTail(t *testing.T) {
 		t.Errorf("blocked comment exceeds the tail cap (head lines present):\n%s", body)
 	}
 }
+
+type fakeNotifier struct {
+	mu    sync.Mutex
+	calls []notifyCall
+}
+
+type notifyCall struct {
+	title   string
+	message string
+}
+
+func (f *fakeNotifier) Notify(title, message string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, notifyCall{title: title, message: message})
+	return nil
+}
+
+func (f *fakeNotifier) titles() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, c := range f.calls {
+		out = append(out, c.title)
+	}
+	return out
+}
+
+func TestOnce_BlockedNotifies(t *testing.T) {
+	d, gh, _, l := newFixture(t, 7)
+	d.Opts.MaxAttempts = 1
+	n := &fakeNotifier{}
+	d.Notify = n
+	l.OnWait = func(c launchCall) error { return errors.New("exit status 1") }
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	found := false
+	for _, title := range n.titles() {
+		if strings.Contains(title, "#7") && strings.Contains(strings.ToLower(title), "blocked") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no blocked notification for #7: %v", n.titles())
+	}
+	_ = gh
+}
+
+func TestOnce_AllDoneNotifies(t *testing.T) {
+	d, _, _, l := newFixture(t, 7)
+	n := &fakeNotifier{}
+	d.Notify = n
+	l.OnWait = func(c launchCall) error { return errors.New("exit status 1") }
+	d.Opts.MaxAttempts = 1
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	found := false
+	for _, title := range n.titles() {
+		if strings.Contains(strings.ToLower(title), "all done") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no all-done notification: %v", n.titles())
+	}
+}
+
+func TestOnce_IdlePassStaysSilent(t *testing.T) {
+	d, _, _, _ := newFixture(t)
+	n := &fakeNotifier{}
+	d.Notify = n
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(n.titles()) != 0 {
+		t.Errorf("idle pass notified: %v", n.titles())
+	}
+}
+
+func TestOnce_RetryDoesNotNotifyAllDone(t *testing.T) {
+	d, _, _, l := newFixture(t, 7)
+	n := &fakeNotifier{}
+	d.Notify = n
+	l.OnWait = func(c launchCall) error { return errors.New("exit status 1") }
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	for _, title := range n.titles() {
+		if strings.Contains(strings.ToLower(title), "all done") {
+			t.Errorf("retry pass must not report all done: %v", n.titles())
+		}
+	}
+}

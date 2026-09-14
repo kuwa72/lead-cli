@@ -38,6 +38,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/doctor"
 	"github.com/kuwa72/lead-cli/internal/finish"
 	"github.com/kuwa72/lead-cli/internal/inbox"
+	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/projinit"
 	"github.com/kuwa72/lead-cli/internal/prompter"
@@ -692,9 +693,10 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	configDir := filepath.Dir(deps.stateFile())
 	configFile := filepath.Join(configDir, "inbox-config.json")
 	var cfg struct {
-		Agent         string `json:"agent"`
-		AgentMode     string `json:"agent_mode"`
-		IssueCreation string `json:"issue_creation"`
+		Agent          string `json:"agent"`
+		AgentMode      string `json:"agent_mode"`
+		IssueCreation  string `json:"issue_creation"`
+		NotifyDisabled bool   `json:"notify_disabled"`
 	}
 	if data, err := os.ReadFile(configFile); err == nil {
 		_ = json.Unmarshal(data, &cfg)
@@ -708,6 +710,9 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	if cfg.IssueCreation != "" {
 		opts.IssueCreation = cfg.IssueCreation
 	}
+	notifier := notify.New(notify.Options{Disabled: cfg.NotifyDisabled})
+	opts.NotifyDisabled = cfg.NotifyDisabled
+	opts.Notifier = notifier
 
 	dctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
@@ -717,6 +722,7 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		Store:    store,
 		Launcher: deps.launcher(),
 		Out:      io.Discard,
+		Notify:   notifier,
 		Opts: dispatch.Options{
 			Parallel:  parallel,
 			Agent:     opts.Agent,
@@ -730,12 +736,14 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		cfg.Agent = c.Agent
 		cfg.AgentMode = c.AgentMode
 		cfg.IssueCreation = c.IssueCreation
+		cfg.NotifyDisabled = c.NotifyDisabled
 		if raw, err := json.MarshalIndent(cfg, "", "  "); err == nil {
 			_ = os.MkdirAll(configDir, 0o755)
 			_ = os.WriteFile(configFile, raw, 0o644)
 		}
 		d.Opts.Agent = c.Agent
 		d.Opts.AgentMode = c.AgentMode
+		notifier.SetDisabled(c.NotifyDisabled)
 	}
 	opts.OnConfigChange = func(agent, mode string) {
 		cfg.Agent = agent
@@ -886,6 +894,7 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 		Store:    &state.Store{Path: stateFile},
 		Launcher: deps.launcher(),
 		Out:      cmd.OutOrStdout(),
+		Notify:   notify.New(notify.Options{}),
 		Opts: dispatch.Options{
 			Parallel: parallel,
 			Agent:    agentName,

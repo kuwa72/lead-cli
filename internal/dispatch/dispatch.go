@@ -30,6 +30,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/doctor"
 	"github.com/kuwa72/lead-cli/internal/logtail"
+	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/workflow"
@@ -155,6 +156,9 @@ type Dispatcher struct {
 	// Kill terminates the agent process group (Stop, issue #185).
 	// Nil means killProcessGroup (SIGKILL the group, ESRCH counts as gone).
 	Kill func(pid int) error
+	// Notify receives blocked and all-done milestones (issue #189).
+	// Nil means silent.
+	Notify notify.Notifier
 
 	mu sync.Mutex
 }
@@ -241,8 +245,39 @@ func (d *Dispatcher) Once(ctx context.Context) (Report, error) {
 	rep.Results = append(rep.Results, d.runPool(ctx, opts, picks, opts.Parallel-len(running))...)
 	if ctx.Err() == nil {
 		d.print(rep)
+		d.notifyResults(rep)
 	}
 	return rep, nil
+}
+
+// notifyResults reports blocked issues and the all-done milestone
+// (issue #189). Best-effort: notification failures never fail the pass.
+// All-done fires only when the pass settled something and nothing remains
+// running or queued, so idle passes (including the first one) stay silent.
+func (d *Dispatcher) notifyResults(rep Report) {
+	if d.Notify == nil {
+		return
+	}
+	for _, r := range rep.Results {
+		if r.Outcome == OutcomeBlocked {
+			_ = d.Notify.Notify(fmt.Sprintf("lead: #%d blocked", r.Issue), r.Err.Error())
+		}
+	}
+	if len(rep.Results) == 0 || len(rep.Running) != 0 {
+		return
+	}
+	completed, blocked := 0, 0
+	for _, r := range rep.Results {
+		switch r.Outcome {
+		case OutcomeCompleted:
+			completed++
+		case OutcomeBlocked:
+			blocked++
+		default:
+			return // retry/error keeps the issue queued: not done
+		}
+	}
+	_ = d.Notify.Notify("lead: all done", fmt.Sprintf("%d completed, %d blocked", completed, blocked))
 }
 
 // runPool starts picks through slots workers: the next issue starts as soon

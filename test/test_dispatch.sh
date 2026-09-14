@@ -19,6 +19,9 @@ REAL_GOCACHE="$(go env GOCACHE)"
 export HOME="$tmp/home"
 export GOPATH="$REAL_GOPATH" GOCACHE="$REAL_GOCACHE"
 unset XDG_STATE_HOME HERDR_ENV || true
+# Notifications off: dispatch now notifies on blocked/all-done (issue #189);
+# keep this suite deterministic and log-clean (see test_notify.sh).
+export LEAD_NOTIFY=0
 export LEAD_STATE_FILE="$tmp/state/workflows.json"
 mkdir -p "$HOME"
 

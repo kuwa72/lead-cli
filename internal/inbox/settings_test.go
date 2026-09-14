@@ -118,3 +118,33 @@ func TestSettings_IssueCreationDefaultAI_AffectsKeyS(t *testing.T) {
 		t.Fatalf("expected title='direct title', got %q", gh.Created[0].Title)
 	}
 }
+
+func TestSettings_NotificationsToggle(t *testing.T) {
+	var saved Config
+	m := New(Options{
+		OnSettingsChange: func(c Config) { saved = c },
+	})
+	if m.notifyOff {
+		t.Fatal("default notifications off, want on")
+	}
+	m.mode = modeSettings
+	m.settingsCursor = 3
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	toggled := next.(Model)
+	if !toggled.notifyOff {
+		t.Error("toggling row 3 did not disable notifications")
+	}
+	if !saved.NotifyDisabled {
+		t.Errorf("saved config = %+v, want NotifyDisabled", saved)
+	}
+	if v := toggled.View(); !strings.Contains(v, "Notifications") {
+		t.Errorf("settings view missing notifications row:\n%s", v)
+	}
+}
+
+func TestSettings_NotificationsInitialOff(t *testing.T) {
+	m := New(Options{NotifyDisabled: true})
+	if !m.notifyOff {
+		t.Error("NotifyDisabled option did not switch notifications off")
+	}
+}
