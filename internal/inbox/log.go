@@ -61,6 +61,46 @@ func (m Model) updateLog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// logPaneEntries is the number of event log lines in the always-on log
+// pane below the list (issue #196).
+const logPaneEntries = 5
+
+// logPaneHeight is the total rows the pane occupies: header + entries +
+// closing rule. viewList reserves this from the body height.
+const logPaneHeight = logPaneEntries + 2
+
+// viewLogPane renders the always-on message/log pane: a header plus the
+// latest entries, oldest first. Empty slots are blank so the pane keeps
+// a constant height.
+func (m Model) viewLogPane(w int) string {
+	var b strings.Builder
+	ch := "─"
+	if m.theme != nil && m.theme.Mode() == ModePlain {
+		ch = "-"
+	}
+	title := ch + " Log "
+	header := title + strings.Repeat(ch, max(0, w-len([]rune(title))))
+	if m.theme != nil {
+		header = m.theme.Render(header, TokenFgSecondary, TokenBgCanvas, false, false, false)
+	}
+	b.WriteString(header + "\n")
+	entries := m.logs
+	if len(entries) > logPaneEntries {
+		entries = entries[len(entries)-logPaneEntries:]
+	}
+	for _, e := range entries {
+		line := padRight(truncTail(e, w), w)
+		if m.theme != nil {
+			line = m.theme.Render(line, TokenFgSecondary, TokenBgCanvas, false, false, false)
+		}
+		b.WriteString(line + "\n")
+	}
+	for i := len(entries); i < logPaneEntries; i++ {
+		b.WriteString(padRight("", w) + "\n")
+	}
+	return b.String()
+}
+
 func (m Model) viewLog() string {
 	var b strings.Builder
 	w := m.screenWidth()
