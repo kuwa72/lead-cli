@@ -474,10 +474,8 @@ previews without changing anything, --check verifies only.`
 				return runEnable(cmd, deps)
 			},
 		}
-		c.Flags().Bool("write", false, "write changes (default; kept for compatibility)")
 		c.Flags().Bool("dry-run", false, "preview changes without applying them")
 		c.Flags().Bool("check", false, "verify installation only (no changes)")
-		c.Flags().Bool("uninstall", false, "remove the managed skill files and AGENTS.md block (see also `lead disable`)")
 		c.Flags().Bool("yes", false, "assume yes to approval prompts")
 		return c
 	}
@@ -1477,13 +1475,11 @@ func runClean(cmd *cobra.Command, deps Deps, raw string) error {
 // alias): repository-oriented agent configuration (lead-flow skill +
 // AGENTS.md managed block). Operates only on the repository, never on
 // $HOME. Applies by default after approval; --dry-run previews,
-// --check verifies, --uninstall removes (see also `lead disable`).
+// --check verifies (removal lives in `lead disable`).
 func runEnable(cmd *cobra.Command, deps Deps) error {
 	flags := cmd.Flags()
-	write, _ := flags.GetBool("write") // compat: applying is the default
 	dryRun, _ := flags.GetBool("dry-run")
 	check, _ := flags.GetBool("check")
-	uninstall, _ := flags.GetBool("uninstall")
 	yes, _ := flags.GetBool("yes")
 
 	cwd, err := deps.workDir()
@@ -1496,15 +1492,13 @@ func runEnable(cmd *cobra.Command, deps Deps) error {
 	}
 
 	rep, err := projinit.Run(projinit.Options{
-		Root:      repoRoot,
-		Write:     write,
-		DryRun:    dryRun,
-		Check:     check,
-		Uninstall: uninstall,
-		Yes:       yes,
-		Stdin:     deps.stdin(),
-		Gh:        deps.gh(),
-		Repo:      deps.repoSlug(),
+		Root:   repoRoot,
+		DryRun: dryRun,
+		Check:  check,
+		Yes:    yes,
+		Stdin:  deps.stdin(),
+		Gh:     deps.gh(),
+		Repo:   deps.repoSlug(),
 	})
 	if err != nil {
 		return err
@@ -1596,4 +1590,3 @@ func runUnlgtm(cmd *cobra.Command, deps Deps, raw string) error {
 	fmt.Fprintf(cmd.OutOrStdout(), "removed lgtm from #%d\n", number)
 	return nil
 }
-

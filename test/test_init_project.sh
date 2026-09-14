@@ -45,14 +45,14 @@ case "$out" in *"dry run"*) ;; *) fail "dry-run missing dry-run notice";; esac
 case "$(cat AGENTS.md)" in *"lead-flow"*) ;; *) fail "AGENTS.md missing lead-flow block";; esac
 
 # --- 4. idempotency: re-run reports no changes ---
-out="$("$tmp/lead" init --write --yes)" || fail "re-init failed"
+out="$("$tmp/lead" init --yes)" || fail "re-init failed"
 case "$out" in *"no changes"*) ;; *) fail "re-init not idempotent";; esac
 
 # --- 5. --check passes after init ---
 "$tmp/lead" init --check >/dev/null || fail "init --check failed after init"
 
-# --- 6. --uninstall removes managed files and block ---
-"$tmp/lead" init --uninstall >/dev/null || fail "uninstall failed"
+# --- 6. `disable` removes managed files and block ---
+"$tmp/lead" disable >/dev/null || fail "disable failed"
 [ ! -e .claude/skills/lead-flow/SKILL.md ] || fail "claude skill remains after uninstall"
 [ ! -e .devin/skills/lead-flow/SKILL.md ] || fail "devin skill remains after uninstall"
 case "$(cat AGENTS.md)" in *"lead-flow"*) fail "AGENTS.md block remains after uninstall";; esac

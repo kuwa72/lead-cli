@@ -52,11 +52,10 @@ func TestRunDryRunWritesNothing(t *testing.T) {
 	}
 }
 
-func TestRunWriteCreatesManagedFiles(t *testing.T) {
+func TestRunApplyCreatesManagedFiles(t *testing.T) {
 	root := t.TempDir()
 	rep, err := Run(Options{
 		Root:         root,
-		Write:        true,
 		Yes:          true,
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
@@ -92,12 +91,11 @@ func TestRunWriteCreatesManagedFiles(t *testing.T) {
 	}
 }
 
-func TestRunWriteNeedsApproval(t *testing.T) {
+func TestRunApplyNeedsApproval(t *testing.T) {
 	root := t.TempDir()
 	// "n" declines: nothing written.
 	if _, err := Run(Options{
 		Root:         root,
-		Write:        true,
 		Stdin:        strings.NewReader("n\n"),
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
@@ -111,7 +109,6 @@ func TestRunWriteNeedsApproval(t *testing.T) {
 	// EOF (non-interactive) defaults to no.
 	if _, err := Run(Options{
 		Root:         root,
-		Write:        true,
 		Stdin:        strings.NewReader(""),
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
@@ -125,7 +122,6 @@ func TestRunWriteNeedsApproval(t *testing.T) {
 	// "y" approves.
 	if _, err := Run(Options{
 		Root:         root,
-		Write:        true,
 		Stdin:        strings.NewReader("y\n"),
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
@@ -141,7 +137,6 @@ func TestRunIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	opts := Options{
 		Root:         root,
-		Write:        true,
 		Yes:          true,
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
@@ -176,7 +171,6 @@ func TestRunCheckReportsCompleteness(t *testing.T) {
 
 	if _, err := Run(Options{
 		Root:         root,
-		Write:        true,
 		Yes:          true,
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
@@ -201,7 +195,6 @@ func TestRunUninstallRemovesManagedFiles(t *testing.T) {
 	root := t.TempDir()
 	if _, err := Run(Options{
 		Root:         root,
-		Write:        true,
 		Yes:          true,
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
@@ -336,7 +329,7 @@ func TestLegacyInitBlockMigratesToEnable(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("# rules\n"+legacy), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := Run(Options{Root: root, Write: true, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents})
+	rep, err := Run(Options{Root: root, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +398,7 @@ func (s *stubLabelClient) RepoCreateLabel(_ context.Context, repo string, label 
 // label check can make --check incomplete.
 func installLocal(t *testing.T, root string) {
 	t.Helper()
-	if _, err := Run(Options{Root: root, Write: true, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents}); err != nil {
+	if _, err := Run(Options{Root: root, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents}); err != nil {
 		t.Fatalf("install local: %v", err)
 	}
 }
@@ -559,10 +552,10 @@ func TestRunDryRunDoesNotCreateLabels(t *testing.T) {
 	}
 }
 
-func TestRunWriteCreatesMissingLabels(t *testing.T) {
+func TestRunApplyCreatesMissingLabels(t *testing.T) {
 	root := t.TempDir()
 	gh := &stubLabelClient{labels: []string{"ready"}}
-	rep, err := Run(Options{Root: root, Write: true, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	rep, err := Run(Options{Root: root, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -581,10 +574,10 @@ func TestRunWriteCreatesMissingLabels(t *testing.T) {
 	}
 }
 
-func TestRunWriteSkipsCreationWhenLabelsExist(t *testing.T) {
+func TestRunApplySkipsCreationWhenLabelsExist(t *testing.T) {
 	root := t.TempDir()
 	gh := &stubLabelClient{labels: []string{"needs-review", "ready", "blocked"}}
-	rep, err := Run(Options{Root: root, Write: true, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	rep, err := Run(Options{Root: root, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -596,10 +589,10 @@ func TestRunWriteSkipsCreationWhenLabelsExist(t *testing.T) {
 	}
 }
 
-func TestRunWriteReportsLabelCreateFailure(t *testing.T) {
+func TestRunApplyReportsLabelCreateFailure(t *testing.T) {
 	root := t.TempDir()
 	gh := &stubLabelClient{labels: []string{}, createErr: errors.New("403 Forbidden")}
-	rep, err := Run(Options{Root: root, Write: true, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	rep, err := Run(Options{Root: root, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
 	if err != nil {
 		t.Fatalf("write with label failure = %v, want local install to succeed with a warning", err)
 	}
@@ -611,10 +604,10 @@ func TestRunWriteReportsLabelCreateFailure(t *testing.T) {
 	}
 }
 
-func TestRunWriteSkipsCreationWithoutRepo(t *testing.T) {
+func TestRunApplySkipsCreationWithoutRepo(t *testing.T) {
 	root := t.TempDir()
 	gh := &stubLabelClient{labels: []string{}}
-	if _, err := Run(Options{Root: root, Write: true, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: ""}); err != nil {
+	if _, err := Run(Options{Root: root, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: ""}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if len(gh.created) != 0 {
