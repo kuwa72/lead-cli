@@ -826,3 +826,41 @@ func waitGone(t *testing.T, pid int) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+func TestOnce_BlockedCommentContainsLogTail(t *testing.T) {
+	d, gh, _, l := newFixture(t, 7)
+	d.Opts.MaxAttempts = 1
+	l.OnWait = func(c launchCall) error {
+		// Production ExecLauncher creates the log dir; the fake mirrors it.
+		if err := os.MkdirAll(filepath.Dir(c.LogPath), 0o755); err != nil {
+			return err
+		}
+		var b strings.Builder
+		for i := 1; i <= 100; i++ {
+			b.WriteString("log line " + strconv.Itoa(i) + "\n")
+		}
+		if err := os.WriteFile(c.LogPath, []byte(b.String()), 0o644); err != nil {
+			return err
+		}
+		return errors.New("exit status 1")
+	}
+	rep, err := d.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if rep.Results[0].Outcome != OutcomeBlocked {
+		t.Fatalf("outcome = %s, want blocked", rep.Results[0].Outcome)
+	}
+	if len(gh.Comments) != 1 {
+		t.Fatalf("comments = %+v, want one blocked report", gh.Comments)
+	}
+	body := gh.Comments[0].Body
+	for _, want := range []string{"exit status 1", "log line 100\n", "1"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("blocked comment missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "\nlog line 1\n") {
+		t.Errorf("blocked comment exceeds the tail cap (head lines present):\n%s", body)
+	}
+}
