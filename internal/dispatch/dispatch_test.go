@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -612,5 +613,95 @@ func TestLoop_CancelDoesNotKillAgent(t *testing.T) {
 		if !strings.Contains(logText, want) {
 			t.Errorf("agent argv missing %q:\n%s", want, logText)
 		}
+	}
+}
+
+func spawnSleepAgent(t *testing.T) *exec.Cmd {
+	t.Helper()
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep unavailable")
+	}
+	var cmd *exec.Cmd
+	if _, err := exec.LookPath("setsid"); err == nil {
+		cmd = exec.Command("setsid", "sleep", "60")
+	} else {
+		cmd = exec.Command("sleep", "60")
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	return cmd
+}
+
+func stopFixture(t *testing.T, pid int, worktree string) (*Dispatcher, *testutil.FakeGhClient, *fakeGit) {
+	t.Helper()
+	d, gh, git, _ := newFixture(t)
+	gh.Issues[7] = ports.Issue{Number: 7, Title: "work", Body: "body", State: "OPEN"}
+	rec := state.Workflow{Issue: 7, Repository: "o/r", Branch: "issue/7-t", Worktree: worktree, Status: state.StatusInProgress, Agent: "claude", PID: pid}
+	if err := d.Store.Upsert(rec); err != nil {
+		t.Fatal(err)
+	}
+	return d, gh, git
+}
+
+func TestStop_KillsProcessCleansUpAndComments(t *testing.T) {
+	sleeper := spawnSleepAgent(t)
+	pid := sleeper.Process.Pid
+	worktree := filepath.Join(t.TempDir(), "issue-7")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	d, gh, _ := stopFixture(t, pid, worktree)
+	if err := d.Stop(context.Background(), 7); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	sleeper.Wait()
+	if d.alive(pid) {
+		t.Errorf("pid %d still alive after Stop", pid)
+	}
+	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
+		t.Errorf("worktree not removed: %v", err)
+	}
+	found := false
+	for _, c := range gh.Comments {
+		if c.Number == 7 && strings.Contains(c.Body, "Interrupted") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no interruption comment on #7: %+v", gh.Comments)
+	}
+	if _, ok, _ := d.Store.Get(7, ""); ok {
+		t.Error("state record not deleted after Stop")
+	}
+	for _, l := range gh.RemovedLabels {
+		if l.Number == 7 && l.Label == "ready" {
+			t.Error("ready label removed by Stop; the issue must stay queued")
+		}
+	}
+}
+
+func TestStop_WithoutRecordFails(t *testing.T) {
+	d, _, _, _ := newFixture(t)
+	if err := d.Stop(context.Background(), 9); err == nil {
+		t.Fatal("Stop without a record = nil, want error")
+	}
+}
+
+func TestStop_ProcessAlreadyGoneStillCleansUp(t *testing.T) {
+	sleeper := spawnSleepAgent(t)
+	pid := sleeper.Process.Pid
+	sleeper.Process.Kill()
+	sleeper.Wait()
+	d, gh, _ := stopFixture(t, pid, "")
+	if err := d.Stop(context.Background(), 7); err != nil {
+		t.Fatalf("Stop with dead pid: %v", err)
+	}
+	if _, ok, _ := d.Store.Get(7, ""); ok {
+		t.Error("state record not deleted after Stop")
+	}
+	if len(gh.Comments) != 1 {
+		t.Errorf("comments = %+v, want one interruption comment", gh.Comments)
 	}
 }

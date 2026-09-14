@@ -45,6 +45,9 @@ type Options struct {
 	// files a real-device-regression follow-up referencing that issue (inbox n key).
 	// Nil disables s/n.
 	Say func(ctx context.Context, oneLiner string, followUp int) (string, error)
+	// Stop terminates the running agent for an issue and returns a human
+	// summary (`lead stop`, issue #185). Nil disables d.
+	Stop func(ctx context.Context, number int) (string, error)
 	// Parallel is the dispatcher's parallel limit for the header.
 	// 0 means dispatch.DefaultParallel.
 	Parallel int
@@ -948,6 +951,23 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "p":
 		return m.peekItem(it)
+	case "d":
+		if it.Kind != KindRunning {
+			return m, m.setStatus(fmt.Sprintf("#%d is not running (d only stops running agents)", it.Number))
+		}
+		if m.opts.Stop == nil {
+			return m, m.setStatus("d is not configured (stopping agents is unavailable here)")
+		}
+		if m.pendingOps[it.Number] {
+			return m, m.setStatus(fmt.Sprintf("Already processing #%d", it.Number))
+		}
+		m.pendingOps[it.Number] = true
+		number := it.Number
+		stop := m.opts.Stop
+		return m, func() tea.Msg {
+			summary, err := stop(context.Background(), number)
+			return doneMsg{status: summary, err: err, number: number, refresh: true}
+		}
 	case "n":
 		if m.opts.Say == nil {
 			return m, m.setStatus("n is not configured (no spec AI). Run `lead say --follow-up N \"one-liner\"` directly.")
@@ -1775,6 +1795,7 @@ func (m Model) viewHelp() string {
 		"  [t] Reply / comment   any issue",
 		"  [x] Reject / close    any issue with optional reason",
 		"  [p] Peek agent log    running or blocked agents only",
+		"  [d] Stop agent        running agents only",
 		"  [o] Open in browser   any issue",
 		"  [c] Mark as seen      merged issues only",
 		"  [n] Report bug         merged issues only",

@@ -500,6 +500,18 @@ and never touches $HOME. Repository issue labels are kept.`,
 	}
 	cleanCmd.Flags().String("part", "", "work unit within a multi-PR issue")
 
+	stopCmd := &cobra.Command{
+		Use:   "stop <issue-number>",
+		Short: "Stop a running agent (kill, clean up, record interruption)",
+		Long: `Terminate the running agent for the issue: kill its process
+group, remove the worktree, comment the interruption on the issue,
+and delete the state record. The ready label is kept so the issue
+returns to the dispatch queue.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runStop(cmd, deps, args[0])
+		},
+	}
 	finishCmd := &cobra.Command{
 		Use:   "finish <issue-number>",
 		Short: "Wait CI, squash-merge the PR, and close the issue",
@@ -588,7 +600,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, resumeCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, resumeCmd, statusCmd, cleanCmd, stopCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	return root
 }
@@ -635,6 +647,18 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		opts.Herdr = deps.Herdr
 	} else if herdr.Available() {
 		opts.Herdr = herdr.New()
+	}
+	opts.Stop = func(ctx context.Context, number int) (string, error) {
+		d := &dispatch.Dispatcher{
+			Gh:    deps.gh(),
+			Git:   deps.gitRunner(),
+			Store: store,
+			Opts:  dispatch.Options{WorkDir: cwd},
+		}
+		if err := d.Stop(ctx, number); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Stopped #%d", number), nil
 	}
 	opts.Say = func(ctx context.Context, oneLiner string, followUp int) (string, error) {
 		r := &spec.Runner{
@@ -1459,6 +1483,31 @@ func runClean(cmd *cobra.Command, deps Deps, raw string) error {
 		return fmt.Errorf("clean #%d: %w", number, err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "cleaned #%d (%s)\n", number, w.Branch)
+	return nil
+}
+
+// runStop implements `lead stop <issue-number>` (issue #185): terminate
+// the running agent via the dispatcher (kill process group, remove the
+// worktree, comment the interruption, delete the state record).
+func runStop(cmd *cobra.Command, deps Deps, raw string) error {
+	number, err := strconv.Atoi(raw)
+	if err != nil || number <= 0 {
+		return fmt.Errorf("invalid issue number %q", raw)
+	}
+	cwd, err := deps.workDir()
+	if err != nil {
+		return fmt.Errorf("stop: %w", err)
+	}
+	d := &dispatch.Dispatcher{
+		Gh:    deps.gh(),
+		Git:   deps.gitRunner(),
+		Store: &state.Store{Path: deps.stateFile()},
+		Opts:  dispatch.Options{WorkDir: cwd},
+	}
+	if err := d.Stop(cmd.Context(), number); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "stopped #%d\n", number)
 	return nil
 }
 
