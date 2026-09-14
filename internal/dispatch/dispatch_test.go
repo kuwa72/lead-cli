@@ -784,12 +784,7 @@ func TestOnce_StuckAgentFailsAndCountsAttempt(t *testing.T) {
 	if w.Attempts != 1 {
 		t.Errorf("Attempts = %d, want 1", w.Attempts)
 	}
-	var ws syscall.WaitStatus
-	wpid, werr := syscall.Wait4(proc.Pid, &ws, syscall.WNOHANG, nil)
-	if wpid == 0 && werr == nil {
-		t.Error("stuck agent process still alive after Once")
-		proc.Kill()
-	}
+	waitGone(t, proc.Pid)
 }
 
 func TestOnce_StuckAgentBlockedAtMaxAttempts(t *testing.T) {
@@ -811,4 +806,23 @@ func TestOnce_StuckAgentBlockedAtMaxAttempts(t *testing.T) {
 		t.Errorf("blocked label not added: %+v", gh.AddedLabels)
 	}
 	_ = proc
+}
+
+// waitGone polls until pid is dead or reaped. Asserting death instantly
+// after SIGKILL flakes on loaded machines (kill returns before the target
+// is scheduled to die), so poll with a deadline instead.
+func waitGone(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var ws syscall.WaitStatus
+	for {
+		wpid, werr := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
+		if !(wpid == 0 && werr == nil) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pid %d still alive 10s after kill", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

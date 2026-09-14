@@ -55,6 +55,11 @@ EOF
 
 out="$("$tmp/lead" stop 7)" || fail "lead stop 7 failed: $out"
 case "$out" in *"stopped #7"*) ;; *) fail "stop missing confirmation: $out";; esac
+# SIGKILL delivery races scheduler latency on loaded machines: poll briefly.
+for _ in $(seq 1 50); do
+  kill -0 "$agent_pid" 2>/dev/null || break
+  sleep 0.2
+done
 if kill -0 "$agent_pid" 2>/dev/null; then fail "agent process still alive after stop"; fi
 [ ! -e "$wt" ] || fail "worktree remains after stop"
 case "$(cat "$GH_ARG_LOG")" in *"<issue>"*"<comment>"*"<7>"*) ;; *) fail "gh issue comment #7 was not called";; esac
