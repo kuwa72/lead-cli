@@ -40,6 +40,12 @@ const (
 	DefaultMaxAttempts  = 3
 	DefaultReadyLabel   = "ready"
 	DefaultBlockedLabel = "blocked"
+	// DefaultStuckAfter treats an agent with no log output this long as
+	// failed (issue #186). Silent stretches cover legitimate CI waits,
+	// so the default is generous.
+	DefaultStuckAfter = 30 * time.Minute
+	// DefaultMaxRuntime caps one headless run (issue #186).
+	DefaultMaxRuntime = 3 * time.Hour
 )
 
 // Options tunes one Dispatcher. Zero fields take the defaults above.
@@ -55,6 +61,14 @@ type Options struct {
 	// SkipProtectionCheck makes Preflight warn instead of refusing when the
 	// repository lacks branch protection / required checks (issue #67).
 	SkipProtectionCheck bool
+	// StuckAfter treats a running agent with no log output this long as
+	// failed (issue #186). Zero means DefaultStuckAfter; negative
+	// disables the idle check.
+	StuckAfter time.Duration
+	// MaxRuntime treats a running agent past this runtime as failed
+	// (issue #186). Zero means DefaultMaxRuntime; negative disables the
+	// wall-clock check.
+	MaxRuntime time.Duration
 }
 
 func (o Options) withDefaults() Options {
@@ -69,6 +83,12 @@ func (o Options) withDefaults() Options {
 	}
 	if o.BlockedLabel == "" {
 		o.BlockedLabel = DefaultBlockedLabel
+	}
+	if o.StuckAfter == 0 {
+		o.StuckAfter = DefaultStuckAfter
+	}
+	if o.MaxRuntime == 0 {
+		o.MaxRuntime = DefaultMaxRuntime
 	}
 	o.Agent = agent.Resolve(o.Agent)
 	return o
@@ -287,6 +307,19 @@ func (d *Dispatcher) reconnect(ctx context.Context, opts Options) ([]Running, []
 			continue
 		}
 		if d.alive(w.PID) {
+			if reason := stuckReason(w.LogPath, w.StartedAt, time.Now(), opts.StuckAfter, opts.MaxRuntime); reason != nil {
+				kill := d.Kill
+				if kill == nil {
+					kill = killProcessGroup
+				}
+				if err := kill(w.PID); err != nil {
+					// Kill failed: leave it running; the next pass retries.
+					running = append(running, Running{Issue: w.Issue, PID: w.PID})
+					continue
+				}
+				settled = append(settled, d.evaluate(ctx, opts, w.Issue, repoRoot, w.Worktree, w.LogPath, reason))
+				continue
+			}
 			running = append(running, Running{Issue: w.Issue, PID: w.PID})
 			continue
 		}
@@ -406,6 +439,7 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) Resul
 	}
 	if err := d.update(number, func(w *state.Workflow) {
 		w.Agent, w.PID, w.LogPath = opts.Agent, proc.Pid(), logPath
+		w.StartedAt = time.Now()
 	}); err != nil {
 		res.Outcome, res.Err = OutcomeError, err
 		return res
@@ -539,6 +573,29 @@ func (d *Dispatcher) Stop(ctx context.Context, number int) error {
 		return fmt.Errorf("stop: delete state for #%d: %w", number, err)
 	}
 	return nil
+}
+
+// stuckReason returns non-nil when a running agent should be treated as
+// failed: past MaxRuntime, or silent longer than idleTimeout (issue #186).
+// Non-positive timeouts disable their check. Zero startedAt with no log
+// means nothing is known: never stuck.
+func stuckReason(logPath string, startedAt, now time.Time, idleTimeout, maxRuntime time.Duration) error {
+	if maxRuntime > 0 && !startedAt.IsZero() && now.Sub(startedAt) > maxRuntime {
+		return fmt.Errorf("agent exceeded maximum runtime of %s", maxRuntime)
+	}
+	if idleTimeout <= 0 {
+		return nil
+	}
+	last := startedAt
+	if logPath != "" {
+		if fi, err := os.Stat(logPath); err == nil && fi.ModTime().After(last) {
+			last = fi.ModTime()
+		}
+	}
+	if last.IsZero() || now.Sub(last) <= idleTimeout {
+		return nil
+	}
+	return fmt.Errorf("agent produced no output for %s", now.Sub(last).Round(time.Second))
 }
 
 // killProcessGroup SIGKILLs the process group (agents start in their own

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/ports"
@@ -96,9 +97,12 @@ func TestInboxStopKeyStopsRunningAgent(t *testing.T) {
 	gh := &testutil.FakeGhClient{Issues: map[int]ports.Issue{
 		7: {Number: 7, Title: "work", Body: "body", State: "OPEN"},
 	}}
-	sleeper := exec.Command("sleep", "60")
+	// setsid puts the stand-in agent in its own process group so Stop's
+	// group kill takes the deterministic path (CI flakes observed with
+	// plain sleep inheriting the test's group).
+	sleeper := exec.Command("setsid", "sleep", "60")
 	if err := sleeper.Start(); err != nil {
-		t.Skip("sleep unavailable")
+		t.Skip("setsid/sleep unavailable")
 	}
 	t.Cleanup(func() { sleeper.Process.Kill(); sleeper.Wait() })
 	store := &state.Store{Path: stateFile}
@@ -115,15 +119,8 @@ func TestInboxStopKeyStopsRunningAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("headless inbox: %v\n%s", err, out)
 	}
-	// Wait4 WNOHANG distinguishes a live process (0) from a zombie
-	// (reaped here) without blocking.
-	var ws syscall.WaitStatus
-	wpid, werr := syscall.Wait4(sleeper.Process.Pid, &ws, syscall.WNOHANG, nil)
-	if wpid == 0 && werr == nil {
-		t.Error("agent process still alive after d key")
-	} else {
-		sleeper.Wait()
-	}
+	waitAgentGone(t, sleeper.Process.Pid)
+	sleeper.Wait()
 	found := false
 	for _, c := range gh.Comments {
 		if c.Number == 7 {
@@ -573,5 +570,23 @@ func TestEnableDroppedCompatFlagsFail(t *testing.T) {
 	}
 	if _, err := runEnableCmd(t, deps, "--uninstall"); err == nil {
 		t.Error("enable --uninstall = nil error, want unknown-flag failure")
+	}
+}
+
+// waitAgentGone polls until pid is dead or reaped. Asserting death instantly
+// after SIGKILL flakes on loaded machines, so poll with a deadline instead.
+func waitAgentGone(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var ws syscall.WaitStatus
+	for {
+		wpid, werr := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
+		if !(wpid == 0 && werr == nil) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pid %d still alive 10s after kill", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

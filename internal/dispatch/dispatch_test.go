@@ -705,3 +705,124 @@ func TestStop_ProcessAlreadyGoneStillCleansUp(t *testing.T) {
 		t.Errorf("comments = %+v, want one interruption comment", gh.Comments)
 	}
 }
+
+func TestStuckReason(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	touch := func(t *testing.T, mtime time.Time) string {
+		t.Helper()
+		p := filepath.Join(t.TempDir(), "agent.log")
+		if err := os.WriteFile(p, []byte("out\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	fresh := touch(t, now.Add(-time.Minute))
+	stale := touch(t, now.Add(-time.Hour))
+	cases := []struct {
+		name    string
+		log     string
+		started time.Time
+		idle    time.Duration
+		maxRun  time.Duration
+		stuck   bool
+	}{
+		{"active output", fresh, now.Add(-time.Hour), time.Minute * 30, time.Hour * 3, false},
+		{"idle too long", stale, now.Add(-time.Hour), time.Minute * 30, time.Hour * 3, true},
+		{"idle check disabled", stale, now.Add(-time.Hour), 0, time.Hour * 3, false},
+		{"runtime exceeded", fresh, now.Add(-4 * time.Hour), time.Minute * 30, time.Hour * 3, true},
+		{"runtime check disabled", fresh, now.Add(-4 * time.Hour), time.Minute * 30, 0, false},
+		{"nothing known", "", time.Time{}, time.Minute * 30, time.Hour * 3, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := stuckReason(c.log, c.started, now, c.idle, c.maxRun)
+			if (err != nil) != c.stuck {
+				t.Errorf("stuckReason() = %v, want stuck=%v", err, c.stuck)
+			}
+		})
+	}
+}
+
+func stuckFixture(t *testing.T, attempts int, logAge time.Duration, startedAgo time.Duration) (*Dispatcher, *testutil.FakeGhClient, *os.Process) {
+	t.Helper()
+	d, gh, _, _ := newFixture(t)
+	d.Opts.StuckAfter = time.Minute * 30
+	d.Opts.MaxRuntime = time.Hour * 3
+	gh.Issues[7] = ports.Issue{Number: 7, Title: "work", Body: "body", State: "OPEN"}
+	sleeper := spawnSleepAgent(t)
+	logPath := filepath.Join(t.TempDir(), "issue-7.log")
+	if err := os.WriteFile(logPath, []byte("out\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-logAge)
+	if err := os.Chtimes(logPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	rec := state.Workflow{Issue: 7, Repository: "o/r", Branch: "issue/7", Status: state.StatusInProgress, Agent: "claude", PID: sleeper.Process.Pid, LogPath: logPath, Attempts: attempts, StartedAt: time.Now().Add(-startedAgo)}
+	if err := d.Store.Upsert(rec); err != nil {
+		t.Fatal(err)
+	}
+	return d, gh, sleeper.Process
+}
+
+func TestOnce_StuckAgentFailsAndCountsAttempt(t *testing.T) {
+	d, _, proc := stuckFixture(t, 0, time.Hour, time.Hour)
+	rep, err := d.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(rep.Running) != 0 {
+		t.Errorf("Running = %+v, want stuck agent settled", rep.Running)
+	}
+	if len(rep.Results) != 1 || rep.Results[0].Outcome != OutcomeRetry {
+		t.Errorf("Results = %+v, want one retry", rep.Results)
+	}
+	w, _, _ := d.Store.Get(7, "")
+	if w.Attempts != 1 {
+		t.Errorf("Attempts = %d, want 1", w.Attempts)
+	}
+	waitGone(t, proc.Pid)
+}
+
+func TestOnce_StuckAgentBlockedAtMaxAttempts(t *testing.T) {
+	d, gh, proc := stuckFixture(t, 2, time.Hour, time.Hour)
+	rep, err := d.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(rep.Results) != 1 || rep.Results[0].Outcome != OutcomeBlocked {
+		t.Fatalf("Results = %+v, want one blocked", rep.Results)
+	}
+	blocked := false
+	for _, l := range gh.AddedLabels {
+		if l.Number == 7 && l.Label == "blocked" {
+			blocked = true
+		}
+	}
+	if !blocked {
+		t.Errorf("blocked label not added: %+v", gh.AddedLabels)
+	}
+	_ = proc
+}
+
+// waitGone polls until pid is dead or reaped. Asserting death instantly
+// after SIGKILL flakes on loaded machines (kill returns before the target
+// is scheduled to die), so poll with a deadline instead.
+func waitGone(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var ws syscall.WaitStatus
+	for {
+		wpid, werr := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
+		if !(wpid == 0 && werr == nil) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pid %d still alive 10s after kill", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
