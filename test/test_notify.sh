@@ -135,3 +135,56 @@ if [ -s "$notify_log" ]; then
 fi
 
 echo "notification behavioral checks passed"
+
+# --- 4. dispatcher notifications (issue #189): blocked + all-done ---------
+# Isolated dummies (own bin dir first on PATH, own repos/state) so the
+# inbox gh stub above is unaffected.
+mkdir -p "$tmp/dbin"
+cat > "$tmp/dbin/gh" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
+  case "$*" in *"--label ready"*) printf '[{"number":7,"title":"w","updatedAt":"2026-09-14T00:00:00Z"}]';; *) printf '[]';; esac
+  exit 0
+fi
+if [ "$1" = "issue" ] && [ "$2" = "view" ]; then printf '{"number":7,"title":"w","body":"b","state":"OPEN"}'; exit 0; fi
+if { [ "$1" = "issue" ] && [ "$2" = "edit" ]; } || { [ "$1" = "issue" ] && [ "$2" = "comment" ]; }; then exit 0; fi
+echo "unexpected gh call: $@" >&2
+exit 3
+EOF
+cat > "$tmp/dbin/claude" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$tmp/dbin/gh" "$tmp/dbin/claude"
+export PATH="$tmp/dbin:$PATH"
+unset LEAD_NOTIFY || true
+
+setup_drepo() {
+  dproj="$tmp/d$1"
+  mkdir -p "$dproj"
+  git init --quiet "$dproj" || fail "git init failed"
+  git -C "$dproj" config user.email "test@example.com"
+  git -C "$dproj" config user.name "Test"
+  git -C "$dproj" commit -q --allow-empty -m init || fail "fixture commit failed"
+  export LEAD_STATE_FILE="$tmp/dstate-$1/wf.json"
+}
+
+# blocked + all-done fire on the 3rd failing pass.
+setup_drepo 1
+: > "$notify_log"
+for _ in 1 2 3; do
+  (cd "$dproj" && "$tmp/lead" dispatch --once --skip-protection-check --agent claude >/dev/null 2>&1) || fail "dispatch run failed"
+done
+grep -q '.*#7.*blocked' "$notify_log" || fail "blocked notification missing: $(cat "$notify_log")"
+grep -q 'all done' "$notify_log" || fail "all-done notification missing: $(cat "$notify_log")"
+
+# LEAD_NOTIFY=0 silences dispatcher notifications.
+setup_drepo 2
+: > "$notify_log"
+export LEAD_NOTIFY=0
+for _ in 1 2 3; do
+  (cd "$dproj" && "$tmp/lead" dispatch --once --skip-protection-check --agent claude >/dev/null 2>&1) || fail "dispatch run failed"
+done
+[ ! -s "$notify_log" ] || fail "notifications fired with LEAD_NOTIFY=0: $(cat "$notify_log")"
+
+echo "dispatcher notification checks passed"

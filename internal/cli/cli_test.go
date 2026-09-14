@@ -84,6 +84,35 @@ func TestInitAliasIsGone(t *testing.T) {
 	}
 }
 
+func TestInboxSettingsDisablesNotifications(t *testing.T) {
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "S,j,j,j,enter,q,q")
+	stateFile := filepath.Join(t.TempDir(), "workflows.json")
+	t.Setenv("LEAD_STATE_FILE", stateFile)
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(stateFile), "inbox-seen.json"), []byte(`{"help_shown":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gh := &testutil.FakeGhClient{}
+	root := t.TempDir()
+	deps := Deps{
+		Gh:      gh,
+		Git:     &fakeGitRunner{root: root, origin: "https://github.com/o/r.git"},
+		WorkDir: root,
+	}
+	if out, err := runLeadCmd(t, deps); err != nil {
+		t.Fatalf("headless inbox: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(stateFile), "inbox-config.json"))
+	if err != nil {
+		t.Fatalf("inbox config not written: %v", err)
+	}
+	if !strings.Contains(string(raw), `"notify_disabled": true`) {
+		t.Errorf("config missing notify_disabled, got:\n%s", raw)
+	}
+}
+
 func runningHeadlessDeps(t *testing.T, startedAgo time.Duration, logAge time.Duration) Deps {
 	t.Helper()
 	t.Setenv("LEAD_TEST_INBOX_KEYS", "j,j,j,enter,j,q")

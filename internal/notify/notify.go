@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 // Notifier delivers user-facing notifications for agent milestones.
@@ -22,6 +23,7 @@ type Options struct {
 
 // OSNotifier implements desktop and terminal notifications.
 type OSNotifier struct {
+	mu   sync.Mutex
 	opts Options
 }
 
@@ -35,6 +37,12 @@ func New(opts Options) *OSNotifier {
 
 // IsDisabled reports whether notifications are disabled by options or environment.
 func (n *OSNotifier) IsDisabled() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.isDisabledLocked()
+}
+
+func (n *OSNotifier) isDisabledLocked() bool {
 	if n.opts.Disabled {
 		return true
 	}
@@ -43,6 +51,14 @@ func (n *OSNotifier) IsDisabled() bool {
 		return true
 	}
 	return false
+}
+
+// SetDisabled toggles notifications at runtime (settings UI, issue #189).
+// The dispatcher Loop and the inbox share one notifier across goroutines.
+func (n *OSNotifier) SetDisabled(disabled bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.opts.Disabled = disabled
 }
 
 // Notify triggers desktop notification if available, otherwise falls back to terminal bell/OSC.

@@ -16,9 +16,10 @@ const (
 
 // Config represents the persisted user configuration for lead inbox.
 type Config struct {
-	Agent         string `json:"agent"`
-	AgentMode     string `json:"agent_mode"`
-	IssueCreation string `json:"issue_creation"`
+	Agent          string `json:"agent"`
+	AgentMode      string `json:"agent_mode"`
+	IssueCreation  string `json:"issue_creation"`
+	NotifyDisabled bool   `json:"notify_disabled"`
 }
 
 // IssueCreation returns the current issue creation default ("direct" or "ai").
@@ -31,9 +32,10 @@ func (m Model) IssueCreation() string {
 
 func (m *Model) notifyConfigChange() {
 	cfg := Config{
-		Agent:         m.Agent(),
-		AgentMode:     m.AgentMode(),
-		IssueCreation: m.IssueCreation(),
+		Agent:          m.Agent(),
+		AgentMode:      m.AgentMode(),
+		IssueCreation:  m.IssueCreation(),
+		NotifyDisabled: m.notifyOff,
 	}
 	if m.opts.OnSettingsChange != nil {
 		m.opts.OnSettingsChange(cfg)
@@ -49,10 +51,10 @@ func (m Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeList
 		return m, nil
 	case tea.KeyUp:
-		m.settingsCursor = (m.settingsCursor - 1 + 3) % 3
+		m.settingsCursor = (m.settingsCursor - 1 + 3) % 4
 		return m, nil
 	case tea.KeyDown:
-		m.settingsCursor = (m.settingsCursor + 1) % 3
+		m.settingsCursor = (m.settingsCursor + 1) % 4
 		return m, nil
 	case tea.KeyEnter, tea.KeySpace, tea.KeyRight:
 		return m.cycleSetting(1)
@@ -61,10 +63,10 @@ func (m Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyRunes:
 		switch string(msg.Runes) {
 		case "k":
-			m.settingsCursor = (m.settingsCursor - 1 + 3) % 3
+			m.settingsCursor = (m.settingsCursor - 1 + 3) % 4
 			return m, nil
 		case "j":
-			m.settingsCursor = (m.settingsCursor + 1) % 3
+			m.settingsCursor = (m.settingsCursor + 1) % 4
 			return m, nil
 		case "h":
 			return m.cycleSetting(-1)
@@ -109,6 +111,13 @@ func (m Model) cycleSetting(direction int) (tea.Model, tea.Cmd) {
 		}
 		m.notifyConfigChange()
 		return m, m.setStatus(fmt.Sprintf("Agent mode: %s", m.agentMode))
+	case 3: // Notifications
+		m.notifyOff = !m.notifyOff
+		m.notifyConfigChange()
+		if m.notifyOff {
+			return m, m.setStatus("Notifications: off")
+		}
+		return m, m.setStatus("Notifications: on")
 	}
 	return m, nil
 }
@@ -211,6 +220,22 @@ func (m Model) viewSettings() string {
 	default:
 		b.WriteString(descStyle.Render("Manual confirmation before dispatch."))
 	}
+	b.WriteString("\n\n")
+
+	// Setting 3: Notifications
+	cursor3 := "  "
+	if m.settingsCursor == 3 {
+		cursor3 = "▸ "
+	}
+	b.WriteString(labelStyle.Render(cursor3 + "4. Notifications"))
+	b.WriteString("\n   ")
+	if m.notifyOff {
+		b.WriteString(inactiveBadge.Render("On") + "  " + activeBadge.Render("Off"))
+	} else {
+		b.WriteString(activeBadge.Render("On") + "  " + inactiveBadge.Render("Off"))
+	}
+	b.WriteString("\n   ")
+	b.WriteString(descStyle.Render("Desktop/terminal notices for blocked agents and finished queues."))
 	b.WriteString("\n\n")
 
 	// Footer / Key bindings

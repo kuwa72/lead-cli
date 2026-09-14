@@ -72,6 +72,8 @@ type Options struct {
 	OnConfigChange func(agent, mode string)
 	// IssueCreation controls the default behavior of 's' (direct vs ai).
 	IssueCreation string
+	// NotifyDisabled starts the inbox with notifications off (issue #189).
+	NotifyDisabled bool
 	// OnSettingsChange is invoked when user modifies any setting (issueCreation, agent, mode).
 	OnSettingsChange func(cfg Config)
 	// Notifier sends desktop/terminal notifications on milestone events (issue #145).
@@ -143,6 +145,7 @@ type Model struct {
 	agent             string       // active agent
 	agentMode         string       // active agent mode
 	issueCreation     string       // issue creation default ("direct" or "ai")
+	notifyOff         bool         // notifications off (settings toggle)
 	settingsCursor    int          // selected row in settings view
 	knownNeedsReview  map[int]bool // tracked needs-review issues for completion notify
 	knownBlocked      map[int]bool // tracked blocked issues for completion notify
@@ -258,6 +261,7 @@ func New(opts Options) Model {
 		agent:            opts.Agent,
 		agentMode:        opts.AgentMode,
 		issueCreation:    opts.IssueCreation,
+		notifyOff:        opts.NotifyDisabled,
 	}
 	if m.agent == "" {
 		m.agent = "agy"
@@ -1874,11 +1878,10 @@ func (m *Model) checkNotifications(sections []Section) {
 				}
 			}
 		case KindBlocked:
+			// Blocked arrivals are reported by the dispatcher that caused
+			// them (issue #189); the inbox only tracks them here.
 			for _, it := range sec.Items {
 				currentBlocked[it.Number] = true
-				if m.hasInitialLoad && !m.knownBlocked[it.Number] {
-					m.notifyItem("Agent Blocked", it)
-				}
 			}
 		}
 	}
