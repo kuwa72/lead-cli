@@ -176,6 +176,12 @@ type FakeGhClient struct {
 	ProtectionErr   error
 	ProtectionCalls []string
 
+	// RepoLabelNames feeds RepoLabels (issue #172); RepoLabelsCalls records
+	// the requested repo slugs.
+	RepoLabelNames    []string
+	RepoLabelNamesErr error
+	RepoLabelsCalls   []string
+
 	// Spec AI (issue #94). Created issues are numbered from NextNumber
 	// (default 101) upward; CreateErr fails every IssueCreate.
 	NextNumber    int
@@ -303,6 +309,14 @@ func (f *FakeGhClient) RepoDefaultBranch(ctx context.Context, repo string) (stri
 	return f.DefaultBranch, nil
 }
 
+// RepoLabels returns RepoLabelNames (or RepoLabelNamesErr) and records the call.
+func (f *FakeGhClient) RepoLabels(ctx context.Context, repo string) ([]string, error) {
+	f.RepoLabelsCalls = append(f.RepoLabelsCalls, repo)
+	if f.RepoLabelNamesErr != nil {
+		return nil, f.RepoLabelNamesErr
+	}
+	return f.RepoLabelNames, nil
+}
 // BranchProtection returns Protection (or ProtectionErr) and records the call.
 func (f *FakeGhClient) BranchProtection(ctx context.Context, repo, branch string) (ports.BranchProtection, error) {
 	f.ProtectionCalls = append(f.ProtectionCalls, repo+"@"+branch)

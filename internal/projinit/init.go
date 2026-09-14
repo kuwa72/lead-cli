@@ -10,6 +10,7 @@ package projinit
 
 import (
 	"bufio"
+	"context"
 	_ "embed"
 	"fmt"
 	"io"
@@ -47,6 +48,16 @@ type Target struct {
 	Dir  string
 }
 
+// RequiredIssueLabels are the GitHub issue labels the lead workflow needs
+// (dispatch queue, review flow). `lead enable` reports each as
+// `label/<name>: ok` or `label/<name>: missing` (issue #172).
+var RequiredIssueLabels = []string{"needs-review", "ready", "blocked"}
+
+// LabelLister lists a repository's label names (satisfied by ports.GhClient).
+type LabelLister interface {
+	RepoLabels(ctx context.Context, repo string) ([]string, error)
+}
+
 var targets = []Target{
 	{Name: "claude", Dir: claudeDir},
 	{Name: "devin", Dir: devinDir},
@@ -70,6 +81,12 @@ type Options struct {
 	SkillContent []byte
 	// AgentsBlock overrides the embedded AGENTS.md snippet. Tests use it.
 	AgentsBlock []byte
+	// Gh lists repository labels for the required-labels check (issue #172).
+	// Nil skips the label check (offline / gh unavailable).
+	Gh LabelLister
+	// Repo is "owner/repo" for the label check. Empty skips it
+	// (no remote: local checks only).
+	Repo string
 }
 
 // Report describes what happened (Lines are user-facing).
@@ -105,7 +122,7 @@ func Run(opts Options) (Report, error) {
 	case opts.Uninstall:
 		return runUninstall(opts.Root)
 	case opts.Check:
-		return runCheck(opts.Root, skill, agents)
+		return runCheck(opts.Root, opts, skill, agents)
 	default:
 		return runInstall(opts.Root, opts, skill, agents)
 	}
@@ -202,8 +219,13 @@ func runInstall(root string, opts Options, wantSkill, wantAgents []byte) (Report
 		needChange = true
 	}
 
+	// Required-label status is informational only: missing labels never
+	// force a rewrite (auto-creation is out of scope for #172).
+	labelLines, _ := labelReport(opts.Gh, opts.Repo)
+	rep.Lines = append(rep.Lines, labelLines...)
+
 	if !needChange {
-		rep.Lines = []string{"lead-flow is already installed: no changes"}
+		rep.Lines = append(rep.Lines, "lead-flow is already installed: no changes")
 		return rep, nil
 	}
 
@@ -243,7 +265,7 @@ func runInstall(root string, opts Options, wantSkill, wantAgents []byte) (Report
 	return rep, nil
 }
 
-func runCheck(root string, wantSkill, wantAgents []byte) (Report, error) {
+func runCheck(root string, opts Options, wantSkill, wantAgents []byte) (Report, error) {
 	var rep Report
 	rep.Complete = true
 	block := BlockStart + "\n" + string(wantAgents) + "\n" + BlockEnd + "\n"
@@ -279,10 +301,45 @@ func runCheck(root string, wantSkill, wantAgents []byte) (Report, error) {
 		rep.Lines = append(rep.Lines, fmt.Sprintf("AGENTS.md: ok (%s)", agentsPath))
 	}
 
+	labelLines, labelsOK := labelReport(opts.Gh, opts.Repo)
+	rep.Lines = append(rep.Lines, labelLines...)
+	if !labelsOK {
+		rep.Complete = false
+	}
+
 	if !rep.Complete {
 		rep.Lines = append(rep.Lines, "Next: run `lead enable --write`")
 	}
 	return rep, nil
+}
+
+// labelReport checks RequiredIssueLabels against the repository's labels.
+// ok=false means at least one required label is missing. A nil Gh, an
+// empty repo (no remote), or a listing failure yields a skip warning with
+// ok=true so offline / unauthenticated environments never block the local
+// skill and AGENTS.md checks.
+func labelReport(gh LabelLister, repo string) (lines []string, ok bool) {
+	if gh == nil || repo == "" {
+		return []string{"labels: skip (no repository remote; local checks only)"}, true
+	}
+	have, err := gh.RepoLabels(context.Background(), repo)
+	if err != nil {
+		return []string{fmt.Sprintf("labels: skip (could not list labels: %v)", err)}, true
+	}
+	present := make(map[string]bool, len(have))
+	for _, l := range have {
+		present[l] = true
+	}
+	ok = true
+	for _, want := range RequiredIssueLabels {
+		if present[want] {
+			lines = append(lines, "label/"+want+": ok")
+		} else {
+			lines = append(lines, "label/"+want+": missing")
+			ok = false
+		}
+	}
+	return lines, ok
 }
 
 func runUninstall(root string) (Report, error) {

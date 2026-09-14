@@ -1487,6 +1487,8 @@ func runEnable(cmd *cobra.Command, deps Deps) error {
 		Uninstall: uninstall,
 		Yes:       yes,
 		Stdin:     deps.stdin(),
+		Gh:        deps.gh(),
+		Repo:      deps.repoSlug(),
 	})
 	if err != nil {
 		return err
@@ -1496,12 +1498,26 @@ func runEnable(cmd *cobra.Command, deps Deps) error {
 		fmt.Fprintln(out, line)
 	}
 	if check && !rep.Complete {
+		if hasMissingLabel(rep.Lines) {
+			return errors.New("required issue labels missing (see report above)")
+		}
 		return errors.New("lead-flow not installed")
 	}
 	if write && rep.Changed {
 		fmt.Fprintln(out, "Next: run `lead doctor --offline` to verify your environment")
 	}
 	return nil
+}
+
+// hasMissingLabel reports whether an enable report lists a required
+// issue label as missing (issue #172).
+func hasMissingLabel(lines []string) bool {
+	for _, l := range lines {
+		if strings.HasPrefix(l, "label/") && strings.HasSuffix(l, ": missing") {
+			return true
+		}
+	}
+	return false
 }
 
 func runLgtm(cmd *cobra.Command, deps Deps, raw string) error {

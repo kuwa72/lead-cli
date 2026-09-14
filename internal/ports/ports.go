@@ -95,6 +95,11 @@ type GhClient interface {
 	IssueComments(ctx context.Context, number int) ([]Comment, error)
 	// IssueEdit mirrors `gh issue edit <n> --title <t> --body-file <f>`.
 	IssueEdit(ctx context.Context, number int, title, body string) error
+	// RepoLabels mirrors `gh label list --json name` and returns the
+	// repository's label names. repo is "owner/repo"; empty means the
+	// current repository (`gh` resolves it). `lead enable` checks the
+	// required workflow labels against it (issue #172).
+	RepoLabels(ctx context.Context, repo string) ([]string, error)
 }
 
 // BranchProtection is what `lead doctor` / `lead dispatch` need to know

@@ -1,6 +1,8 @@
 package projinit
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -367,5 +369,125 @@ func TestLegacyInitBlockMigratesToEnable(t *testing.T) {
 	}
 	if !rep2.Complete {
 		t.Errorf("--check on legacy block = incomplete, want complete (lines: %v)", rep2.Lines)
+	}
+}
+
+// stubLabelClient is a minimal projinit.LabelLister for label-check tests:
+// it records the requested repo and returns canned labels or an error.
+type stubLabelClient struct {
+	labels []string
+	err    error
+	repos  []string
+}
+
+func (s *stubLabelClient) RepoLabels(_ context.Context, repo string) ([]string, error) {
+	s.repos = append(s.repos, repo)
+	return s.labels, s.err
+}
+
+// installLocal writes a fully-configured local tree so that only the
+// label check can make --check incomplete.
+func installLocal(t *testing.T, root string) {
+	t.Helper()
+	if _, err := Run(Options{Root: root, Write: true, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents}); err != nil {
+		t.Fatalf("install local: %v", err)
+	}
+}
+
+func joinLines(rep Report) string { return strings.Join(rep.Lines, "\n") }
+
+func TestRunCheckFailsWhenLabelsMissing(t *testing.T) {
+	root := t.TempDir()
+	installLocal(t, root)
+	gh := &stubLabelClient{labels: []string{"needs-review", "ready"}}
+	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if rep.Complete {
+		t.Errorf("check with a missing label = complete, want incomplete (lines: %v)", rep.Lines)
+	}
+	if got := joinLines(rep); !strings.Contains(got, "label/blocked: missing") {
+		t.Errorf("check missing label/blocked report line:\n%s", got)
+	}
+	if got := joinLines(rep); !strings.Contains(got, "label/needs-review: ok") {
+		t.Errorf("check missing label/needs-review ok line:\n%s", got)
+	}
+}
+
+func TestRunCheckPassesWhenLabelsPresent(t *testing.T) {
+	root := t.TempDir()
+	installLocal(t, root)
+	gh := &stubLabelClient{labels: []string{"needs-review", "ready", "blocked", "extra"}}
+	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if !rep.Complete {
+		t.Errorf("check with all labels = incomplete, want complete (lines: %v)", rep.Lines)
+	}
+	for _, name := range RequiredIssueLabels {
+		if got := joinLines(rep); !strings.Contains(got, "label/"+name+": ok") {
+			t.Errorf("check missing label/%s ok line:\n%s", name, got)
+		}
+	}
+	if len(gh.repos) != 1 || gh.repos[0] != "o/r" {
+		t.Errorf("RepoLabels repos = %v, want [o/r]", gh.repos)
+	}
+}
+
+func TestRunCheckSkipsLabelsWithoutRepo(t *testing.T) {
+	root := t.TempDir()
+	installLocal(t, root)
+	gh := &stubLabelClient{labels: []string{}}
+	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: ""})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if !rep.Complete {
+		t.Errorf("check without repo = incomplete, want complete (local checks must not be blocked): %v", rep.Lines)
+	}
+	if got := joinLines(rep); !strings.Contains(got, "skip") {
+		t.Errorf("check without repo missing skip notice:\n%s", got)
+	}
+	if len(gh.repos) != 0 {
+		t.Errorf("RepoLabels called without repo: %v", gh.repos)
+	}
+}
+
+func TestRunCheckSkipsLabelsOnGhError(t *testing.T) {
+	root := t.TempDir()
+	installLocal(t, root)
+	gh := &stubLabelClient{err: errors.New("401 Unauthorized")}
+	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if !rep.Complete {
+		t.Errorf("check with gh failure = incomplete, want complete (warning only): %v", rep.Lines)
+	}
+	if got := joinLines(rep); !strings.Contains(got, "skip") {
+		t.Errorf("check with gh failure missing skip warning:\n%s", got)
+	}
+}
+
+func TestRunDryRunReportsLabels(t *testing.T) {
+	root := t.TempDir()
+	gh := &stubLabelClient{labels: []string{"ready"}}
+	rep, err := Run(Options{Root: root, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	if err != nil {
+		t.Fatalf("dry-run: %v", err)
+	}
+	if rep.Changed {
+		t.Error("dry-run Changed = true, want no writes")
+	}
+	got := joinLines(rep)
+	for _, want := range []string{"label/needs-review: missing", "label/ready: ok", "label/blocked: missing"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("dry-run missing %q:\n%s", want, got)
+		}
+	}
+	if entries, _ := os.ReadDir(root); len(entries) != 0 {
+		t.Errorf("dry-run created files: %v", entries)
 	}
 }

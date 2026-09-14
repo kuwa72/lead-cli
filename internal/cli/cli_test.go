@@ -254,3 +254,84 @@ func TestCompletionGeneratesScripts(t *testing.T) {
 		t.Error("lead completion csh = nil error, want unsupported-shell failure")
 	}
 }
+
+// enableFixture builds Deps whose repository root is a temp dir and whose
+// origin resolves to origin ("" = no remote).
+func enableFixture(t *testing.T, gh *testutil.FakeGhClient, origin string) Deps {
+	t.Helper()
+	root := t.TempDir()
+	return Deps{
+		Gh:      gh,
+		Git:     &fakeGitRunner{root: root, origin: origin},
+		WorkDir: root,
+	}
+}
+
+func runEnableCmd(t *testing.T, deps Deps, args ...string) (string, error) {
+	t.Helper()
+	root := NewRootCmdWithDeps("v0.0.0-test", "abc1234", "2026-09-07", deps)
+	var out strings.Builder
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs(append([]string{"enable"}, args...))
+	err := root.Execute()
+	return out.String(), err
+}
+
+func TestEnableCheckFailsWhenLabelsMissing(t *testing.T) {
+	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review"}}
+	deps := enableFixture(t, gh, "https://github.com/o/r.git")
+	if out, err := runEnableCmd(t, deps, "--write", "--yes"); err != nil {
+		t.Fatalf("enable --write: %v\n%s", err, out)
+	}
+	out, err := runEnableCmd(t, deps, "--check")
+	if err == nil {
+		t.Fatalf("enable --check with missing labels = nil error, want non-zero exit\n%s", out)
+	}
+	for _, want := range []string{"label/needs-review: ok", "label/ready: missing", "label/blocked: missing"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("enable --check missing %q, got:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(err.Error(), "labels") {
+		t.Errorf("enable --check error = %q, want label guidance", err)
+	}
+	if len(gh.RepoLabelsCalls) == 0 || gh.RepoLabelsCalls[0] != "o/r" {
+		t.Errorf("RepoLabelsCalls = %v, want [o/r ...]", gh.RepoLabelsCalls)
+	}
+}
+
+func TestEnableCheckPassesWhenLabelsPresent(t *testing.T) {
+	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review", "ready", "blocked"}}
+	deps := enableFixture(t, gh, "https://github.com/o/r.git")
+	if out, err := runEnableCmd(t, deps, "--write", "--yes"); err != nil {
+		t.Fatalf("enable --write: %v\n%s", err, out)
+	}
+	out, err := runEnableCmd(t, deps, "--check")
+	if err != nil {
+		t.Fatalf("enable --check with all labels: %v\n%s", err, out)
+	}
+	for _, want := range []string{"label/needs-review: ok", "label/ready: ok", "label/blocked: ok"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("enable --check missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestEnableCheckSkipsLabelsWithoutRemote(t *testing.T) {
+	gh := &testutil.FakeGhClient{}
+	deps := enableFixture(t, gh, "")
+	if out, err := runEnableCmd(t, deps, "--write", "--yes"); err != nil {
+		t.Fatalf("enable --write: %v\n%s", err, out)
+	}
+	out, err := runEnableCmd(t, deps, "--check")
+	if err != nil {
+		t.Fatalf("enable --check without remote: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "skip") {
+		t.Errorf("enable --check without remote missing skip notice, got:\n%s", out)
+	}
+	if len(gh.RepoLabelsCalls) != 0 {
+		t.Errorf("RepoLabelsCalls = %v, want no label listing without a remote", gh.RepoLabelsCalls)
+	}
+}
