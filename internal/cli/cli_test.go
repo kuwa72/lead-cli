@@ -582,25 +582,22 @@ func TestEnableCheckPassesWhenLabelsPresent(t *testing.T) {
 	}
 }
 
-func TestEnableCheckFailsWhenProtectionMissing(t *testing.T) {
-	// Issue #197: labels present but no branch protection: --check must
-	// fail with protection guidance since dispatch cannot start.
+func TestEnableCheckPassesWithoutProtection(t *testing.T) {
+	// Issue #200: labels present but no branch protection: --check must
+	// pass with protection guidance since missing protection only warns.
 	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review", "ready", "blocked"}}
 	deps := enableFixture(t, gh, "https://github.com/o/r.git")
 	if out, err := runEnableCmd(t, deps, "--yes"); err != nil {
 		t.Fatalf("enable --yes: %v\n%s", err, out)
 	}
 	out, err := runEnableCmd(t, deps, "--check")
-	if err == nil {
-		t.Fatalf("enable --check without protection = nil error, want non-zero exit\n%s", out)
+	if err != nil {
+		t.Fatalf("enable --check without protection = %v, want nil\n%s", err, out)
 	}
 	for _, want := range []string{"protection/branch-protection: missing", "protection/required-checks: missing", "Next:"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("enable --check missing %q, got:\n%s", want, out)
 		}
-	}
-	if !strings.Contains(err.Error(), "protection") {
-		t.Errorf("enable --check error = %q, want protection guidance", err)
 	}
 }
 

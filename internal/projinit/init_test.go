@@ -71,7 +71,7 @@ func TestProtectionReport_Missing(t *testing.T) {
 	for _, want := range []string{
 		"protection/branch-protection: missing",
 		"protection/required-checks: missing",
-		"dispatch will not start",
+		"recommended for safe unattended dispatch",
 		"Next:",
 	} {
 		if !strings.Contains(joined, want) {

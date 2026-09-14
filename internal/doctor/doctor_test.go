@@ -116,25 +116,25 @@ func TestRun_OnlineProbesAPI(t *testing.T) {
 	}
 }
 
-// Issue #67: repository-side gates are required checks when a GitHub
-// origin is known.
-func TestRun_UnprotectedDefaultBranchFailsWithGuidance(t *testing.T) {
+// Issue #67/#200: repository-side gates are optional warnings when a
+// GitHub origin is known (missing protection no longer blocks dispatch).
+func TestRun_UnprotectedDefaultBranchWarnsWithGuidance(t *testing.T) {
 	d := baseDeps()
 	fake := &testutil.FakeGhClient{DefaultBranch: "trunk"} // Protection zero: 404 + no rulesets
 	d.Gh = fake
 	d.Repo = "o/r"
 
 	rep := Run(d)
-	if rep.OK() {
-		t.Error("doctor on unprotected repo = OK, want required failure")
+	if !rep.OK() {
+		t.Errorf("doctor on unprotected repo = fail, want OK with optional warnings; checks: %+v", rep.Checks)
 	}
 	prot := findCheck(rep, CheckBranchProtection)
-	if prot.OK || !prot.Required || !strings.Contains(prot.Detail, "trunk") || !strings.Contains(prot.Detail, "ruleset") {
-		t.Errorf("protection check = %+v, want required failure naming the branch with fix guidance", prot)
+	if prot.OK || prot.Required || !strings.Contains(prot.Detail, "trunk") || !strings.Contains(prot.Detail, "ruleset") {
+		t.Errorf("protection check = %+v, want optional warning naming the branch with fix guidance", prot)
 	}
 	req := findCheck(rep, CheckRequiredChecks)
-	if req.OK || !req.Required || !strings.Contains(req.Detail, "required") {
-		t.Errorf("required-checks check = %+v, want required failure with guidance", req)
+	if req.OK || req.Required || !strings.Contains(req.Detail, "required") {
+		t.Errorf("required-checks check = %+v, want optional warning with guidance", req)
 	}
 	auto := findCheck(rep, CheckAutoMerge)
 	if auto.OK || auto.Required || !strings.Contains(auto.Detail, "--merge") {
@@ -191,27 +191,27 @@ func TestRun_ProtectionSkippedWithoutRepoOrOffline(t *testing.T) {
 	}
 }
 
-func TestRun_ProtectionAPIErrorIsRequiredFailure(t *testing.T) {
+func TestRun_ProtectionAPIErrorIsOptionalWarning(t *testing.T) {
 	d := baseDeps()
 	d.Gh = &testutil.FakeGhClient{ProtectionErr: errors.New("HTTP 403")}
 	d.Repo = "o/r"
 	rep := Run(d)
-	if c := findCheck(rep, CheckBranchProtection); c.OK || !c.Required || !strings.Contains(c.Detail, "HTTP 403") {
-		t.Errorf("protection on API error = %+v, want required failure surfacing the error", c)
+	if c := findCheck(rep, CheckBranchProtection); c.OK || c.Required || !strings.Contains(c.Detail, "HTTP 403") {
+		t.Errorf("protection on API error = %+v, want optional warning surfacing the error", c)
 	}
 }
 
-func TestProtectionFailMentionsDispatch(t *testing.T) {
-	// Issue #197: a failing protection row must connect the cause to the
-	// visible symptom (approve does nothing because dispatch stays off).
+func TestProtectionGapMentionsDispatch(t *testing.T) {
+	// Issue #197/#200: a protection gap must connect the cause to safe
+	// unattended dispatch as an optional warning.
 	d := baseDeps()
 	d.Gh = &testutil.FakeGhClient{}
 	d.Repo = "o/r"
 	rep := Run(d)
 	for _, name := range []string{CheckBranchProtection, CheckRequiredChecks} {
 		c := findCheck(rep, name)
-		if c.OK || !c.Required || !strings.Contains(c.Detail, "dispatch will not start") {
-			t.Errorf("%s = %+v, want required failure mentioning dispatch", name, c)
+		if c.OK || c.Required || !strings.Contains(c.Detail, "dispatch") {
+			t.Errorf("%s = %+v, want optional warning mentioning dispatch", name, c)
 		}
 	}
 }

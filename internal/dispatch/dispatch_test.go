@@ -419,19 +419,20 @@ func protectedFake(gh *testutil.FakeGhClient) {
 	gh.AutoMergeAllowed = true
 }
 
-func TestPreflight_RefusesUnprotectedRepoWithGuidance(t *testing.T) {
+func TestPreflight_UnprotectedRepoWarnsAndProceeds(t *testing.T) {
+	// Issue #200: missing protection is a warning, not a refusal, so
+	// repositories without admin setup can still dispatch.
 	d, gh, _, _ := newFixture(t)
 	gh.Protection = ports.BranchProtection{} // classic 404 and no rulesets
 	var out strings.Builder
 	d.Out = &out
 
-	err := d.Preflight(context.Background())
-	if err == nil {
-		t.Fatal("Preflight on unprotected repo = nil, want refusal")
+	if err := d.Preflight(context.Background()); err != nil {
+		t.Fatalf("Preflight on unprotected repo = %v, want nil", err)
 	}
-	for _, want := range []string{"main", "not protected", "required status checks", "--skip-protection-check", "lead doctor"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("refusal %q lacks %q", err, want)
+	for _, want := range []string{"main", "not protected", "required status checks", "WARNING", "lead doctor"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("warning %q lacks %q", out.String(), want)
 		}
 	}
 	if !reflect.DeepEqual(gh.ProtectionCalls, []string{"o/r@main"}) {
@@ -439,25 +440,16 @@ func TestPreflight_RefusesUnprotectedRepoWithGuidance(t *testing.T) {
 	}
 }
 
-func TestPreflight_MissingRequiredChecksAloneRefuses(t *testing.T) {
+func TestPreflight_MissingRequiredChecksAloneWarns(t *testing.T) {
 	d, gh, _, _ := newFixture(t)
 	gh.Protection = ports.BranchProtection{Protected: true, RequiresPR: true}
-	err := d.Preflight(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "required status checks") || strings.Contains(err.Error(), "not protected") {
-		t.Errorf("err = %v, want refusal naming only the missing required checks", err)
-	}
-}
-
-func TestPreflight_SkipFlagWarnsAndProceeds(t *testing.T) {
-	d, _, _, _ := newFixture(t)
-	d.Opts.SkipProtectionCheck = true
 	var out strings.Builder
 	d.Out = &out
 	if err := d.Preflight(context.Background()); err != nil {
-		t.Fatalf("Preflight with skip = %v, want nil", err)
+		t.Fatalf("Preflight = %v, want nil", err)
 	}
-	if !strings.Contains(out.String(), "WARNING") || !strings.Contains(out.String(), "not protected") {
-		t.Errorf("skip output = %q, want a warning naming the gap", out.String())
+	if got := out.String(); !strings.Contains(got, "required status checks") || strings.Contains(got, "not protected") {
+		t.Errorf("warning = %q, want only the missing required checks named", got)
 	}
 }
 

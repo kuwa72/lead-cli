@@ -9,8 +9,8 @@ import (
 )
 
 // Names of the repository-side safety checks (issue #67, RFC inbox §9).
-// `lead doctor` renders them; `lead dispatch` refuses to start while a
-// required one fails.
+// `lead doctor` renders them as optional warnings; since issue #200 a gap
+// no longer blocks dispatch, it only makes unattended merges less safe.
 const (
 	CheckBranchProtection = "branch protection"
 	CheckRequiredChecks   = "required checks"
@@ -48,9 +48,10 @@ func InspectProtection(ctx context.Context, gh ports.GhClient, repo string) (Pro
 	return p, nil
 }
 
-// Checks renders the inspection as doctor rows. Protection and required
-// checks are required (unattended merges are unsafe without them);
-// auto-merge is optional (`lead finish` falls back to a manual --merge).
+// Checks renders the inspection as doctor rows. All three are optional:
+// gaps warn (unattended merges are safer with them) but never fail doctor
+// since issue #200. auto-merge off only changes `lead finish` behavior
+// (it falls back to a manual --merge).
 func (p Protection) Checks() []Check {
 	b := p.DefaultBranch
 	var out []Check
@@ -59,18 +60,18 @@ func (p Protection) Checks() []Check {
 		if p.Branch.RequiresPR {
 			how += ", PR required"
 		}
-		out = append(out, Check{Name: CheckBranchProtection, Required: true, OK: true,
+		out = append(out, Check{Name: CheckBranchProtection, OK: true,
 			Detail: fmt.Sprintf("%s is %s", b, how)})
 	} else {
-		out = append(out, Check{Name: CheckBranchProtection, Required: true,
-			Detail: fmt.Sprintf("%s is not protected; add a branch protection rule or ruleset requiring a pull request (Settings > Branches / Rules); dispatch will not start unattended agents until fixed", b)})
+		out = append(out, Check{Name: CheckBranchProtection,
+			Detail: fmt.Sprintf("%s is not protected; add a branch protection rule or ruleset requiring a pull request (Settings > Branches / Rules); recommended for safe unattended dispatch", b)})
 	}
 	if n := len(p.Branch.RequiredChecks); n > 0 {
-		out = append(out, Check{Name: CheckRequiredChecks, Required: true, OK: true,
+		out = append(out, Check{Name: CheckRequiredChecks, OK: true,
 			Detail: fmt.Sprintf("%s requires: %s", b, strings.Join(p.Branch.RequiredChecks, ", "))})
 	} else {
-		out = append(out, Check{Name: CheckRequiredChecks, Required: true,
-			Detail: fmt.Sprintf("%s has no required status checks; mark the CI job as required so a failing build cannot be merged; dispatch will not start unattended agents until fixed", b)})
+		out = append(out, Check{Name: CheckRequiredChecks,
+			Detail: fmt.Sprintf("%s has no required status checks; mark the CI job as required so a failing build cannot be merged; recommended for safe unattended dispatch", b)})
 	}
 	if p.AutoMerge {
 		out = append(out, Check{Name: CheckAutoMerge, OK: true, Detail: "allow_auto_merge enabled"})
@@ -81,12 +82,18 @@ func (p Protection) Checks() []Check {
 	return out
 }
 
-// Missing returns the detail lines of the failing required checks
-// (empty when the repository is safe for unattended merges).
+// Missing returns the detail lines of the failing branch-protection and
+// required-checks rows (empty when the repository is safe for unattended
+// merges). Used only for the dispatch warning (issue #200); the rows
+// themselves are optional in doctor output.
 func (p Protection) Missing() []string {
 	var m []string
 	for _, c := range p.Checks() {
-		if c.Required && !c.OK {
+		if c.OK {
+			continue
+		}
+		switch c.Name {
+		case CheckBranchProtection, CheckRequiredChecks:
 			m = append(m, c.Detail)
 		}
 	}
@@ -114,8 +121,8 @@ func protectionChecks(ctx context.Context, d Deps) []Check {
 	p, err := InspectProtection(ctx, d.Gh, d.Repo)
 	if err != nil {
 		return []Check{
-			{Name: CheckBranchProtection, Required: true, Detail: fmt.Sprintf("unknown: %v", err)},
-			{Name: CheckRequiredChecks, Required: true, Detail: fmt.Sprintf("unknown: %v", err)},
+			{Name: CheckBranchProtection, Detail: fmt.Sprintf("unknown: %v", err)},
+			{Name: CheckRequiredChecks, Detail: fmt.Sprintf("unknown: %v", err)},
 			{Name: CheckAutoMerge, Detail: fmt.Sprintf("unknown: %v", err)},
 		}
 	}

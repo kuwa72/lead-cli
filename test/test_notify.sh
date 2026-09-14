@@ -148,6 +148,16 @@ if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
 fi
 if [ "$1" = "issue" ] && [ "$2" = "view" ]; then printf '{"number":7,"title":"w","body":"b","state":"OPEN"}'; exit 0; fi
 if { [ "$1" = "issue" ] && [ "$2" = "edit" ]; } || { [ "$1" = "issue" ] && [ "$2" = "comment" ]; }; then exit 0; fi
+if [ "$1" = "api" ]; then
+  case "$*" in
+    *"--jq .default_branch"*) printf 'main' ;;
+    *"--jq .allow_auto_merge"*) printf 'true' ;;
+    *"branches/main/protection"*) echo "gh: Branch not protected (HTTP 404)" >&2; exit 1 ;;
+    *"rules/branches/main"*) printf '[]' ;;
+    *) echo "unexpected gh api: $@" >&2; exit 3 ;;
+  esac
+  exit 0
+fi
 echo "unexpected gh call: $@" >&2
 exit 3
 EOF
@@ -165,6 +175,7 @@ setup_drepo() {
   git init --quiet "$dproj" || fail "git init failed"
   git -C "$dproj" config user.email "test@example.com"
   git -C "$dproj" config user.name "Test"
+  git -C "$dproj" remote add origin "https://github.com/o/r.git"
   git -C "$dproj" commit -q --allow-empty -m init || fail "fixture commit failed"
   export LEAD_STATE_FILE="$tmp/dstate-$1/wf.json"
 }
@@ -173,7 +184,7 @@ setup_drepo() {
 setup_drepo 1
 : > "$notify_log"
 for _ in 1 2 3; do
-  (cd "$dproj" && "$tmp/lead" dispatch --once --skip-protection-check --agent claude >/dev/null 2>&1) || fail "dispatch run failed"
+  (cd "$dproj" && "$tmp/lead" dispatch --once --agent claude >/dev/null 2>&1) || fail "dispatch run failed"
 done
 grep -q '.*#7.*blocked' "$notify_log" || fail "blocked notification missing: $(cat "$notify_log")"
 grep -q 'all done' "$notify_log" || fail "all-done notification missing: $(cat "$notify_log")"
@@ -183,7 +194,7 @@ setup_drepo 2
 : > "$notify_log"
 export LEAD_NOTIFY=0
 for _ in 1 2 3; do
-  (cd "$dproj" && "$tmp/lead" dispatch --once --skip-protection-check --agent claude >/dev/null 2>&1) || fail "dispatch run failed"
+  (cd "$dproj" && "$tmp/lead" dispatch --once --agent claude >/dev/null 2>&1) || fail "dispatch run failed"
 done
 [ ! -s "$notify_log" ] || fail "notifications fired with LEAD_NOTIFY=0: $(cat "$notify_log")"
 
