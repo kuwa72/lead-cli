@@ -758,6 +758,9 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 
 	if err := d.Preflight(dctx); err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), err)
+		// Keep the warning visible inside the TUI: stderr scrolls away
+		// under the alternate screen, but the log pane stays (issue #196).
+		opts.StartupNotice = err.Error()
 	} else {
 		go func() {
 			if err := d.Loop(dctx, 30*time.Second); err != nil {

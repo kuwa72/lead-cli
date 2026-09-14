@@ -78,6 +78,11 @@ type Options struct {
 	OnSettingsChange func(cfg Config)
 	// Notifier sends desktop/terminal notifications on milestone events (issue #145).
 	Notifier notify.Notifier
+	// StartupNotice is recorded to the event log at startup so warnings
+	// that would otherwise only reach stderr (e.g. a dispatch Preflight
+	// failure) stay visible in the always-on log pane (issue #196).
+	// Multi-line text is split into one entry per line.
+	StartupNotice string
 }
 
 type mode int
@@ -282,6 +287,13 @@ func New(opts Options) Model {
 		m.addLog(fmt.Sprintf("Started lead inbox for %s", opts.Repo))
 	} else {
 		m.addLog("Started lead inbox")
+	}
+	if opts.StartupNotice != "" {
+		for _, line := range strings.Split(opts.StartupNotice, "\n") {
+			if strings.TrimSpace(line) != "" {
+				m.addLog(strings.TrimSpace(line))
+			}
+		}
 	}
 	m.focusFirstItem()
 	return m
@@ -1588,7 +1600,7 @@ func (m Model) viewList() string {
 	w := m.screenWidth()
 	footerStr := m.footer()
 	footerLines := strings.Count(footerStr, "\n") + 1
-	bodyH := m.bodyHeightFor(footerLines)
+	bodyH := m.bodyHeightFor(footerLines + logPaneHeight)
 	rows := m.visible()
 
 	b.WriteString(m.headerLine(w) + "\n")
@@ -1637,6 +1649,8 @@ func (m Model) viewList() string {
 		}
 	}
 
+	b.WriteString(m.ruleW(w) + "\n")
+	b.WriteString(m.viewLogPane(w))
 	b.WriteString(m.ruleW(w) + "\n")
 	if m.mode == modeInput {
 		b.WriteString(m.renderInputLine() + "\n")
@@ -1806,7 +1820,7 @@ func (m Model) viewHelp() string {
 		"",
 		"Global",
 		"  [s] New issue (direct create, or !one-liner for AI spec)",
-		"  [L] Event log history",
+		"  [L] Event log history (recent messages also show in the log pane below the list)",
 		"  [,] Settings (configure agent, mode, issue creation)",
 		"  [m] Toggle agent mode (batch/dangerous/interactive)",
 		"  [g] Toggle agent (agy/claude/codex/devin/opencode/gemini)",

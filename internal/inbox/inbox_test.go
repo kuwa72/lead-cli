@@ -916,6 +916,48 @@ func TestRestoreSelection_FollowsApprovedIssueToBacklog(t *testing.T) {
 	}
 }
 
+func TestLogPane_AlwaysVisibleWithLatestEntries(t *testing.T) {
+	// Issue #196: the list view always shows a log pane with the latest entries.
+	m := Model{width: 120}
+	for i := 1; i <= logPaneEntries+2; i++ {
+		m.addLog(strings.Repeat("x", i))
+	}
+	v := m.View()
+	if !strings.Contains(v, "Log") {
+		t.Fatalf("log pane header missing:\n%s", v)
+	}
+	for i := 3; i <= logPaneEntries+2; i++ {
+		if !strings.Contains(v, strings.Repeat("x", i)) {
+			t.Errorf("latest entry %q missing from pane:\n%s", strings.Repeat("x", i), v)
+		}
+	}
+	// The oldest entries ("x" and "xx" lines) must have fallen off: a line
+	// ending "] x " (single x plus padding) belongs only to the oldest entry.
+	if strings.Contains(v, "] x ") || strings.Contains(v, "] xx ") {
+		t.Errorf("entries beyond the last %d must fall off the pane:\n%s", logPaneEntries, v)
+	}
+}
+
+func TestLogPane_ReservesBodyHeight(t *testing.T) {
+	m := Model{height: 40}
+	if got, want := m.bodyHeightFor(1+logPaneHeight), m.bodyHeightFor(1)-logPaneHeight; got != want {
+		t.Errorf("bodyHeightFor with pane = %d, want %d (pane must shrink the body)", got, want)
+	}
+}
+
+func TestNew_LogsStartupNotice(t *testing.T) {
+	m := New(Options{Headless: true, StartupNotice: "dispatch: refusing\n\n  - missing checks"})
+	found := 0
+	for _, e := range m.Logs() {
+		if strings.Contains(e, "dispatch: refusing") || strings.Contains(e, "missing checks") {
+			found++
+		}
+	}
+	if found != 2 {
+		t.Errorf("startup notice lines in log = %d, want 2 (blank lines skipped): %v", found, m.Logs())
+	}
+}
+
 func TestHeader_EnterTogglesSection(t *testing.T) {
 	_, _, m := newFixture(t)
 	m.cursor = 0 // Needs review header
