@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# issue #68/#79/#169: `lead init` (hidden alias of `lead enable`)
+# issue #68/#79/#169/#176: `lead init` (hidden alias of `lead enable`)
 # project-oriented agent config behavior tests.
-# Verifies dry-run, --write, idempotency, --check, and --uninstall
+# Verifies --dry-run, default apply, idempotency, --check, and --uninstall
 # using a temporary git project (no source-grep assertions).
 set -euo pipefail
 
@@ -25,7 +25,7 @@ CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 out="$("$tmp/lead" init --help)" || fail "init --help exited non-zero"
 case "$out" in *"lead init"*) ;; *) fail "init --help missing usage header";; esac
 
-# --- 2. dry-run makes no changes ---
+# --- 2. --dry-run makes no changes ---
 proj="$tmp/project"
 mkdir -p "$proj"
 cd "$proj"
@@ -33,12 +33,12 @@ git init >/dev/null || fail "git init failed"
 git config user.email "test@example.com"
 git config user.name "Test"
 
-out="$("$tmp/lead" init)" || fail "init dry-run failed"
+out="$("$tmp/lead" init --dry-run)" || fail "init --dry-run failed"
 case "$out" in *"dry run"*) ;; *) fail "dry-run missing dry-run notice";; esac
 [ ! -e .claude ] && [ ! -e .devin ] && [ ! -e AGENTS.md ] || fail "dry-run wrote files"
 
-# --- 3. --write --yes installs skill files and AGENTS.md block ---
-"$tmp/lead" init --write --yes >/dev/null || fail "init --write failed"
+# --- 3. default apply (--yes) installs skill files and AGENTS.md block ---
+"$tmp/lead" init --yes >/dev/null || fail "init apply failed"
 [ -f .claude/skills/lead-flow/SKILL.md ] || fail "claude skill file missing"
 [ -f .devin/skills/lead-flow/SKILL.md ] || fail "devin skill file missing"
 [ -f AGENTS.md ] || fail "AGENTS.md missing"

@@ -63,10 +63,10 @@ bin/install-local
 # or from a release
 curl -fsSL https://raw.githubusercontent.com/kuwa72/lead-cli/main/install.sh | sh
 lead setup --write          # user environment ($HOME only)
-lead enable --write         # this repository (skill + AGENTS.md block)
+lead enable                 # this repository (skill + AGENTS.md block)
 ```
 
-`lead setup --write` sets up your user environment (shell completion and a keybinding, `$HOME` only); `lead enable --write` enables this repository (the `AGENTS.md` rule block and lead-flow skill).
+`lead setup --write` sets up your user environment (shell completion and a keybinding, `$HOME` only); `lead enable` enables this repository (the `AGENTS.md` rule block and lead-flow skill).
 
 ## Conventions
 

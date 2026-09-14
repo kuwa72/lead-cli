@@ -213,7 +213,7 @@ func projectCheck(d Deps) (Check, bool) {
 	b, err := os.ReadFile(path)
 	if err != nil || !projinit.HasBlock(string(b)) {
 		return Check{Name: "project",
-			Detail: "this repository is not enabled (no lead-flow block in AGENTS.md); run `lead enable --write`"}, true
+			Detail: "this repository is not enabled (no lead-flow block in AGENTS.md); run `lead enable`"}, true
 	}
 	return Check{Name: "project", OK: true, Detail: "enabled (AGENTS.md carries the lead-flow block)"}, true
 }

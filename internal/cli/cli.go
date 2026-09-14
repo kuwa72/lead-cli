@@ -460,7 +460,8 @@ atomic swap). Brew-managed installs print ` + "`brew upgrade` guidance instead."
 in this repository can run the lead issue-driven TDD workflow. Operates
 only on this repository and never touches $HOME; for user-environment
 setup (shell completions, keybinding) see ` + "`lead setup`" + `.
-Dry-run by default; --write applies after approval.`
+Applies changes after approval (use --yes non-interactively); --dry-run
+previews without changing anything, --check verifies only.`
 		if hidden {
 			long += "\n\nAlias of `lead enable` (kept for compatibility; prefer `enable`)."
 		}
@@ -473,14 +474,26 @@ Dry-run by default; --write applies after approval.`
 				return runEnable(cmd, deps)
 			},
 		}
-		c.Flags().Bool("write", false, "write changes after approval")
+		c.Flags().Bool("write", false, "write changes (default; kept for compatibility)")
+		c.Flags().Bool("dry-run", false, "preview changes without applying them")
 		c.Flags().Bool("check", false, "verify installation only (no changes)")
-		c.Flags().Bool("uninstall", false, "remove the managed skill files and AGENTS.md block")
+		c.Flags().Bool("uninstall", false, "remove the managed skill files and AGENTS.md block (see also `lead disable`)")
 		c.Flags().Bool("yes", false, "assume yes to approval prompts")
 		return c
 	}
 	enableCmd := newEnableCmd("enable", false)
 	initCmd := newEnableCmd("init", true)
+
+	disableCmd := &cobra.Command{
+		Use:   "disable",
+		Short: "Disable this repository for the lead workflow (remove lead-flow skill)",
+		Long: `Remove the /lead-flow skill files and the AGENTS.md managed block
+installed by ` + "`lead enable`" + `. Operates only on this repository
+and never touches $HOME. Repository issue labels are kept.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDisable(cmd, deps)
+		},
+	}
 
 	statusCmd := &cobra.Command{
 		Use:   "status",
@@ -589,7 +602,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, resumeCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, initCmd, lgtmCmd, unlgtmCmd)
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, resumeCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, initCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	return root
 }
@@ -1216,7 +1229,7 @@ func runSetup(cmd *cobra.Command, deps Deps, info VersionInfo) error {
 			}
 		}
 		fmt.Fprintf(out, "doctor: %d/%d required checks pass\n", ok, total)
-		fmt.Fprintln(out, "Next: enable this repository with `lead enable --write`")
+		fmt.Fprintln(out, "Next: enable this repository with `lead enable`")
 	}
 	return nil
 }
@@ -1463,10 +1476,12 @@ func runClean(cmd *cobra.Command, deps Deps, raw string) error {
 // runEnable implements `lead enable` (issue #169; `lead init` is a hidden
 // alias): repository-oriented agent configuration (lead-flow skill +
 // AGENTS.md managed block). Operates only on the repository, never on
-// $HOME. Dry-run by default; --write applies after approval.
+// $HOME. Applies by default after approval; --dry-run previews,
+// --check verifies, --uninstall removes (see also `lead disable`).
 func runEnable(cmd *cobra.Command, deps Deps) error {
 	flags := cmd.Flags()
-	write, _ := flags.GetBool("write")
+	write, _ := flags.GetBool("write") // compat: applying is the default
+	dryRun, _ := flags.GetBool("dry-run")
 	check, _ := flags.GetBool("check")
 	uninstall, _ := flags.GetBool("uninstall")
 	yes, _ := flags.GetBool("yes")
@@ -1483,6 +1498,7 @@ func runEnable(cmd *cobra.Command, deps Deps) error {
 	rep, err := projinit.Run(projinit.Options{
 		Root:      repoRoot,
 		Write:     write,
+		DryRun:    dryRun,
 		Check:     check,
 		Uninstall: uninstall,
 		Yes:       yes,
@@ -1503,8 +1519,35 @@ func runEnable(cmd *cobra.Command, deps Deps) error {
 		}
 		return errors.New("lead-flow not installed")
 	}
-	if write && rep.Changed {
+	if rep.Changed {
 		fmt.Fprintln(out, "Next: run `lead doctor --offline` to verify your environment")
+	}
+	return nil
+}
+
+// runDisable implements `lead disable` (issue #176): remove the managed
+// skill files and the AGENTS.md block installed by `lead enable`.
+// Repository issue labels are kept.
+func runDisable(cmd *cobra.Command, deps Deps) error {
+	cwd, err := deps.workDir()
+	if err != nil {
+		return fmt.Errorf("disable: %w", err)
+	}
+	repoRoot, err := deps.gitRunner().RepoRoot(cwd)
+	if err != nil {
+		return fmt.Errorf("disable: project root: %w", err)
+	}
+
+	rep, err := projinit.Run(projinit.Options{
+		Root:      repoRoot,
+		Uninstall: true,
+	})
+	if err != nil {
+		return err
+	}
+	out := cmd.OutOrStdout()
+	for _, line := range rep.Lines {
+		fmt.Fprintln(out, line)
 	}
 	return nil
 }
