@@ -9,6 +9,7 @@ import (
 
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/projinit"
 	"github.com/kuwa72/lead-cli/internal/testutil"
 	"github.com/kuwa72/lead-cli/internal/workflow"
 )
@@ -76,6 +77,52 @@ func TestRootHelpListsCommands(t *testing.T) {
 func TestInitAliasIsGone(t *testing.T) {
 	if _, _, err := execute(t, "init", "--help"); err == nil {
 		t.Error("lead init --help = nil error, want unknown-command failure")
+	}
+}
+
+func inboxHeadlessDeps(t *testing.T, gh *testutil.FakeGhClient, root, origin string) Deps {
+	t.Helper()
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "q")
+	stateFile := filepath.Join(t.TempDir(), "workflows.json")
+	t.Setenv("LEAD_STATE_FILE", stateFile)
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(stateFile), "inbox-seen.json"), []byte(`{"help_shown":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return Deps{
+		Gh:      gh,
+		Git:     &fakeGitRunner{root: root, origin: origin},
+		WorkDir: root,
+	}
+}
+
+func TestInboxShowsEnableGuidanceWhenNotEnabled(t *testing.T) {
+	gh := &testutil.FakeGhClient{}
+	root := t.TempDir()
+	out, err := runLeadCmd(t, inboxHeadlessDeps(t, gh, root, "https://github.com/o/r.git"))
+	if err != nil {
+		t.Fatalf("headless inbox: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "lead enable") {
+		t.Errorf("inbox in unconfigured repo missing enable guidance, got:\n%s", out)
+	}
+}
+
+func TestInboxHidesEnableGuidanceWhenEnabled(t *testing.T) {
+	gh := &testutil.FakeGhClient{}
+	root := t.TempDir()
+	block := projinit.BlockStart + "\ntest block\n" + projinit.BlockEnd + "\n"
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("# rules\n"+block), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runLeadCmd(t, inboxHeadlessDeps(t, gh, root, "https://github.com/o/r.git"))
+	if err != nil {
+		t.Fatalf("headless inbox: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "lead enable") {
+		t.Errorf("inbox in configured repo shows enable guidance, got:\n%s", out)
 	}
 }
 

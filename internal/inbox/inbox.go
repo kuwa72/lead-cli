@@ -15,6 +15,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/dispatch"
 	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/projinit"
 	"github.com/kuwa72/lead-cli/internal/state"
 )
 
@@ -30,6 +31,10 @@ type Options struct {
 	Editor string
 	// AgentsPath is the repository's AGENTS.md for the r key.
 	AgentsPath string
+	// InRepo reports that the working directory is inside a git
+	// repository. Together with AgentsPath it drives the "not enabled"
+	// project notice (issue #182); false disables the notice.
+	InRepo bool
 	// Repo is "owner/name" for the header (cosmetic).
 	Repo string
 	// Refresh > 0 reloads the sections periodically (interactive mode only).
@@ -92,7 +97,11 @@ type inputState struct {
 
 // Model is the bubbletea model. Construct with New.
 type Model struct {
-	opts              Options
+	opts Options
+	// needsEnable is set once in New: the inbox runs inside a repository
+	// whose AGENTS.md lacks the lead-flow managed block. It drives the
+	// enable guidance line (issue #182).
+	needsEnable       bool
 	sections          []Section
 	cursor            int
 	expanded          bool
@@ -233,12 +242,13 @@ func New(opts Options) Model {
 		opts.Notifier = notify.New(notify.Options{})
 	}
 	m := Model{
-		opts:             opts,
-		sections:         initialSections,
-		status:           initialStatus,
-		loading:          true,
-		previewCache:     make(map[int]previewSnapshot),
-		pendingOps:       make(map[int]bool),
+		opts:                opts,
+		sections:            initialSections,
+		status:              initialStatus,
+		loading:             true,
+		needsEnable:      projectUnconfigured(opts),
+		previewCache:        make(map[int]previewSnapshot),
+		pendingOps:          make(map[int]bool),
 		knownNeedsReview: make(map[int]bool),
 		knownBlocked:     make(map[int]bool),
 		theme:            NewTheme(ModeTerminal, termenv.Ascii, nil),
@@ -1480,6 +1490,32 @@ func (m Model) summaryLine(w int) string {
 	return m.theme.Render(plain, TokenFgSecondary, TokenBgCanvas, false, false, false)
 }
 
+// projectNoticeText is the repository setup guidance (issue #182).
+const projectNoticeText = "repository not enabled — run `lead enable` to set it up"
+
+// projectUnconfigured reports whether the inbox runs inside a repository
+// whose AGENTS.md lacks the lead-flow managed block. Computed once in New
+// so rendering never touches the filesystem.
+func projectUnconfigured(opts Options) bool {
+	if !opts.InRepo || opts.AgentsPath == "" {
+		return false
+	}
+	raw, err := os.ReadFile(opts.AgentsPath)
+	if err != nil {
+		return true
+	}
+	return !projinit.HasBlock(string(raw))
+}
+
+// noticeLine renders the repository setup guidance (issue #182).
+func (m Model) noticeLine(w int) string {
+	plain := padRight(truncTail(projectNoticeText, w), w)
+	if m.theme == nil {
+		return plain
+	}
+	return m.theme.Render(plain, TokenFgSecondary, TokenBgCanvas, false, false, false)
+}
+
 func (m *Model) setStatus(s string) tea.Cmd {
 	m.status = s
 	m.statusGen++
@@ -1533,6 +1569,9 @@ func (m Model) viewList() string {
 
 	b.WriteString(m.headerLine(w) + "\n")
 	b.WriteString(m.summaryLine(w) + "\n")
+	if m.needsEnable {
+		b.WriteString(m.noticeLine(w) + "\n")
+	}
 	b.WriteString(m.ruleW(w) + "\n")
 
 	if m.isSplit() {
