@@ -96,9 +96,12 @@ func TestInboxStopKeyStopsRunningAgent(t *testing.T) {
 	gh := &testutil.FakeGhClient{Issues: map[int]ports.Issue{
 		7: {Number: 7, Title: "work", Body: "body", State: "OPEN"},
 	}}
-	sleeper := exec.Command("sleep", "60")
+	// setsid puts the stand-in agent in its own process group so Stop's
+	// group kill takes the deterministic path (CI flakes observed with
+	// plain sleep inheriting the test's group).
+	sleeper := exec.Command("setsid", "sleep", "60")
 	if err := sleeper.Start(); err != nil {
-		t.Skip("sleep unavailable")
+		t.Skip("setsid/sleep unavailable")
 	}
 	t.Cleanup(func() { sleeper.Process.Kill(); sleeper.Wait() })
 	store := &state.Store{Path: stateFile}
