@@ -559,3 +559,30 @@ func (c *Client) LatestReleaseTag(ctx context.Context, repo string) (string, err
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+
+// RepoLabels runs `gh label list --limit <limit> --json name` (scoped with
+// `--repo <repo>` when repo is non-empty) and returns the label names
+// (issue #172).
+func (c *Client) RepoLabels(ctx context.Context, repo string) ([]string, error) {
+	args := []string{"label", "list",
+		"--limit", strconv.Itoa(c.limit()),
+		"--json", "name"}
+	if repo != "" {
+		args = append(args, "--repo", repo)
+	}
+	out, err := c.run(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	var raw []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return nil, fmt.Errorf("gh label list: decode JSON: %w", err)
+	}
+	names := make([]string, len(raw))
+	for i, r := range raw {
+		names[i] = r.Name
+	}
+	return names, nil
+}

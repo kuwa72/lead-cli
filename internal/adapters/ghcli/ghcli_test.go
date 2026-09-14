@@ -571,3 +571,44 @@ func TestPrDiff_CallsGhWithExpectedArgs(t *testing.T) {
 	}
 }
 
+func TestRepoLabels_ListsNamesScopedToRepo(t *testing.T) {
+	body := "if [ \"$1 $2\" = \"label list\" ]; then printf '[{\"name\":\"needs-review\"},{\"name\":\"ready\"},{\"name\":\"blocked\"}]'\n" +
+		"else echo \"unexpected: $@\" >&2; exit 3\nfi"
+	logPath := testutil.InstallDummy(t, "gh", body)
+
+	got, err := New().RepoLabels(context.Background(), "o/r")
+	if err != nil {
+		t.Fatalf("RepoLabels: %v", err)
+	}
+	want := []string{"needs-review", "ready", "blocked"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("RepoLabels = %q, want %q", got, want)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, wantArg := range []string{"<label>", "<list>", "<--limit>", "<300>", "<--json>", "<name>", "<--repo>", "<o/r>"} {
+		if !strings.Contains(log, wantArg) {
+			t.Errorf("gh args log missing %q, got:\n%s", wantArg, log)
+		}
+	}
+}
+
+func TestRepoLabels_OmitsRepoFlagForCurrentRepo(t *testing.T) {
+	body := "if [ \"$1 $2\" = \"label list\" ]; then printf '[]'\n" +
+		"else echo \"unexpected: $@\" >&2; exit 3\nfi"
+	logPath := testutil.InstallDummy(t, "gh", body)
+
+	if _, err := New().RepoLabels(context.Background(), ""); err != nil {
+		t.Fatalf("RepoLabels: %v", err)
+	}
+	if log := testutil.LogText(t, logPath); strings.Contains(log, "<--repo>") {
+		t.Errorf("gh argv must not scope --repo for the current repo, got:\n%s", log)
+	}
+}
+
+func TestRepoLabels_PropagatesFailure(t *testing.T) {
+	testutil.InstallDummy(t, "gh", `echo "gh: HTTP 401: Bad credentials (HTTP 401)" >&2; exit 1`)
+	if _, err := New().RepoLabels(context.Background(), "o/r"); err == nil {
+		t.Fatal("RepoLabels on failing gh = nil, want error")
+	}
+}
+
