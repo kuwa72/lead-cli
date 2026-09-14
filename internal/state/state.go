@@ -68,6 +68,9 @@ type Workflow struct {
 	Attempts  int       `json:"attempts,omitempty"`
 	PID       int       `json:"pid,omitempty"`
 	LogPath   string    `json:"log_path,omitempty"`
+	// StartedAt marks the latest headless launch (issue #186, stuck
+	// detection). Zero for records predating it: wall-clock checks skip.
+	StartedAt time.Time `json:"started_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
