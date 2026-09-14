@@ -53,7 +53,7 @@ case "$(cat AGENTS.md)" in *"lead-flow"*) ;; *) fail "AGENTS.md missing lead-flo
 [ -z "$(ls -A "$HOME")" ] || fail "enable touched \$HOME: $(ls -A "$HOME")"
 
 # --- 6. idempotency and --check (`--write` stays accepted for compatibility) ---
-out="$("$tmp/lead" enable --write --yes)" || fail "re-enable failed"
+out="$("$tmp/lead" enable --yes)" || fail "re-enable failed"
 case "$out" in *"no changes"*) ;; *) fail "re-enable not idempotent";; esac
 "$tmp/lead" enable --check >/dev/null || fail "enable --check failed after enable"
 
@@ -68,10 +68,6 @@ case "$doc_out" in *"project"*) ;; *) fail "doctor output missing project check"
 case "$(cat AGENTS.md)" in *"lead-flow"*) fail "AGENTS.md block remains after disable";; esac
 "$tmp/lead" enable --check >/dev/null 2>&1 && fail "enable --check after disable succeeded"
 
-# --- 8b. `enable --uninstall` stays accepted for compatibility ---
-"$tmp/lead" enable --yes >/dev/null || fail "re-enable failed"
-"$tmp/lead" enable --uninstall >/dev/null || fail "enable --uninstall compat failed"
-[ ! -e .claude/skills/lead-flow/SKILL.md ] || fail "claude skill remains after uninstall"
 
 # --- 9. doctor guides toward `lead enable` when the repo is not enabled ---
 doc_out="$("$tmp/lead" doctor --offline 2>&1 || true)"

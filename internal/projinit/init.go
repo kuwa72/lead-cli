@@ -76,9 +76,6 @@ var targets = []Target{
 type Options struct {
 	// Root is the project root directory. Required.
 	Root string
-	// Write applies changes. Kept for compatibility: applying is the
-	// default, so this flag is a no-op (see DryRun to preview instead).
-	Write bool
 	// DryRun only previews what applying would change; nothing is
 	// written locally or remotely.
 	DryRun bool
@@ -256,8 +253,7 @@ func runPreview(root string, opts Options, wantSkill, wantAgents []byte) (Report
 }
 
 // runApply installs the skill files, the AGENTS.md block, and the missing
-// required labels after approval (`lead enable`; the `Write` option is
-// accepted for compatibility and behaves identically).
+// required labels after approval (`lead enable`).
 func runApply(root string, opts Options, wantSkill, wantAgents []byte) (Report, error) {
 	var rep Report
 	block := wantBlock(wantAgents)

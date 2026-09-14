@@ -314,9 +314,8 @@ func TestEnableCheckFailsWhenLabelsMissing(t *testing.T) {
 func TestEnableCheckPassesWhenLabelsPresent(t *testing.T) {
 	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review", "ready", "blocked"}}
 	deps := enableFixture(t, gh, "https://github.com/o/r.git")
-	// --write stays accepted for compatibility and applies like the default.
-	if out, err := runEnableCmd(t, deps, "--write", "--yes"); err != nil {
-		t.Fatalf("enable --write: %v\n%s", err, out)
+	if out, err := runEnableCmd(t, deps, "--yes"); err != nil {
+		t.Fatalf("enable --yes: %v\n%s", err, out)
 	}
 	out, err := runEnableCmd(t, deps, "--check")
 	if err != nil {
@@ -347,12 +346,12 @@ func TestEnableCheckSkipsLabelsWithoutRemote(t *testing.T) {
 	}
 }
 
-func TestEnableWriteCreatesMissingLabels(t *testing.T) {
+func TestEnableApplyCreatesMissingLabels(t *testing.T) {
 	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review"}}
 	deps := enableFixture(t, gh, "https://github.com/o/r.git")
 	out, err := runEnableCmd(t, deps, "--yes")
 	if err != nil {
-		t.Fatalf("enable --write: %v\n%s", err, out)
+		t.Fatalf("enable --yes: %v\n%s", err, out)
 	}
 	var got []string
 	for _, l := range gh.CreatedLabels {
@@ -364,7 +363,7 @@ func TestEnableWriteCreatesMissingLabels(t *testing.T) {
 	}
 	for _, wantLine := range []string{"label/ready: created", "label/blocked: created", "label/needs-review: ok"} {
 		if !strings.Contains(out, wantLine) {
-			t.Errorf("enable --write missing %q, got:\n%s", wantLine, out)
+			t.Errorf("enable --yes missing %q, got:\n%s", wantLine, out)
 		}
 	}
 }
@@ -403,5 +402,16 @@ func TestDisableRemovesManagedFiles(t *testing.T) {
 	}
 	if len(gh.CreatedLabels) != 0 {
 		t.Errorf("disable created labels %v, want labels kept", gh.CreatedLabels)
+	}
+}
+
+func TestEnableDroppedCompatFlagsFail(t *testing.T) {
+	gh := &testutil.FakeGhClient{}
+	deps := enableFixture(t, gh, "")
+	if _, err := runEnableCmd(t, deps, "--write", "--yes"); err == nil {
+		t.Error("enable --write = nil error, want unknown-flag failure")
+	}
+	if _, err := runEnableCmd(t, deps, "--uninstall"); err == nil {
+		t.Error("enable --uninstall = nil error, want unknown-flag failure")
 	}
 }

@@ -94,7 +94,7 @@ case "$out" in *"label/ready: ok"*) ;; *) fail "missing label/ready ok line: $ou
 
 # --- 5. re-run is idempotent: no changes, no re-creation ---
 clear_log
-out="$("$tmp/lead" enable --write --yes)" || fail "re-enable failed"
+out="$("$tmp/lead" enable --yes)" || fail "re-enable failed"
 case "$out" in *"no changes"*) ;; *) fail "re-enable not idempotent: $out";; esac
 case "$(cat "$GH_ARG_LOG")" in *"create"*) fail "re-enable recreated labels";; esac
 [ "$(label_count)" = "3" ] || fail "label count changed on re-enable"
