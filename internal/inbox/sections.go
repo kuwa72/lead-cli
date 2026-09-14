@@ -73,6 +73,9 @@ type Item struct {
 	Branch    string
 	PRNumber  int
 	MergedAt  time.Time
+	// StartedAt marks the latest headless launch (elapsed display).
+	// Zero means unknown: elapsed is omitted.
+	StartedAt time.Time
 }
 
 // Section is one heading plus its rows.
@@ -168,7 +171,7 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		if bo.OpenNumbers != nil && !bo.OpenNumbers[w.Issue] {
 			continue
 		}
-		it := Item{Number: w.Issue, Title: strings.TrimSpace(w.Branch), Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Pane: w.Pane, Branch: w.Branch, PRNumber: firstPRNumber(w.PullRequests), Kind: KindRunning}
+		it := Item{Number: w.Issue, Title: strings.TrimSpace(w.Branch), Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Pane: w.Pane, Branch: w.Branch, PRNumber: firstPRNumber(w.PullRequests), StartedAt: w.StartedAt, Kind: KindRunning}
 		running.Items = append(running.Items, it)
 	}
 

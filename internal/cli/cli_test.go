@@ -84,6 +84,65 @@ func TestInitAliasIsGone(t *testing.T) {
 	}
 }
 
+func runningHeadlessDeps(t *testing.T, startedAgo time.Duration, logAge time.Duration) Deps {
+	t.Helper()
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "j,j,j,enter,j,q")
+	stateFile := filepath.Join(t.TempDir(), "workflows.json")
+	t.Setenv("LEAD_STATE_FILE", stateFile)
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(stateFile), "inbox-seen.json"), []byte(`{"help_shown":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gh := &testutil.FakeGhClient{Issues: map[int]ports.Issue{
+		7: {Number: 7, Title: "work", Body: "body", State: "OPEN"},
+	}}
+	logPath := filepath.Join(t.TempDir(), "issue-7.log")
+	if err := os.WriteFile(logPath, []byte("working\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-logAge)
+	if err := os.Chtimes(logPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	store := &state.Store{Path: stateFile}
+	rec := state.Workflow{Issue: 7, Repository: "o/r", Branch: "issue/7", Status: state.StatusInProgress, Agent: "agy", PID: 1 << 30, LogPath: logPath, StartedAt: time.Now().Add(-startedAgo)}
+	if err := store.Upsert(rec); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	return Deps{
+		Gh:      gh,
+		Git:     &fakeGitRunner{root: root, origin: "https://github.com/o/r.git"},
+		WorkDir: root,
+	}
+}
+
+func TestInboxRunningRowShowsActivity(t *testing.T) {
+	out, err := runLeadCmd(t, runningHeadlessDeps(t, 90*time.Minute, 5*time.Minute))
+	if err != nil {
+		t.Fatalf("headless inbox: %v\n%s", err, out)
+	}
+	// Narrow layout has no preview pane: the Updated column carries activity.
+	if !strings.Contains(out, "5m") {
+		t.Errorf("running row missing activity age, got:\n%s", out)
+	}
+}
+
+func TestInboxRunningPreviewShowsActivity(t *testing.T) {
+	t.Setenv("LEAD_TEST_INBOX_WIDTH", "200")
+	out, err := runLeadCmd(t, runningHeadlessDeps(t, 90*time.Minute, 5*time.Minute))
+	if err != nil {
+		t.Fatalf("headless inbox: %v\n%s", err, out)
+	}
+	for _, want := range []string{"Elapsed: 1h", "Active: 5m ago", "Phase: implementing"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("running preview missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestInboxStopKeyStopsRunningAgent(t *testing.T) {
 	t.Setenv("LEAD_TEST_INBOX_KEYS", "j,j,j,enter,j,d,q")
 	stateFile := filepath.Join(t.TempDir(), "workflows.json")
