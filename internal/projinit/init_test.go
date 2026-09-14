@@ -5,8 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/kuwa72/lead-cli/internal/ports"
 )
 
 var (
@@ -372,17 +375,29 @@ func TestLegacyInitBlockMigratesToEnable(t *testing.T) {
 	}
 }
 
-// stubLabelClient is a minimal projinit.LabelLister for label-check tests:
-// it records the requested repo and returns canned labels or an error.
+// stubLabelClient is a minimal projinit.LabelClient for label-check tests:
+// it records the requested repo and returns canned labels or an error,
+// and records created labels (or fails creation).
 type stubLabelClient struct {
-	labels []string
-	err    error
-	repos  []string
+	labels    []string
+	err       error
+	repos     []string
+	created   []string
+	createErr error
 }
 
 func (s *stubLabelClient) RepoLabels(_ context.Context, repo string) ([]string, error) {
 	s.repos = append(s.repos, repo)
 	return s.labels, s.err
+}
+
+func (s *stubLabelClient) RepoCreateLabel(_ context.Context, repo string, label ports.LabelDefinition) error {
+	s.repos = append(s.repos, repo)
+	if s.createErr != nil {
+		return s.createErr
+	}
+	s.created = append(s.created, label.Name)
+	return nil
 }
 
 // installLocal writes a fully-configured local tree so that only the
@@ -426,9 +441,9 @@ func TestRunCheckPassesWhenLabelsPresent(t *testing.T) {
 	if !rep.Complete {
 		t.Errorf("check with all labels = incomplete, want complete (lines: %v)", rep.Lines)
 	}
-	for _, name := range RequiredIssueLabels {
-		if got := joinLines(rep); !strings.Contains(got, "label/"+name+": ok") {
-			t.Errorf("check missing label/%s ok line:\n%s", name, got)
+	for _, want := range RequiredIssueLabels {
+		if got := joinLines(rep); !strings.Contains(got, "label/"+want.Name+": ok") {
+			t.Errorf("check missing label/%s ok line:\n%s", want.Name, got)
 		}
 	}
 	if len(gh.repos) != 1 || gh.repos[0] != "o/r" {
@@ -489,5 +504,79 @@ func TestRunDryRunReportsLabels(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(root); len(entries) != 0 {
 		t.Errorf("dry-run created files: %v", entries)
+	}
+}
+
+func TestRunDryRunDoesNotCreateLabels(t *testing.T) {
+	root := t.TempDir()
+	gh := &stubLabelClient{labels: []string{}}
+	if _, err := Run(Options{Root: root, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"}); err != nil {
+		t.Fatalf("dry-run: %v", err)
+	}
+	if len(gh.created) != 0 {
+		t.Errorf("dry-run created labels %v, want no creation without --write", gh.created)
+	}
+}
+
+func TestRunWriteCreatesMissingLabels(t *testing.T) {
+	root := t.TempDir()
+	gh := &stubLabelClient{labels: []string{"ready"}}
+	rep, err := Run(Options{Root: root, Write: true, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !rep.Changed {
+		t.Error("Changed = false, want true after writes")
+	}
+	wantCreated := []string{"needs-review", "blocked"}
+	if !reflect.DeepEqual(gh.created, wantCreated) {
+		t.Errorf("created = %v, want %v (present labels must not be recreated)", gh.created, wantCreated)
+	}
+	got := joinLines(rep)
+	for _, want := range []string{"label/needs-review: created", "label/ready: ok", "label/blocked: created"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("write missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRunWriteSkipsCreationWhenLabelsExist(t *testing.T) {
+	root := t.TempDir()
+	gh := &stubLabelClient{labels: []string{"needs-review", "ready", "blocked"}}
+	rep, err := Run(Options{Root: root, Write: true, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if len(gh.created) != 0 {
+		t.Errorf("created = %v, want no creation when all labels exist", gh.created)
+	}
+	if got := joinLines(rep); !strings.Contains(got, "label/ready: ok") {
+		t.Errorf("write missing label/ready ok line:\n%s", got)
+	}
+}
+
+func TestRunWriteReportsLabelCreateFailure(t *testing.T) {
+	root := t.TempDir()
+	gh := &stubLabelClient{labels: []string{}, createErr: errors.New("403 Forbidden")}
+	rep, err := Run(Options{Root: root, Write: true, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	if err != nil {
+		t.Fatalf("write with label failure = %v, want local install to succeed with a warning", err)
+	}
+	if got := joinLines(rep); !strings.Contains(got, "label/needs-review: create failed") {
+		t.Errorf("write missing create-failed warning:\n%s", got)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, agentsFile)); statErr != nil {
+		t.Errorf("local AGENTS.md was not installed despite label failure: %v", statErr)
+	}
+}
+
+func TestRunWriteSkipsCreationWithoutRepo(t *testing.T) {
+	root := t.TempDir()
+	gh := &stubLabelClient{labels: []string{}}
+	if _, err := Run(Options{Root: root, Write: true, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: ""}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if len(gh.created) != 0 {
+		t.Errorf("created = %v, want no creation without a remote", gh.created)
 	}
 }

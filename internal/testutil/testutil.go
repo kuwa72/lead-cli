@@ -182,6 +182,11 @@ type FakeGhClient struct {
 	RepoLabelNamesErr error
 	RepoLabelsCalls   []string
 
+	// CreatedLabels records RepoCreateLabel calls (issue #174);
+	// CreateLabelErr fails every creation.
+	CreatedLabels  []ports.LabelDefinition
+	CreateLabelErr error
+
 	// Spec AI (issue #94). Created issues are numbered from NextNumber
 	// (default 101) upward; CreateErr fails every IssueCreate.
 	NextNumber    int
@@ -316,6 +321,11 @@ func (f *FakeGhClient) RepoLabels(ctx context.Context, repo string) ([]string, e
 		return nil, f.RepoLabelNamesErr
 	}
 	return f.RepoLabelNames, nil
+}
+// RepoCreateLabel records the call (or returns CreateLabelErr).
+func (f *FakeGhClient) RepoCreateLabel(ctx context.Context, repo string, label ports.LabelDefinition) error {
+	f.CreatedLabels = append(f.CreatedLabels, label)
+	return f.CreateLabelErr
 }
 // BranchProtection returns Protection (or ProtectionErr) and records the call.
 func (f *FakeGhClient) BranchProtection(ctx context.Context, repo, branch string) (ports.BranchProtection, error) {
