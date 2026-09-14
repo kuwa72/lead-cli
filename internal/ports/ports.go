@@ -102,7 +102,7 @@ type GhClient interface {
 	RepoLabels(ctx context.Context, repo string) ([]string, error)
 	// RepoCreateLabel mirrors `gh label create <name> --color <c>
 	// --description <d>` (+ `--repo <repo>` when repo is non-empty).
-	// `lead enable --write` creates missing required labels (issue #174).
+	// `lead enable` creates missing required labels (issue #174).
 	RepoCreateLabel(ctx context.Context, repo string, label LabelDefinition) error
 }
 

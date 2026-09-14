@@ -3,7 +3,7 @@
 // (issue #68, renamed from `lead install` to `lead init` in #79,
 // separated from `lead setup` as `lead enable` in #169).
 //
-// Principles: dry-run by default, approval before writes, idempotent re-runs,
+// Principles: apply by default after approval, idempotent re-runs,
 // safe no-ops on non-interactive stdin, and conservative uninstall that
 // preserves foreign files.
 package projinit
@@ -53,7 +53,7 @@ type Target struct {
 // RequiredIssueLabels are the GitHub issue labels the lead workflow needs
 // (dispatch queue, review flow). Colors follow GitHub's conventional
 // palette. `lead enable` reports each as `label/<name>: ok|missing`, and
-// `lead enable --write` creates the missing ones (issues #172, #174).
+// `lead enable` creates the missing ones (issues #172, #174).
 var RequiredIssueLabels = []ports.LabelDefinition{
 	{Name: "needs-review", Color: "FBCA04", Description: "Waiting for review"},
 	{Name: "ready", Color: "0E8A16", Description: "Ready to be worked on"},
@@ -76,8 +76,12 @@ var targets = []Target{
 type Options struct {
 	// Root is the project root directory. Required.
 	Root string
-	// Write applies changes. Without it, Run only previews.
+	// Write applies changes. Kept for compatibility: applying is the
+	// default, so this flag is a no-op (see DryRun to preview instead).
 	Write bool
+	// DryRun only previews what applying would change; nothing is
+	// written locally or remotely.
+	DryRun bool
 	// Check reports whether the project is configured; no changes.
 	Check bool
 	// Uninstall removes managed files and the AGENTS.md block.
@@ -133,8 +137,10 @@ func Run(opts Options) (Report, error) {
 		return runUninstall(opts.Root)
 	case opts.Check:
 		return runCheck(opts.Root, opts, skill, agents)
+	case opts.DryRun:
+		return runPreview(opts.Root, opts, skill, agents)
 	default:
-		return runInstall(opts.Root, opts, skill, agents)
+		return runApply(opts.Root, opts, skill, agents)
 	}
 }
 
@@ -206,11 +212,14 @@ func removeMarker(content, startMarker, endMarker string) (string, bool) {
 	return out, true
 }
 
-func runInstall(root string, opts Options, wantSkill, wantAgents []byte) (Report, error) {
-	var rep Report
-	block := BlockStart + "\n" + string(wantAgents) + "\n" + BlockEnd + "\n"
-	needChange := false
+func wantBlock(wantAgents []byte) string {
+	return BlockStart + "\n" + string(wantAgents) + "\n" + BlockEnd + "\n"
+}
 
+// previewLines appends the skill and AGENTS.md status lines and reports
+// whether applying would change anything.
+func previewLines(rep *Report, root string, wantSkill []byte, block string) bool {
+	needChange := false
 	for _, t := range targets {
 		path := filepath.Join(root, t.Dir, "SKILL.md")
 		cur, _ := os.ReadFile(path)
@@ -228,19 +237,31 @@ func runInstall(root string, opts Options, wantSkill, wantAgents []byte) (Report
 	if action != "keep" {
 		needChange = true
 	}
+	return needChange
+}
 
-	if !opts.Write {
-		// Dry-run: read-only preview of the label status; never touches
-		// the remote.
-		labelLines, _ := labelReport(opts.Gh, opts.Repo)
-		rep.Lines = append(rep.Lines, labelLines...)
-		if !needChange {
-			rep.Lines = append(rep.Lines, "lead-flow is already installed: no changes")
-			return rep, nil
-		}
-		rep.Lines = append(rep.Lines, "dry run: no changes (pass --write to apply)")
+// runPreview reports what `lead enable` would change without touching
+// anything locally or remotely (`--dry-run`).
+func runPreview(root string, opts Options, wantSkill, wantAgents []byte) (Report, error) {
+	var rep Report
+	needChange := previewLines(&rep, root, wantSkill, wantBlock(wantAgents))
+	labelLines, _ := labelReport(opts.Gh, opts.Repo)
+	rep.Lines = append(rep.Lines, labelLines...)
+	if !needChange {
+		rep.Lines = append(rep.Lines, "lead-flow is already installed: no changes")
 		return rep, nil
 	}
+	rep.Lines = append(rep.Lines, "dry run: no changes (run `lead enable` to apply)")
+	return rep, nil
+}
+
+// runApply installs the skill files, the AGENTS.md block, and the missing
+// required labels after approval (`lead enable`; the `Write` option is
+// accepted for compatibility and behaves identically).
+func runApply(root string, opts Options, wantSkill, wantAgents []byte) (Report, error) {
+	var rep Report
+	block := wantBlock(wantAgents)
+	needChange := previewLines(&rep, root, wantSkill, block)
 
 	if !opts.Yes {
 		// The approval gates both local writes and remote label
@@ -266,6 +287,8 @@ func runInstall(root string, opts Options, wantSkill, wantAgents []byte) (Report
 			}
 		}
 
+		agentsPath := filepath.Join(root, agentsFile)
+		curAgents, _ := os.ReadFile(agentsPath)
 		next := UpsertBlock(normalizeLegacy(string(curAgents), block), block)
 		if err := os.MkdirAll(filepath.Dir(agentsPath), 0o755); err != nil {
 			return rep, err
@@ -331,7 +354,7 @@ func runCheck(root string, opts Options, wantSkill, wantAgents []byte) (Report, 
 	}
 
 	if !rep.Complete {
-		rep.Lines = append(rep.Lines, "Next: run `lead enable --write`")
+		rep.Lines = append(rep.Lines, "Next: run `lead enable`")
 	}
 	return rep, nil
 }

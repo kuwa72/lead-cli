@@ -269,11 +269,21 @@ func enableFixture(t *testing.T, gh *testutil.FakeGhClient, origin string) Deps 
 
 func runEnableCmd(t *testing.T, deps Deps, args ...string) (string, error) {
 	t.Helper()
+	return runLeadCmd(t, deps, append([]string{"enable"}, args...)...)
+}
+
+func runDisableCmd(t *testing.T, deps Deps, args ...string) (string, error) {
+	t.Helper()
+	return runLeadCmd(t, deps, append([]string{"disable"}, args...)...)
+}
+
+func runLeadCmd(t *testing.T, deps Deps, args ...string) (string, error) {
+	t.Helper()
 	root := NewRootCmdWithDeps("v0.0.0-test", "abc1234", "2026-09-07", deps)
 	var out strings.Builder
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs(append([]string{"enable"}, args...))
+	root.SetArgs(args)
 	err := root.Execute()
 	return out.String(), err
 }
@@ -281,8 +291,8 @@ func runEnableCmd(t *testing.T, deps Deps, args ...string) (string, error) {
 func TestEnableCheckFailsWhenLabelsMissing(t *testing.T) {
 	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review"}}
 	deps := enableFixture(t, gh, "https://github.com/o/r.git")
-	if out, err := runEnableCmd(t, deps, "--write", "--yes"); err != nil {
-		t.Fatalf("enable --write: %v\n%s", err, out)
+	if out, err := runEnableCmd(t, deps, "--yes"); err != nil {
+		t.Fatalf("enable --yes: %v\n%s", err, out)
 	}
 	out, err := runEnableCmd(t, deps, "--check")
 	if err == nil {
@@ -304,6 +314,7 @@ func TestEnableCheckFailsWhenLabelsMissing(t *testing.T) {
 func TestEnableCheckPassesWhenLabelsPresent(t *testing.T) {
 	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review", "ready", "blocked"}}
 	deps := enableFixture(t, gh, "https://github.com/o/r.git")
+	// --write stays accepted for compatibility and applies like the default.
 	if out, err := runEnableCmd(t, deps, "--write", "--yes"); err != nil {
 		t.Fatalf("enable --write: %v\n%s", err, out)
 	}
@@ -321,8 +332,8 @@ func TestEnableCheckPassesWhenLabelsPresent(t *testing.T) {
 func TestEnableCheckSkipsLabelsWithoutRemote(t *testing.T) {
 	gh := &testutil.FakeGhClient{}
 	deps := enableFixture(t, gh, "")
-	if out, err := runEnableCmd(t, deps, "--write", "--yes"); err != nil {
-		t.Fatalf("enable --write: %v\n%s", err, out)
+	if out, err := runEnableCmd(t, deps, "--yes"); err != nil {
+		t.Fatalf("enable --yes: %v\n%s", err, out)
 	}
 	out, err := runEnableCmd(t, deps, "--check")
 	if err != nil {
@@ -339,7 +350,7 @@ func TestEnableCheckSkipsLabelsWithoutRemote(t *testing.T) {
 func TestEnableWriteCreatesMissingLabels(t *testing.T) {
 	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review"}}
 	deps := enableFixture(t, gh, "https://github.com/o/r.git")
-	out, err := runEnableCmd(t, deps, "--write", "--yes")
+	out, err := runEnableCmd(t, deps, "--yes")
 	if err != nil {
 		t.Fatalf("enable --write: %v\n%s", err, out)
 	}
@@ -361,7 +372,7 @@ func TestEnableWriteCreatesMissingLabels(t *testing.T) {
 func TestEnableDryRunDoesNotCreateLabels(t *testing.T) {
 	gh := &testutil.FakeGhClient{RepoLabelNames: []string{}}
 	deps := enableFixture(t, gh, "https://github.com/o/r.git")
-	out, err := runEnableCmd(t, deps)
+	out, err := runEnableCmd(t, deps, "--dry-run")
 	if err != nil {
 		t.Fatalf("enable dry-run: %v\n%s", err, out)
 	}
@@ -370,5 +381,27 @@ func TestEnableDryRunDoesNotCreateLabels(t *testing.T) {
 	}
 	if !strings.Contains(out, "label/ready: missing") {
 		t.Errorf("dry-run missing label/ready missing line, got:\n%s", out)
+	}
+}
+
+func TestDisableRemovesManagedFiles(t *testing.T) {
+	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review", "ready", "blocked"}}
+	deps := enableFixture(t, gh, "https://github.com/o/r.git")
+	if out, err := runEnableCmd(t, deps, "--yes"); err != nil {
+		t.Fatalf("enable --yes: %v\n%s", err, out)
+	}
+	out, err := runDisableCmd(t, deps)
+	if err != nil {
+		t.Fatalf("disable: %v\n%s", err, out)
+	}
+	root := deps.Git.(*fakeGitRunner).root
+	if _, statErr := os.Stat(filepath.Join(root, ".claude", "skills", "lead-flow", "SKILL.md")); !os.IsNotExist(statErr) {
+		t.Error("disable did not remove the managed skill file")
+	}
+	if !strings.Contains(out, "removed") {
+		t.Errorf("disable missing removal report, got:\n%s", out)
+	}
+	if len(gh.CreatedLabels) != 0 {
+		t.Errorf("disable created labels %v, want labels kept", gh.CreatedLabels)
 	}
 }

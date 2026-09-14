@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# issue #172/#174: `lead enable` verifies required issue labels (needs-review,
-# ready, blocked) and `lead enable --write` creates the missing ones.
+# issue #172/#174/#176: `lead enable` verifies required issue labels (needs-review,
+# ready, blocked) and creates the missing ones by default (preview: --dry-run).
 # Behavioral checks only: exit statuses, command outputs, gh argv records.
 set -euo pipefail
 
@@ -67,7 +67,7 @@ label_count() { grep -c . "$GH_LABEL_STATE"; }
 set_labels 'needs-review
 '
 clear_log
-out="$("$tmp/lead" enable)" || fail "enable dry-run failed"
+out="$("$tmp/lead" enable --dry-run)" || fail "enable dry-run failed"
 case "$out" in *"label/ready: missing"*) ;; *) fail "dry-run missing label/ready missing line: $out";; esac
 case "$out" in *"label/blocked: missing"*) ;; *) fail "dry-run missing label/blocked missing line: $out";; esac
 [ "$(label_count)" = "1" ] || fail "dry-run created labels"
@@ -78,9 +78,9 @@ out="$("$tmp/lead" enable --check 2>&1)" && fail "enable --check succeeded with 
 case "$out" in *"label/blocked: missing"*) ;; *) fail "missing label/blocked missing line: $out";; esac
 case "$out" in *"label/needs-review: ok"*) ;; *) fail "missing label/needs-review ok line: $out";; esac
 
-# --- 3. --write --yes creates the missing labels ---
+# --- 3. default apply (--yes) creates the missing labels ---
 clear_log
-out="$("$tmp/lead" enable --write --yes)" || fail "enable --write failed: $out"
+out="$("$tmp/lead" enable --yes)" || fail "enable apply failed: $out"
 case "$out" in *"label/ready: created"*) ;; *) fail "missing label/ready created line: $out";; esac
 case "$out" in *"label/blocked: created"*) ;; *) fail "missing label/blocked created line: $out";; esac
 case "$out" in *"label/needs-review: ok"*) ;; *) fail "present label must stay ok: $out";; esac
@@ -109,7 +109,7 @@ git init >/dev/null || fail "git init failed"
 git config user.email "test@example.com"
 git config user.name "Test"
 git remote add origin "https://github.com/o/r.git"
-out="$("$tmp/lead" enable --write --yes)" || fail "enable --write failed on gh error (must warn, not fail): $out"
+out="$("$tmp/lead" enable --yes)" || fail "enable apply failed on gh error (must warn, not fail): $out"
 case "$out" in *"skip"*) ;; *) fail "gh failure missing skip warning: $out";; esac
 [ -f AGENTS.md ] || fail "local AGENTS.md was not installed on gh error"
 export LEAD_TEST_GH_FAIL=0

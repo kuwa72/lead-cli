@@ -30,6 +30,7 @@ func TestRunDryRunWritesNothing(t *testing.T) {
 	root := t.TempDir()
 	rep, err := Run(Options{
 		Root:         root,
+		DryRun:       true,
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
 	})
@@ -489,7 +490,7 @@ func TestRunCheckSkipsLabelsOnGhError(t *testing.T) {
 func TestRunDryRunReportsLabels(t *testing.T) {
 	root := t.TempDir()
 	gh := &stubLabelClient{labels: []string{"ready"}}
-	rep, err := Run(Options{Root: root, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	rep, err := Run(Options{Root: root, DryRun: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
 	if err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
@@ -507,10 +508,50 @@ func TestRunDryRunReportsLabels(t *testing.T) {
 	}
 }
 
+func TestRunDefaultAppliesChanges(t *testing.T) {
+	root := t.TempDir()
+	gh := &stubLabelClient{labels: []string{}}
+	rep, err := Run(Options{Root: root, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	if err != nil {
+		t.Fatalf("default Run: %v", err)
+	}
+	if !rep.Changed {
+		t.Error("default Run Changed = false, want apply-by-default")
+	}
+	if _, err := os.Stat(filepath.Join(root, agentsFile)); err != nil {
+		t.Errorf("default Run did not write AGENTS.md: %v", err)
+	}
+	if len(gh.created) != len(RequiredIssueLabels) {
+		t.Errorf("default Run created = %v, want all required labels", gh.created)
+	}
+}
+
+func TestRunDefaultNeedsApproval(t *testing.T) {
+	root := t.TempDir()
+	rep, err := Run(Options{
+		Root:         root,
+		Stdin:        strings.NewReader(""),
+		SkillContent: testSkill,
+		AgentsBlock:  testAgents,
+	})
+	if err != nil {
+		t.Fatalf("EOF Run: %v", err)
+	}
+	if rep.Changed {
+		t.Error("non-interactive default Run Changed = true, want abort without approval")
+	}
+	if got := joinLines(rep); !strings.Contains(got, "aborted") {
+		t.Errorf("non-interactive default Run missing abort notice:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, agentsFile)); !os.IsNotExist(err) {
+		t.Error("non-interactive default Run wrote AGENTS.md")
+	}
+}
+
 func TestRunDryRunDoesNotCreateLabels(t *testing.T) {
 	root := t.TempDir()
 	gh := &stubLabelClient{labels: []string{}}
-	if _, err := Run(Options{Root: root, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"}); err != nil {
+	if _, err := Run(Options{Root: root, DryRun: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"}); err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
 	if len(gh.created) != 0 {

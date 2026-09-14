@@ -20,6 +20,7 @@ export SHELL="/bin/bash"
 # --- 1. `lead enable` exists, `lead init` stays as alias, `lead install` stays gone ---
 "$tmp/lead" enable --help >/dev/null || fail "enable --help exited non-zero"
 "$tmp/lead" init --help >/dev/null || fail "init --help (alias) exited non-zero"
+"$tmp/lead" disable --help >/dev/null || fail "disable --help exited non-zero"
 "$tmp/lead" install --help >/dev/null 2>&1 && fail "old 'install' command still exists"
 
 # --- 2. help wording separates user environment from repository ---
@@ -31,7 +32,7 @@ case "$("$tmp/lead" enable --help)" in *"lead enable"*) ;; *) fail "enable --hel
 mkdir -p "$tmp/norepo"
 (cd "$tmp/norepo" && "$tmp/lead" enable >/dev/null 2>&1) && fail "enable outside a repo succeeded"
 
-# --- 4. enable dry-run writes nothing ---
+# --- 4. enable --dry-run writes nothing ---
 proj="$tmp/project"
 mkdir -p "$proj"
 cd "$proj"
@@ -39,19 +40,19 @@ git init >/dev/null || fail "git init failed"
 git config user.email "test@example.com"
 git config user.name "Test"
 
-out="$("$tmp/lead" enable)" || fail "enable dry-run failed"
-case "$out" in *"dry run"*) ;; *) fail "enable dry-run missing dry-run notice";; esac
-[ ! -e .claude ] && [ ! -e .devin ] && [ ! -e AGENTS.md ] || fail "enable dry-run wrote files"
+out="$("$tmp/lead" enable --dry-run)" || fail "enable --dry-run failed"
+case "$out" in *"dry run"*) ;; *) fail "enable --dry-run missing dry-run notice";; esac
+[ ! -e .claude ] && [ ! -e .devin ] && [ ! -e AGENTS.md ] || fail "enable --dry-run wrote files"
 
-# --- 5. `enable --write --yes` installs repo files and never touches $HOME ---
-"$tmp/lead" enable --write --yes >/dev/null || fail "enable --write failed"
+# --- 5. `enable --yes` installs repo files and never touches $HOME ---
+"$tmp/lead" enable --yes >/dev/null || fail "enable --yes failed"
 [ -f .claude/skills/lead-flow/SKILL.md ] || fail "claude skill file missing"
 [ -f .devin/skills/lead-flow/SKILL.md ] || fail "devin skill file missing"
 [ -f AGENTS.md ] || fail "AGENTS.md missing"
 case "$(cat AGENTS.md)" in *"lead-flow"*) ;; *) fail "AGENTS.md missing lead-flow block";; esac
 [ -z "$(ls -A "$HOME")" ] || fail "enable touched \$HOME: $(ls -A "$HOME")"
 
-# --- 6. idempotency and --check ---
+# --- 6. idempotency and --check (`--write` stays accepted for compatibility) ---
 out="$("$tmp/lead" enable --write --yes)" || fail "re-enable failed"
 case "$out" in *"no changes"*) ;; *) fail "re-enable not idempotent";; esac
 "$tmp/lead" enable --check >/dev/null || fail "enable --check failed after enable"
@@ -60,12 +61,17 @@ case "$out" in *"no changes"*) ;; *) fail "re-enable not idempotent";; esac
 doc_out="$("$tmp/lead" doctor --offline 2>&1 || true)"
 case "$doc_out" in *"project"*) ;; *) fail "doctor output missing project check";; esac
 
-# --- 8. --uninstall removes managed files and block; --check then fails ---
-"$tmp/lead" enable --uninstall >/dev/null || fail "enable --uninstall failed"
+# --- 8. `disable` removes managed files and block; --check then fails ---
+"$tmp/lead" disable >/dev/null || fail "disable failed"
+[ ! -e .claude/skills/lead-flow/SKILL.md ] || fail "claude skill remains after disable"
+[ ! -e .devin/skills/lead-flow/SKILL.md ] || fail "devin skill remains after disable"
+case "$(cat AGENTS.md)" in *"lead-flow"*) fail "AGENTS.md block remains after disable";; esac
+"$tmp/lead" enable --check >/dev/null 2>&1 && fail "enable --check after disable succeeded"
+
+# --- 8b. `enable --uninstall` stays accepted for compatibility ---
+"$tmp/lead" enable --yes >/dev/null || fail "re-enable failed"
+"$tmp/lead" enable --uninstall >/dev/null || fail "enable --uninstall compat failed"
 [ ! -e .claude/skills/lead-flow/SKILL.md ] || fail "claude skill remains after uninstall"
-[ ! -e .devin/skills/lead-flow/SKILL.md ] || fail "devin skill remains after uninstall"
-case "$(cat AGENTS.md)" in *"lead-flow"*) fail "AGENTS.md block remains after uninstall";; esac
-"$tmp/lead" enable --check >/dev/null 2>&1 && fail "enable --check after uninstall succeeded"
 
 # --- 9. doctor guides toward `lead enable` when the repo is not enabled ---
 doc_out="$("$tmp/lead" doctor --offline 2>&1 || true)"
