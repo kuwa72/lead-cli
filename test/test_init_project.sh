@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# issue #68/#79: `lead init` project-oriented agent config behavior tests.
+# issue #68/#79/#169: `lead init` (hidden alias of `lead enable`)
+# project-oriented agent config behavior tests.
 # Verifies dry-run, --write, idempotency, --check, and --uninstall
 # using a temporary git project (no source-grep assertions).
 set -euo pipefail
@@ -14,7 +15,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 
-# --- 0. `lead init` exists and old `lead install` is gone (issue #79) ---
+# --- 0. `lead init` stays as a hidden alias of `lead enable` (issue #169),
+# and old `lead install` is still gone (issue #79) ---
+"$tmp/lead" enable --help >/dev/null || fail "enable --help exited non-zero"
 "$tmp/lead" init --help >/dev/null || fail "init --help exited non-zero"
 "$tmp/lead" install --help >/dev/null 2>&1 && fail "old 'install' command still exists"
 

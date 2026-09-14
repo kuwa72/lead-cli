@@ -149,6 +149,20 @@ func (d Deps) repoSlug() string {
 	return git.RepoSlug(d.gitRunner().OriginURL(root))
 }
 
+// repoRoot is the working directory's repository root, or "" when not
+// inside a git repository (doctor's project check is then skipped).
+func (d Deps) repoRoot() string {
+	cwd, err := d.workDir()
+	if err != nil {
+		return ""
+	}
+	root, err := d.gitRunner().RepoRoot(cwd)
+	if err != nil {
+		return ""
+	}
+	return root
+}
+
 func (d Deps) home() string {
 	if d.Home != "" {
 		return d.Home
@@ -376,10 +390,12 @@ else agy.`,
 
 	setupCmd := &cobra.Command{
 		Use:   "setup",
-		Short: "Interactive environment setup (completions, keybinding)",
-		Long: `Detect the shell, place the completion script, and manage the
-marker-fenced rc block. Dry-run by default; --write applies after approval.
-Finishes with a doctor summary.`,
+		Short: "Set up your user environment (shell completions, keybinding)",
+		Long: `Set up your user environment: detect the shell, place the
+completion script, and manage the marker-fenced rc block. Operates only
+on $HOME and never touches a repository; for repository setup see
+` + "`lead enable`" + `. Dry-run by default; --write applies after
+approval. Finishes with a doctor summary.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSetup(cmd, deps, info)
 		},
@@ -436,20 +452,35 @@ atomic swap). Brew-managed installs print ` + "`brew upgrade` guidance instead."
 	updateCmd.Flags().Bool("yes", false, "skip the replacement approval prompt")
 	updateCmd.Flags().String("version", "", "install a specific tag (default: latest)")
 
-	initCmd := &cobra.Command{
-		Use:   "init",
-		Short: "Initialize this project for the lead workflow (lead-flow skill)",
-		Long: `Install the /lead-flow skill and update AGENTS.md so a coding agent
-in this project can run the lead issue-driven TDD workflow.
-Dry-run by default; --write applies after approval.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runProjectInit(cmd, deps)
-		},
+	// `enable` is the canonical repository setup (issue #169); `init`
+	// stays as a hidden alias for scripts written before the rename
+	// (same pattern as the `run`/`work` pair).
+	newEnableCmd := func(use string, hidden bool) *cobra.Command {
+		long := `Install the /lead-flow skill and update AGENTS.md so a coding agent
+in this repository can run the lead issue-driven TDD workflow. Operates
+only on this repository and never touches $HOME; for user-environment
+setup (shell completions, keybinding) see ` + "`lead setup`" + `.
+Dry-run by default; --write applies after approval.`
+		if hidden {
+			long += "\n\nAlias of `lead enable` (kept for compatibility; prefer `enable`)."
+		}
+		c := &cobra.Command{
+			Use:    use,
+			Short:  "Enable this repository for the lead workflow (lead-flow skill)",
+			Hidden: hidden,
+			Long:   long,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return runEnable(cmd, deps)
+			},
+		}
+		c.Flags().Bool("write", false, "write changes after approval")
+		c.Flags().Bool("check", false, "verify installation only (no changes)")
+		c.Flags().Bool("uninstall", false, "remove the managed skill files and AGENTS.md block")
+		c.Flags().Bool("yes", false, "assume yes to approval prompts")
+		return c
 	}
-	initCmd.Flags().Bool("write", false, "write changes after approval")
-	initCmd.Flags().Bool("check", false, "verify installation only (no changes)")
-	initCmd.Flags().Bool("uninstall", false, "remove the managed skill files and AGENTS.md block")
-	initCmd.Flags().Bool("yes", false, "assume yes to approval prompts")
+	enableCmd := newEnableCmd("enable", false)
+	initCmd := newEnableCmd("init", true)
 
 	statusCmd := &cobra.Command{
 		Use:   "status",
@@ -558,7 +589,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, resumeCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, initCmd, lgtmCmd, unlgtmCmd)
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, resumeCmd, statusCmd, cleanCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, initCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	return root
 }
@@ -1185,6 +1216,7 @@ func runSetup(cmd *cobra.Command, deps Deps, info VersionInfo) error {
 			}
 		}
 		fmt.Fprintf(out, "doctor: %d/%d required checks pass\n", ok, total)
+		fmt.Fprintln(out, "Next: enable this repository with `lead enable --write`")
 	}
 	return nil
 }
@@ -1200,6 +1232,7 @@ func runDoctor(cmd *cobra.Command, deps Deps, info VersionInfo) error {
 	rep := doctor.Run(doctor.Deps{
 		Gh: deps.gh(), Home: deps.home(), Shell: shellFlag,
 		Version: info.Version, Offline: offline, Repo: deps.repoSlug(),
+		Root: deps.repoRoot(),
 		GenCompletion: func(shell string) (string, error) {
 			return genCompletion(cmd.Root(), shell)
 		},
@@ -1427,10 +1460,11 @@ func runClean(cmd *cobra.Command, deps Deps, raw string) error {
 	return nil
 }
 
-// runProjectInit implements `lead init`: project-oriented agent
-// configuration (lead-flow skill + AGENTS.md managed block). Dry-run by
-// default; --write applies after approval.
-func runProjectInit(cmd *cobra.Command, deps Deps) error {
+// runEnable implements `lead enable` (issue #169; `lead init` is a hidden
+// alias): repository-oriented agent configuration (lead-flow skill +
+// AGENTS.md managed block). Operates only on the repository, never on
+// $HOME. Dry-run by default; --write applies after approval.
+func runEnable(cmd *cobra.Command, deps Deps) error {
 	flags := cmd.Flags()
 	write, _ := flags.GetBool("write")
 	check, _ := flags.GetBool("check")
@@ -1439,11 +1473,11 @@ func runProjectInit(cmd *cobra.Command, deps Deps) error {
 
 	cwd, err := deps.workDir()
 	if err != nil {
-		return fmt.Errorf("init: %w", err)
+		return fmt.Errorf("enable: %w", err)
 	}
 	repoRoot, err := deps.gitRunner().RepoRoot(cwd)
 	if err != nil {
-		return fmt.Errorf("init: project root: %w", err)
+		return fmt.Errorf("enable: project root: %w", err)
 	}
 
 	rep, err := projinit.Run(projinit.Options{
@@ -1463,6 +1497,9 @@ func runProjectInit(cmd *cobra.Command, deps Deps) error {
 	}
 	if check && !rep.Complete {
 		return errors.New("lead-flow not installed")
+	}
+	if write && rep.Changed {
+		fmt.Fprintln(out, "Next: run `lead doctor --offline` to verify your environment")
 	}
 	return nil
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/projinit"
 	"github.com/kuwa72/lead-cli/internal/setup"
 )
 
@@ -71,6 +72,10 @@ type Deps struct {
 	// Repo is the "owner/name" of the current repository's origin; ""
 	// skips the repository-side checks (issue #67).
 	Repo string
+	// Root is the local repository root for project-side checks; ""
+	// skips them (issue #169). When set, doctor reports whether the
+	// repository is enabled via `lead enable` (AGENTS.md managed block).
+	Root string
 	// GenCompletion renders the expected completion script (for drift check).
 	GenCompletion func(shell string) (string, error)
 }
@@ -152,6 +157,9 @@ func Run(d Deps) Report {
 	rep.Checks = append(rep.Checks, protectionChecks(ctx, d)...)
 	rep.Checks = append(rep.Checks, completionCheck(d))
 	rep.Checks = append(rep.Checks, keybindingCheck(d))
+	if c, ok := projectCheck(d); ok {
+		rep.Checks = append(rep.Checks, c)
+	}
 	return rep
 }
 
@@ -191,4 +199,21 @@ func keybindingCheck(d Deps) Check {
 		return Check{Name: "keybinding", OK: true, Detail: "Ctrl-G enabled"}
 	}
 	return Check{Name: "keybinding", Detail: "block present, keybinding off"}
+}
+
+// projectCheck reports whether the repository at d.Root carries the
+// `lead enable` managed block (issue #169). ok=false means no block was
+// found; the check is optional so a plain checkout never fails doctor.
+// The second return is false when Root is unset (check skipped).
+func projectCheck(d Deps) (Check, bool) {
+	if d.Root == "" {
+		return Check{}, false
+	}
+	path := d.Root + "/AGENTS.md"
+	b, err := os.ReadFile(path)
+	if err != nil || !projinit.HasBlock(string(b)) {
+		return Check{Name: "project",
+			Detail: "this repository is not enabled (no lead-flow block in AGENTS.md); run `lead enable --write`"}, true
+	}
+	return Check{Name: "project", OK: true, Detail: "enabled (AGENTS.md carries the lead-flow block)"}, true
 }

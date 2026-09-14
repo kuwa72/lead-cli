@@ -45,7 +45,7 @@ RFC-16 は「人間が右ペインでプロンプトを確認して Enter」「�
 | `main` ブランチ | ステージング。人間の実機確認対象 |
 | worktree（Issue ごと） | 実装 AI の作業場。完了後に削除 |
 | `$XDG_STATE_HOME/lead/workflows.json` | Issue ↔ worktree ↔ pane ↔ 実行中プロセスの対応表。GitHub にない情報だけを持つ |
-| プロジェクト内 `AGENTS.md` | 全体の方向修正の唯一の入口。`lead init` が管理ブロックを配る |
+| プロジェクト内 `AGENTS.md` | 全体の方向修正の唯一の入口。`lead enable` が管理ブロックを配る |
 
 ## 4. ループ
 
@@ -114,7 +114,7 @@ lead [--parallel N]        # 受信箱（既定サブコマンド）。開いて
 lead say "<一言>"          # 仕様 AI に起票させる（受信箱外からの最短入力）
 lead run <issue> [flags]   # 手動ディスパッチ（`ready` を経ないオーバーライド）
 lead peek <issue>          # `p` と同じ
-lead init / doctor / setup / update / completion   # 現行どおり
+lead enable / doctor / setup / update / completion   # enable は旧 init (#169)
 lead status / finish / clean                       # 現行どおり（RFC-25）
 ```
 
@@ -168,7 +168,7 @@ lead status / finish / clean                       # 現行どおり（RFC-25）
 | worktree（#40/#72）、`resume`（#74） | 並列実行と再走の基盤 |
 | `internal/prompter` | 仕様 AI の中身 |
 | design.md §7 の server / socket API | ディスパッチャの土台 |
-| `lead init`（AGENTS.md 管理ブロック） | 配る中身を「実装 AI 向け完了定義」に更新 |
+| `lead enable`（AGENTS.md 管理ブロック） | 配る中身を「実装 AI 向け完了定義」に更新 |
 
 ## 11. 既存 Issue への影響
 

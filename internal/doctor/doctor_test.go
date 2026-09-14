@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -207,5 +208,43 @@ func TestReport_JSONShape(t *testing.T) {
 		if !strings.Contains(raw, want) {
 			t.Errorf("doctor JSON missing %s:\n%s", want, raw)
 		}
+	}
+}
+
+func TestRun_ProjectCheckFollowsEnable(t *testing.T) {
+	// No Root: no project check (user-environment-only diagnosis).
+	rep := Run(baseDeps())
+	if got := findCheck(rep, "project"); got.Name != "" {
+		t.Errorf("project check without Root = %+v, want absent", got)
+	}
+	// Root without a managed block: optional failure guiding to `lead enable`.
+	root := t.TempDir()
+	d := baseDeps()
+	d.Root = root
+	rep = Run(d)
+	proj := findCheck(rep, "project")
+	if proj.Name == "" {
+		t.Fatal("project check missing with Root set")
+	}
+	if proj.Required {
+		t.Errorf("project check = required, want optional: %+v", proj)
+	}
+	if proj.OK {
+		t.Errorf("project check = ok without a managed block: %+v", proj)
+	}
+	if !strings.Contains(proj.Detail, "lead enable") {
+		t.Errorf("project detail = %q, want `lead enable` guidance", proj.Detail)
+	}
+	if rep.OK() != true {
+		t.Errorf("rep.OK() = false on optional project gap, want true")
+	}
+	// Root with a managed block: ok.
+	agents := "<!-- lead-flow begin (managed by `lead enable`; do not edit) -->\ntest\n<!-- lead-flow end -->\n"
+	if err := os.WriteFile(root+"/AGENTS.md", []byte(agents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep = Run(d)
+	if proj := findCheck(rep, "project"); !proj.OK {
+		t.Errorf("project check = %+v, want ok with a managed block", proj)
 	}
 }
