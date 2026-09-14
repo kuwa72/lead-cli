@@ -249,13 +249,18 @@ func (m *Model) restoreSelection(old Row) {
 	n := old.Item.Number
 	oldKind := old.Section.Kind
 
-	// Try to find the exact issue by number.
-	for i, r := range rows {
-		if !r.IsHeader() && r.Item.Number == n {
-			m.expandForItem(r.Section.Kind)
-			m.cursor = i
-			m.selectedIssue = n
-			return
+	// Try to find the exact issue by number across all sections, including
+	// collapsed ones, so the cursor follows an issue that moved sections
+	// on reload (e.g. approve moves needs-review -> backlog, issue #184).
+	// The target section is expanded so the moved issue is visible.
+	for i := range m.sections {
+		for _, it := range m.sections[i].Items {
+			if it.Number == n {
+				m.expandForItem(m.sections[i].Kind)
+				m.cursor = m.rowIndex(m.sections[i].Kind, n)
+				m.selectedIssue = n
+				return
+			}
 		}
 	}
 
