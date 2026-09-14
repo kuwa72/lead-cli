@@ -323,3 +323,49 @@ func TestBlockUpsertRemoveRoundTrip(t *testing.T) {
 		t.Errorf("RemoveBlock dropped user content: %q", removed)
 	}
 }
+
+func TestLegacyInitBlockMigratesToEnable(t *testing.T) {
+	root := t.TempDir()
+	legacy := "<!-- lead-flow begin (managed by `lead init`; do not edit) -->\nold\n<!-- lead-flow end -->\n"
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("# rules\n"+legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Run(Options{Root: root, Write: true, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.Changed {
+		t.Error("Changed = false migrating a legacy block, want true")
+	}
+	cur, _ := os.ReadFile(filepath.Join(root, "AGENTS.md"))
+	if strings.Contains(string(cur), "managed by `lead init`") {
+		t.Errorf("legacy block marker remains:\n%s", cur)
+	}
+	if got := strings.Count(string(cur), "lead-flow begin"); got != 1 {
+		t.Errorf("lead-flow blocks = %d, want exactly 1:\n%s", got, cur)
+	}
+	if !HasBlock(string(cur)) {
+		t.Errorf("migrated file missing the managed block:\n%s", cur)
+	}
+	// Legacy content alone also counts as installed for --check (no forced rewrite).
+	root2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root2, "AGENTS.md"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tgt := range []string{".claude/skills/lead-flow/SKILL.md", ".devin/skills/lead-flow/SKILL.md"} {
+		p := filepath.Join(root2, tgt)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, testSkill, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep2, err := Run(Options{Root: root2, Check: true, SkillContent: testSkill, AgentsBlock: testAgents})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep2.Complete {
+		t.Errorf("--check on legacy block = incomplete, want complete (lines: %v)", rep2.Lines)
+	}
+}

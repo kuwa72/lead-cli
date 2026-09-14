@@ -50,8 +50,8 @@ Sections:
 | `lead say <one-liner>` | create `needs-review` issues from a one-liner |
 | `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
 | `lead clean <n>` | remove the workflow worktree and state |
-| `lead init` | install the `AGENTS.md` management block |
-| `lead setup` | interactive environment setup |
+| `lead enable` | enable this repository (`AGENTS.md` management block, lead-flow skill; `init` stays as an alias) |
+| `lead setup` | set up your user environment (shell completions, keybinding) |
 | `lead doctor` | diagnose `gh`, agents, herdr, and branch protection |
 | `lead version` | show version |
 
@@ -62,10 +62,11 @@ Sections:
 bin/install-local
 # or from a release
 curl -fsSL https://raw.githubusercontent.com/kuwa72/lead-cli/main/install.sh | sh
-lead setup --write
+lead setup --write          # user environment ($HOME only)
+lead enable --write         # this repository (skill + AGENTS.md block)
 ```
 
-`lead init` adds the `AGENTS.md` rule block; `lead setup --write` installs shell completion and a keybinding.
+`lead setup --write` sets up your user environment (shell completion and a keybinding, `$HOME` only); `lead enable --write` enables this repository (the `AGENTS.md` rule block and lead-flow skill).
 
 ## Conventions
 

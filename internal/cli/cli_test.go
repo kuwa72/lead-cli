@@ -49,7 +49,7 @@ func execute(t *testing.T, args ...string) (stdout, stderr string, err error) {
 }
 
 func TestEachCommandHelpRenders(t *testing.T) {
-	for _, cmd := range []string{"version", "work", "status", "clean", "finish", "server", "api", "setup", "completion", "doctor", "update", "init"} {
+	for _, cmd := range []string{"version", "work", "status", "clean", "finish", "server", "api", "setup", "completion", "doctor", "update", "init", "enable"} {
 		stdout, _, err := execute(t, cmd, "--help")
 		if err != nil {
 			t.Errorf("lead %s --help: %v, want exit 0", cmd, err)
@@ -66,7 +66,7 @@ func TestRootHelpListsCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lead --help: %v, want exit 0", err)
 	}
-	for _, cmd := range []string{"work", "status", "clean", "finish", "server", "api", "setup", "completion", "doctor", "update", "init", "version"} {
+	for _, cmd := range []string{"work", "status", "clean", "finish", "server", "api", "setup", "completion", "doctor", "update", "enable", "version"} {
 		if !strings.Contains(stdout, cmd) {
 			t.Errorf("lead --help missing %q, got:\n%s", cmd, stdout)
 		}

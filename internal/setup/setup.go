@@ -105,7 +105,7 @@ func Snippet(sh Shell, completionFile string, keybinding bool) string {
 	case ShellFish:
 		if keybinding {
 			sb.WriteString("if status is-interactive\n")
-			sb.WriteString("    bind \\cg 'lead work; commandline -f repaint'\n")
+			sb.WriteString("    bind \\cg 'lead run; commandline -f repaint'\n")
 			sb.WriteString("end\n")
 		}
 	default:
@@ -116,10 +116,10 @@ func Snippet(sh Shell, completionFile string, keybinding bool) string {
 		}
 		if keybinding {
 			if sh == ShellZsh {
-				sb.WriteString("bindkey -s '^G' 'lead work\\n'\n")
+				sb.WriteString("bindkey -s '^G' 'lead run\\n'\n")
 			} else {
 				sb.WriteString("if [[ $- == *i* ]]; then\n")
-				sb.WriteString(`  bind -x '"\C-g": lead work'` + "\n")
+				sb.WriteString(`  bind -x '"\C-g": lead run'` + "\n")
 				sb.WriteString("fi\n")
 			}
 		}
@@ -264,8 +264,12 @@ func runCheck(opts Options, paths Paths) (Report, error) {
 		rep.Lines = append(rep.Lines, fmt.Sprintf("completion: ok (%s)", paths.CompletionFile))
 	}
 	rc := readFile(paths.RCFile)
-	snip := Snippet(opts.Sh, paths.CompletionFile, false)
-	if snip == "" {
+	// A block is only unnecessary when the shell needs nothing in either
+	// mode: fish with the keybinding off is empty, but with it on the
+	// binding still needs a home. Checking only the keybinding-off
+	// snippet would report a keybound fish setup as "no block needed".
+	if Snippet(opts.Sh, paths.CompletionFile, false) == "" &&
+		Snippet(opts.Sh, paths.CompletionFile, true) == "" {
 		rep.Lines = append(rep.Lines, "rc: no block needed for this shell/mode")
 	} else if !HasBlock(rc) {
 		rep.Lines = append(rep.Lines, fmt.Sprintf("rc: block missing (%s)", paths.RCFile))
@@ -318,7 +322,7 @@ func runInstall(opts Options, paths Paths) (Report, error) {
 	// Keybinding is opt-in (RFC §6.1 principle 3): ask unless suppressed.
 	ask := newPrompter(opts.Stdin, opts.Stdout)
 	keybinding := false
-	if !opts.NoKeybinding && ask.ask("Enable Ctrl-G keybinding for `lead work`? [y/N] ") {
+	if !opts.NoKeybinding && ask.ask("Enable Ctrl-G keybinding for `lead run`? [y/N] ") {
 		keybinding = true
 	}
 	snip := Snippet(opts.Sh, paths.CompletionFile, keybinding)

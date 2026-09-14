@@ -309,3 +309,28 @@ func TestRunUninstallRefusesForeignCompletion(t *testing.T) {
 		t.Error("foreign completion was deleted; must be preserved")
 	}
 }
+
+func TestSnippetKeybindingRunsLeadRun(t *testing.T) {
+	for _, sh := range []Shell{ShellBash, ShellZsh, ShellFish} {
+		snip := Snippet(sh, "/home/u/completion", true)
+		if !strings.Contains(snip, "lead run") {
+			t.Errorf("Snippet(%s, keybinding) missing `lead run`:\n%s", sh, snip)
+		}
+		if strings.Contains(snip, "lead work") {
+			t.Errorf("Snippet(%s, keybinding) still references the hidden `lead work` alias:\n%s", sh, snip)
+		}
+	}
+	// The interactive keybinding prompt names the same canonical command.
+	var out bytes.Buffer
+	home := t.TempDir()
+	if _, err := Run(Options{Home: home, Sh: ShellBash, Write: true,
+		Stdin: strings.NewReader("y\ny\n"), Stdout: &out, GenCompletion: fakeGen(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "lead run") {
+		t.Errorf("keybinding prompt missing `lead run`, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "lead work") {
+		t.Errorf("keybinding prompt still references `lead work`, got:\n%s", out.String())
+	}
+}

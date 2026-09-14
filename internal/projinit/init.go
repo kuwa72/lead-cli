@@ -1,6 +1,7 @@
-// Package projinit implements `lead init`: project-oriented agent
+// Package projinit implements `lead enable`: project-oriented agent
 // configuration (lead-flow skill) and an AGENTS.md managed block
-// (issue #68, renamed from `lead install` in #79).
+// (issue #68, renamed from `lead install` to `lead init` in #79,
+// separated from `lead setup` as `lead enable` in #169).
 //
 // Principles: dry-run by default, approval before writes, idempotent re-runs,
 // safe no-ops on non-interactive stdin, and conservative uninstall that
@@ -32,8 +33,12 @@ const (
 
 const (
 	// BlockStart/BlockEnd fence the managed AGENTS.md section (idempotency markers).
-	BlockStart = "<!-- lead-flow begin (managed by `lead init`; do not edit) -->"
+	BlockStart = "<!-- lead-flow begin (managed by `lead enable`; do not edit) -->"
 	BlockEnd   = "<!-- lead-flow end -->"
+	// LegacyBlockStart fences blocks written by `lead init` before #169.
+	// HasBlock/RemoveBlock recognize it; --write migrates it to BlockStart.
+	LegacyBlockStart = "<!-- lead-flow begin (managed by `lead init`; do not edit) -->"
+	LegacyBlockEnd   = "<!-- lead-flow end -->"
 )
 
 // Target is one skill installation location.
@@ -77,14 +82,14 @@ type Report struct {
 // Run executes install/uninstall/check per Options.
 func Run(opts Options) (Report, error) {
 	if opts.Root == "" {
-		return Report{}, fmt.Errorf("init: project root is required")
+		return Report{}, fmt.Errorf("enable: project root is required")
 	}
 	fi, err := os.Stat(opts.Root)
 	if err != nil {
-		return Report{}, fmt.Errorf("init: %w", err)
+		return Report{}, fmt.Errorf("enable: %w", err)
 	}
 	if !fi.IsDir() {
-		return Report{}, fmt.Errorf("init: %s is not a directory", opts.Root)
+		return Report{}, fmt.Errorf("enable: %s is not a directory", opts.Root)
 	}
 
 	skill := opts.SkillContent
@@ -106,9 +111,35 @@ func Run(opts Options) (Report, error) {
 	}
 }
 
-// HasBlock reports whether content carries the managed block.
+// HasBlock reports whether content carries the managed block
+// (current or legacy `lead init` markers).
 func HasBlock(content string) bool {
-	return strings.Contains(content, BlockStart) && strings.Contains(content, BlockEnd)
+	return hasMarker(content, BlockStart, BlockEnd) ||
+		hasMarker(content, LegacyBlockStart, LegacyBlockEnd)
+}
+
+func hasMarker(content, start, end string) bool {
+	return strings.Contains(content, start) && strings.Contains(content, end)
+}
+
+// normalizeLegacy replaces a legacy `lead init` block with the want block.
+// A file carrying only legacy markers is functionally installed, so --check
+// treats it as complete while --write normalizes the markers.
+func normalizeLegacy(content, block string) string {
+	if hasMarker(content, BlockStart, BlockEnd) {
+		if next, ok := removeMarker(content, LegacyBlockStart, LegacyBlockEnd); ok {
+			return next
+		}
+		return content
+	}
+	start := strings.Index(content, LegacyBlockStart)
+	end := strings.Index(content, LegacyBlockEnd)
+	if start < 0 || end <= start {
+		return content
+	}
+	end += len(LegacyBlockEnd)
+	rest := strings.TrimLeft(content[end:], "\n")
+	return content[:start] + block + rest
 }
 
 // UpsertBlock replaces the managed block or appends it (newline-terminated).
@@ -128,14 +159,22 @@ func UpsertBlock(content, block string) string {
 }
 
 // RemoveBlock drops the managed block, preserving user content.
-// ok=false means no block was present.
+// ok=false means no block was present. Legacy `lead init` blocks count
+// as managed and are removed the same way.
 func RemoveBlock(content string) (string, bool) {
-	start := strings.Index(content, BlockStart)
-	end := strings.Index(content, BlockEnd)
+	if next, ok := removeMarker(content, BlockStart, BlockEnd); ok {
+		return next, true
+	}
+	return removeMarker(content, LegacyBlockStart, LegacyBlockEnd)
+}
+
+func removeMarker(content, startMarker, endMarker string) (string, bool) {
+	start := strings.Index(content, startMarker)
+	end := strings.Index(content, endMarker)
 	if start < 0 || end <= start {
 		return content, false
 	}
-	end += len(BlockEnd)
+	end += len(endMarker)
 	out := content[:start] + strings.TrimLeft(content[end:], "\n")
 	return out, true
 }
@@ -191,7 +230,7 @@ func runInstall(root string, opts Options, wantSkill, wantAgents []byte) (Report
 		}
 	}
 
-	next := UpsertBlock(string(curAgents), block)
+	next := UpsertBlock(normalizeLegacy(string(curAgents), block), block)
 	if err := os.MkdirAll(filepath.Dir(agentsPath), 0o755); err != nil {
 		return rep, err
 	}
@@ -226,7 +265,7 @@ func runCheck(root string, wantSkill, wantAgents []byte) (Report, error) {
 
 	agentsPath := filepath.Join(root, agentsFile)
 	curAgents, _ := os.ReadFile(agentsPath)
-	cur := string(curAgents)
+	cur := normalizeLegacy(string(curAgents), block)
 	if !HasBlock(cur) || UpsertBlock(cur, block) != cur {
 		rep.Complete = false
 		if len(curAgents) == 0 {
@@ -241,7 +280,7 @@ func runCheck(root string, wantSkill, wantAgents []byte) (Report, error) {
 	}
 
 	if !rep.Complete {
-		rep.Lines = append(rep.Lines, "Next: run `lead init --write`")
+		rep.Lines = append(rep.Lines, "Next: run `lead enable --write`")
 	}
 	return rep, nil
 }
@@ -297,7 +336,7 @@ func agentsAction(cur, block string) string {
 		return "new"
 	}
 	if HasBlock(cur) {
-		next := UpsertBlock(cur, block)
+		next := UpsertBlock(normalizeLegacy(cur, block), block)
 		if next == cur {
 			return "keep"
 		}

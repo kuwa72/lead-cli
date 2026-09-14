@@ -141,6 +141,6 @@ echo "Installed lead $VERSION to $BINDIR/lead"
 if [ "$NO_MODIFY_PATH" -eq 0 ]; then
   case ":$PATH:" in
     *":$BINDIR:"*) ;;
-    *) echo "Next: add $BINDIR to PATH, then run \`lead setup\`." ;;
+    *) echo "Next: add $BINDIR to PATH, then run \`lead setup\` (user environment) and \`lead enable\` (in your repository)." ;;
   esac
 fi
