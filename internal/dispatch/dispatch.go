@@ -29,6 +29,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/doctor"
+	"github.com/kuwa72/lead-cli/internal/logtail"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/workflow"
@@ -509,6 +510,12 @@ func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, rep
 	return res
 }
 
+// Blocked report log caps (issue #188): the excerpt stays readable.
+const (
+	BlockedLogLines = 30
+	BlockedLogBytes = 8 << 10
+)
+
 // block swaps ready→blocked on GitHub, posts the cause, and marks local state.
 func (d *Dispatcher) block(ctx context.Context, opts Options, number, attempts int, cause, logPath, worktree string) error {
 	if err := d.Gh.IssueRemoveLabel(ctx, number, opts.ReadyLabel); err != nil {
@@ -523,13 +530,28 @@ func (d *Dispatcher) block(ctx context.Context, opts Options, number, attempts i
 - 最終エラー: %s
 - ログ: %s
 - worktree: %s
+- ログ抜粋（末尾%d行）:
 
+%s
 原因を直すか方針をこの Issue にコメントしてから `+"`%s`"+` ラベルを戻すと再走します。`,
-		attempts, opts.BlockedLabel, opts.Agent, cause, logPath, worktree, opts.ReadyLabel)
+		attempts, opts.BlockedLabel, opts.Agent, cause, logPath, worktree, BlockedLogLines, indentExcerpt(logtail.Tail(logPath, BlockedLogLines, BlockedLogBytes)), opts.ReadyLabel)
 	if err := d.Gh.IssueComment(ctx, number, body); err != nil {
 		return fmt.Errorf("#%d: comment: %w", number, err)
 	}
 	return d.update(number, func(w *state.Workflow) { w.Status = state.StatusBlocked })
+}
+
+// indentExcerpt renders a log tail as an indented markdown block so fences
+// inside agent output cannot break the comment. Empty tail → "(ログなし)".
+func indentExcerpt(tail string) string {
+	if tail == "" {
+		return "    (ログなし)"
+	}
+	lines := strings.Split(strings.TrimSuffix(tail, "\n"), "\n")
+	for i := range lines {
+		lines[i] = "    " + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // update applies fn to the stored record under the dispatcher lock.
