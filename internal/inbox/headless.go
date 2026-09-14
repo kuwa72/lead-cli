@@ -141,6 +141,11 @@ func Run(m Model) error {
 		return err
 	}
 	m.theme = NewTheme(mode, profile, os.Stdout)
-	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	// The wrapper re-parks the hardware cursor on the input caret after each
+	// rendered frame so IME candidate windows track it (issue #160).
+	out := &caretWriter{f: os.Stdout, caret: m.caret}
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(out))
+	forwardResize(p, os.Stdout)
+	_, err = p.Run()
 	return err
 }

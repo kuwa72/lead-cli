@@ -3,6 +3,7 @@ package inbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1756,5 +1757,167 @@ func TestStopKey_RejectsNonRunningItem(t *testing.T) {
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	if got := next.(Model).status; !strings.Contains(got, "not running") {
 		t.Errorf("status = %q, want not-running guidance", got)
+	}
+}
+
+// --- hardware cursor / IME caret tracking (issue #160) -----------------------
+
+// cmdMsgs executes cmd and returns every message it produces, expanding
+// batches. Used to inspect cursor-visibility commands without a renderer.
+func cmdMsgs(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	switch msg := cmd().(type) {
+	case nil:
+		return nil
+	case tea.BatchMsg:
+		var out []tea.Msg
+		for _, c := range msg {
+			out = append(out, cmdMsgs(c)...)
+		}
+		return out
+	default:
+		return []tea.Msg{msg}
+	}
+}
+
+func hasMsgType(msgs []tea.Msg, name string) bool {
+	for _, m := range msgs {
+		if fmt.Sprintf("%T", m) == name {
+			return true
+		}
+	}
+	return false
+}
+
+func TestKeyS_ShowsHardwareCursor(t *testing.T) {
+	_, _, m := newFixture(t)
+	msg, _ := ParseKey("s")
+	_, cmd := m.Update(msg)
+	if !hasMsgType(cmdMsgs(cmd), "tea.showCursorMsg") {
+		t.Error("entering modeInput with 's' must return tea.ShowCursor")
+	}
+}
+
+func TestKeyT_ShowsHardwareCursor(t *testing.T) {
+	_, _, m := newFixture(t)
+	msg, _ := ParseKey("t")
+	_, cmd := m.Update(msg)
+	if !hasMsgType(cmdMsgs(cmd), "tea.showCursorMsg") {
+		t.Error("entering modeInput with 't' must return tea.ShowCursor")
+	}
+}
+
+func TestKeyX_ShowsHardwareCursor(t *testing.T) {
+	_, _, m := newFixture(t)
+	msg, _ := ParseKey("x")
+	_, cmd := m.Update(msg)
+	if !hasMsgType(cmdMsgs(cmd), "tea.showCursorMsg") {
+		t.Error("entering modeInput with 'x' must return tea.ShowCursor")
+	}
+}
+
+func TestInputEsc_HidesHardwareCursor(t *testing.T) {
+	_, _, m := newFixture(t)
+	m = press(t, m, "s")
+	msg, _ := ParseKey("esc")
+	_, cmd := m.Update(msg)
+	if !hasMsgType(cmdMsgs(cmd), "tea.hideCursorMsg") {
+		t.Error("leaving modeInput with Esc must return tea.HideCursor")
+	}
+}
+
+func TestInputEnter_HidesHardwareCursor(t *testing.T) {
+	_, _, m := newFixture(t)
+	m = press(t, m, "s", "text:title")
+	msg, _ := ParseKey("enter")
+	_, cmd := m.Update(msg)
+	if !hasMsgType(cmdMsgs(cmd), "tea.hideCursorMsg") {
+		t.Error("leaving modeInput with Enter must return tea.HideCursor")
+	}
+}
+
+func TestInputCaret_PositionTracksPromptAndText(t *testing.T) {
+	_, _, m := newFixture(t)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
+	m = press(t, m, "s", "text:あa")
+	_ = m.View()
+	row, col, live := m.caret.pos()
+	if !live {
+		t.Fatal("caret must be live while rendering modeInput")
+	}
+	// The input line sits above the one-line footer and the trailing empty
+	// line; the rendered frame is capped at the terminal height.
+	wantRow := 24 - 2
+	if row != wantRow {
+		t.Errorf("caret row = %d, want %d", row, wantRow)
+	}
+	wantCol := 1 + cellWidth(m.input.prompt) + cellWidth("あa")
+	if col != wantCol {
+		t.Errorf("caret col = %d, want %d", col, wantCol)
+	}
+}
+
+func TestInputCaret_MovesWithCursorKeys(t *testing.T) {
+	_, _, m := newFixture(t)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
+	m = press(t, m, "s", "text:あa")
+	_ = m.View()
+	_, colEnd, _ := m.caret.pos()
+	m = press(t, m, "left")
+	_ = m.View()
+	_, colLeft, _ := m.caret.pos()
+	if want := colEnd - 1; colLeft != want {
+		t.Errorf("caret col after left = %d, want %d", colLeft, want)
+	}
+	m = press(t, m, "left")
+	_ = m.View()
+	_, colLeft2, _ := m.caret.pos()
+	if want := colEnd - 3; colLeft2 != want {
+		t.Errorf("caret col after second left (CJK rune) = %d, want %d", colLeft2, want)
+	}
+}
+
+func TestInputCaret_InactiveOutsideInputMode(t *testing.T) {
+	_, _, m := newFixture(t)
+	_ = m.View()
+	if _, _, live := m.caret.pos(); live {
+		t.Error("caret must be inactive in modeList")
+	}
+	m = press(t, m, "s", "esc")
+	_ = m.View()
+	if _, _, live := m.caret.pos(); live {
+		t.Error("caret must be inactive after leaving modeInput")
+	}
+}
+
+func TestCaretWriter_AppendsCaretPosition(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tty")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	cs := &caretSync{}
+	cw := &caretWriter{f: f, caret: cs}
+
+	if _, err := cw.Write([]byte("frame")); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	if got := string(raw); got != "frame" {
+		t.Fatalf("inactive caret must pass writes through, got %q", got)
+	}
+
+	cs.set(7, 42)
+	if _, err := cw.Write([]byte("frame")); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(path)
+	if got := string(raw); got != "frameframe\x1b[7;42H" {
+		t.Fatalf("active caret must append a CUP sequence, got %q", got)
 	}
 }
