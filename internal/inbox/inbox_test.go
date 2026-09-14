@@ -1622,4 +1622,28 @@ func TestKeyL_TogglesLogView(t *testing.T) {
 	}
 }
 
-
+func TestProjectNotice_OnlyForUnconfiguredRepo(t *testing.T) {
+	mkAgents := func(t *testing.T, content string) string {
+		t.Helper()
+		p := filepath.Join(t.TempDir(), "AGENTS.md")
+		if content != "" {
+			if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return p
+	}
+	// Outside a repository: never shown, even without AGENTS.md.
+	if m := New(Options{AgentsPath: mkAgents(t, "")}); m.needsEnable {
+		t.Error("needsEnable = true outside a repo, want false")
+	}
+	// Inside a repository without the managed block: shown.
+	if m := New(Options{InRepo: true, AgentsPath: mkAgents(t, "# rules\n")}); !m.needsEnable {
+		t.Error("needsEnable = false for unconfigured repo, want true")
+	}
+	// Inside a repository with the managed block: hidden.
+	block := "<!-- lead-flow begin (managed by `lead enable`; do not edit) -->\ntest\n<!-- lead-flow end -->\n"
+	if m := New(Options{InRepo: true, AgentsPath: mkAgents(t, block)}); m.needsEnable {
+		t.Error("needsEnable = true for configured repo, want false")
+	}
+}

@@ -607,8 +607,10 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		return fmt.Errorf("inbox: working directory: %w", err)
 	}
 	root := cwd
+	inRepo := false
 	if r, err := deps.gitRunner().RepoRoot(cwd); err == nil && r != "" {
 		root = r
+		inRepo = true
 	}
 	if err := inbox.ValidateTheme(os.Getenv("LEAD_THEME")); err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), err)
@@ -624,6 +626,7 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		Cache:      &inbox.CacheStore{Path: inbox.ResolveCachePath(repoSlug)},
 		Editor:     os.Getenv("EDITOR"),
 		AgentsPath: filepath.Join(root, "AGENTS.md"),
+		InRepo:     inRepo,
 		Repo:       repoSlug,
 		Parallel:   parallel,
 		Theme:      os.Getenv("LEAD_THEME"),
