@@ -17,10 +17,10 @@ export HOME="$tmp/home"
 mkdir -p "$HOME"
 export SHELL="/bin/bash"
 
-# --- 1. `lead enable` exists, `lead init` stays as alias, `lead install` stays gone ---
+# --- 1. `lead enable`/`disable` exist; old `init`/`install` are gone (no compat) ---
 "$tmp/lead" enable --help >/dev/null || fail "enable --help exited non-zero"
-"$tmp/lead" init --help >/dev/null || fail "init --help (alias) exited non-zero"
 "$tmp/lead" disable --help >/dev/null || fail "disable --help exited non-zero"
+"$tmp/lead" init --help >/dev/null 2>&1 && fail "old 'init' alias still exists"
 "$tmp/lead" install --help >/dev/null 2>&1 && fail "old 'install' command still exists"
 
 # --- 2. help wording separates user environment from repository ---

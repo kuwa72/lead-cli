@@ -19,8 +19,7 @@ CGO_ENABLED=0 go build \
   -o "$tmp/lead-stamped" ./cmd/lead || fail "stamped build failed"
 
 # 1. 各コマンド --help が終了状態 0 で用法を表示すること
-# (`init` は `enable` の hidden alias として残るため直接 --help は通る)
-for cmd in version run dispatch setup completion doctor update init enable; do
+for cmd in version run dispatch setup completion doctor update enable disable; do
   out="$("$tmp/lead" "$cmd" --help)" || fail "lead $cmd --help exited non-zero"
   case "$out" in *"lead $cmd"*) ;; *) fail "lead $cmd --help missing usage header";; esac
 done
@@ -31,6 +30,7 @@ done
 
 # 2. 未知サブコマンドは非ゼロ終了すること
 "$tmp/lead" no-such-command >/dev/null 2>&1 && fail "unknown subcommand exited 0"
+"$tmp/lead" init >/dev/null 2>&1 && fail "removed init alias exited 0"
 "$tmp/lead" run --bogus-flag >/dev/null 2>&1 && fail "unknown flag exited 0"
 
 # 3. version は注入された版数情報を表示すること
