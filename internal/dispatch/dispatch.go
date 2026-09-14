@@ -131,6 +131,9 @@ type Dispatcher struct {
 	// ProcessAlive reports whether pid still exists on this host (reconnect,
 	// RFC §7). Nil means signal 0 via the OS.
 	ProcessAlive func(pid int) bool
+	// Kill terminates the agent process group (Stop, issue #185).
+	// Nil means killProcessGroup (SIGKILL the group, ESRCH counts as gone).
+	Kill func(pid int) error
 
 	mu sync.Mutex
 }
@@ -496,6 +499,61 @@ func (d *Dispatcher) block(ctx context.Context, opts Options, number, attempts i
 }
 
 // update applies fn to the stored record under the dispatcher lock.
+// Stop terminates the running agent for number and cleans up: kill the
+// process group, remove the worktree, comment on the issue, and delete the
+// state record. The ready label is kept so the issue returns to the
+// dispatch queue (issue #185). Records of other repositories, or issues
+// with no live entry, report an error.
+func (d *Dispatcher) Stop(ctx context.Context, number int) error {
+	opts := d.Opts.withDefaults()
+	repoRoot, err := d.Git.RepoRoot(opts.WorkDir)
+	if err != nil {
+		return fmt.Errorf("stop: %w", err)
+	}
+	key := repoKey(d.Git.OriginURL(repoRoot))
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	w, ok, err := d.Store.Get(number, "")
+	if err != nil {
+		return fmt.Errorf("stop: %w", err)
+	}
+	if !ok || repoKey(w.Repository) != key || w.PID <= 0 {
+		return fmt.Errorf("stop: no running agent for #%d", number)
+	}
+	kill := d.Kill
+	if kill == nil {
+		kill = killProcessGroup
+	}
+	if err := kill(w.PID); err != nil {
+		return fmt.Errorf("stop: kill agent for #%d: %w", number, err)
+	}
+	if w.Worktree != "" {
+		if err := d.Git.WorktreeRemove(repoRoot, w.Worktree, true); err != nil {
+			return fmt.Errorf("stop: remove worktree for #%d: %w", number, err)
+		}
+	}
+	if err := d.Gh.IssueComment(ctx, number, "Interrupted by user (`lead stop`); the issue stays ready for redispatch."); err != nil {
+		return fmt.Errorf("stop: comment on #%d: %w", number, err)
+	}
+	if _, err := d.Store.Delete(number, ""); err != nil {
+		return fmt.Errorf("stop: delete state for #%d: %w", number, err)
+	}
+	return nil
+}
+
+// killProcessGroup SIGKILLs the process group (agents start in their own
+// group via ExecLauncher) and falls back to the single pid. ESRCH anywhere
+// means already gone, which counts as success.
+func killProcessGroup(pid int) error {
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
+}
+
 func (d *Dispatcher) update(number int, fn func(*state.Workflow)) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -601,6 +659,8 @@ func (l *ExecLauncher) Start(ctx context.Context, dir string, argv []string, log
 	cmd.Dir = dir
 	cmd.Stdout = f
 	cmd.Stderr = f
+	// Own process group so Stop can SIGKILL the whole tree (issue #185).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("dispatch: start %s: %w", argv[0], err)

@@ -1647,3 +1647,49 @@ func TestProjectNotice_OnlyForUnconfiguredRepo(t *testing.T) {
 		t.Error("needsEnable = true for configured repo, want false")
 	}
 }
+
+func TestStopKey_StopsRunningAgent(t *testing.T) {
+	var stopped []int
+	m := New(Options{
+		Stop: func(ctx context.Context, number int) (string, error) {
+			stopped = append(stopped, number)
+			return "Stopped #7", nil
+		},
+	})
+	m.sections = []Section{{Kind: KindRunning, Items: []Item{{Number: 7, Title: "work", Kind: KindRunning}}}}
+	m.cursor = 1
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	_ = next
+	if cmd == nil {
+		t.Fatal("pressing d on a running agent returned no command")
+	}
+	msg := cmd()
+	done, ok := msg.(doneMsg)
+	if !ok {
+		t.Fatalf("d command returned %T, want doneMsg", msg)
+	}
+	if done.err != nil {
+		t.Fatalf("d command: %v", done.err)
+	}
+	if !reflect.DeepEqual(stopped, []int{7}) {
+		t.Errorf("stopped = %v, want [7]", stopped)
+	}
+	if done.status != "Stopped #7" {
+		t.Errorf("status = %q, want stopped summary", done.status)
+	}
+}
+
+func TestStopKey_RejectsNonRunningItem(t *testing.T) {
+	m := New(Options{
+		Stop: func(ctx context.Context, number int) (string, error) {
+			t.Error("Stop called for a non-running item")
+			return "", nil
+		},
+	})
+	m.sections = []Section{{Kind: KindNeedsReview, Items: []Item{{Number: 7, Title: "spec", Kind: KindNeedsReview}}}}
+	m.cursor = 1
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if got := next.(Model).status; !strings.Contains(got, "not running") {
+		t.Errorf("status = %q, want not-running guidance", got)
+	}
+}

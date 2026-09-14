@@ -2,14 +2,17 @@ package cli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/projinit"
+	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
 	"github.com/kuwa72/lead-cli/internal/workflow"
 )
@@ -77,6 +80,110 @@ func TestRootHelpListsCommands(t *testing.T) {
 func TestInitAliasIsGone(t *testing.T) {
 	if _, _, err := execute(t, "init", "--help"); err == nil {
 		t.Error("lead init --help = nil error, want unknown-command failure")
+	}
+}
+
+func TestInboxStopKeyStopsRunningAgent(t *testing.T) {
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "j,j,j,enter,j,d,q")
+	stateFile := filepath.Join(t.TempDir(), "workflows.json")
+	t.Setenv("LEAD_STATE_FILE", stateFile)
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(stateFile), "inbox-seen.json"), []byte(`{"help_shown":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gh := &testutil.FakeGhClient{Issues: map[int]ports.Issue{
+		7: {Number: 7, Title: "work", Body: "body", State: "OPEN"},
+	}}
+	sleeper := exec.Command("sleep", "60")
+	if err := sleeper.Start(); err != nil {
+		t.Skip("sleep unavailable")
+	}
+	t.Cleanup(func() { sleeper.Process.Kill(); sleeper.Wait() })
+	store := &state.Store{Path: stateFile}
+	if err := store.Upsert(state.Workflow{Issue: 7, Repository: "o/r", Branch: "issue/7", Status: state.StatusInProgress, Agent: "agy", PID: sleeper.Process.Pid}); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	deps := Deps{
+		Gh:      gh,
+		Git:     &fakeGitRunner{root: root, origin: "https://github.com/o/r.git"},
+		WorkDir: root,
+	}
+	out, err := runLeadCmd(t, deps)
+	if err != nil {
+		t.Fatalf("headless inbox: %v\n%s", err, out)
+	}
+	// Wait4 WNOHANG distinguishes a live process (0) from a zombie
+	// (reaped here) without blocking.
+	var ws syscall.WaitStatus
+	wpid, werr := syscall.Wait4(sleeper.Process.Pid, &ws, syscall.WNOHANG, nil)
+	if wpid == 0 && werr == nil {
+		t.Error("agent process still alive after d key")
+	} else {
+		sleeper.Wait()
+	}
+	found := false
+	for _, c := range gh.Comments {
+		if c.Number == 7 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no interruption comment on #7: %+v", gh.Comments)
+	}
+	if _, ok, _ := store.Get(7, ""); ok {
+		t.Error("state record not deleted by d key")
+	}
+}
+
+func TestStopRemovesRecordAndComments(t *testing.T) {
+	gh := &testutil.FakeGhClient{Issues: map[int]ports.Issue{
+		7: {Number: 7, Title: "w", Body: "b", State: "OPEN"},
+	}}
+	root := t.TempDir()
+	stateFile := filepath.Join(t.TempDir(), "workflows.json")
+	store := &state.Store{Path: stateFile}
+	// Stale record with a dead pid exercises the gone-path cleanup.
+	if err := store.Upsert(state.Workflow{Issue: 7, Repository: "o/r", Branch: "issue/7", Status: state.StatusInProgress, PID: 1 << 30}); err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{
+		Gh:        gh,
+		Git:       &fakeGitRunner{root: root, origin: "https://github.com/o/r.git"},
+		WorkDir:   root,
+		StateFile: stateFile,
+	}
+	out, err := runLeadCmd(t, deps, "stop", "7")
+	if err != nil {
+		t.Fatalf("lead stop 7: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "stopped #7") {
+		t.Errorf("stop missing confirmation, got:\n%s", out)
+	}
+	if len(gh.Comments) != 1 || gh.Comments[0].Number != 7 {
+		t.Errorf("Comments = %+v, want one interruption comment on #7", gh.Comments)
+	}
+	if _, ok, _ := store.Get(7, ""); ok {
+		t.Error("state record not deleted by stop")
+	}
+}
+
+func TestStopWithoutRecordFails(t *testing.T) {
+	gh := &testutil.FakeGhClient{}
+	root := t.TempDir()
+	deps := Deps{
+		Gh:        gh,
+		Git:       &fakeGitRunner{root: root, origin: "https://github.com/o/r.git"},
+		WorkDir:   root,
+		StateFile: filepath.Join(t.TempDir(), "workflows.json"),
+	}
+	if _, err := runLeadCmd(t, deps, "stop", "7"); err == nil {
+		t.Error("lead stop without a record = nil error, want failure")
+	}
+	if _, err := runLeadCmd(t, deps, "stop", "bogus"); err == nil {
+		t.Error("lead stop bogus = nil error, want failure")
 	}
 }
 
