@@ -370,11 +370,11 @@ func runCheck(root string, opts Options, wantSkill, wantAgents []byte) (Report, 
 		rep.Complete = false
 	}
 
-	protLines, protOK := protectionReport(opts.Protection, opts.Repo)
+	// Protection never affects completeness: since issue #200 missing
+	// protection only warns, so --check reports the gap with fix guidance
+	// but still passes.
+	protLines, _ := protectionReport(opts.Protection, opts.Repo)
 	rep.Lines = append(rep.Lines, protLines...)
-	if !protOK {
-		rep.Complete = false
-	}
 
 	if !rep.Complete {
 		rep.Lines = append(rep.Lines, "Next: run `lead enable`")
@@ -440,13 +440,13 @@ func protectionReport(gh ProtectionClient, repo string) (lines []string, ok bool
 		}
 		lines = append(lines, fmt.Sprintf("protection/branch-protection: ok (%s is %s)", branch, how))
 	} else {
-		lines = append(lines, fmt.Sprintf("protection/branch-protection: missing (%s is not protected; dispatch will not start unattended agents)", branch))
+		lines = append(lines, fmt.Sprintf("protection/branch-protection: missing (%s is not protected; recommended for safe unattended dispatch)", branch))
 		ok = false
 	}
 	if len(bp.RequiredChecks) > 0 {
 		lines = append(lines, fmt.Sprintf("protection/required-checks: ok (%s requires: %s)", branch, strings.Join(bp.RequiredChecks, ", ")))
 	} else {
-		lines = append(lines, fmt.Sprintf("protection/required-checks: missing (%s has no required status checks; dispatch will not start unattended agents)", branch))
+		lines = append(lines, fmt.Sprintf("protection/required-checks: missing (%s has no required status checks; recommended for safe unattended dispatch)", branch))
 		ok = false
 	}
 	if auto {

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# issue #197: `lead enable` はブランチ保護の状態も報告し、不足時は
-# `--check` を失敗させること (dispatchのPreflightが要求するため)。
+# issue #197/#200: `lead enable` はブランチ保護の状態も報告すること。
+# 保護不足は警告・誘導に留め、`--check` を失敗させない (adminなしで
+# 導入できるよう #200 で起動拒否を緩和)。
 # 振る舞いのみ検証: 終了ステータス、出力行、gh argv記録 (ソースgrepなし)。
 set -euo pipefail
 
@@ -83,10 +84,11 @@ case "$out" in *"protection/branch-protection: missing"*) ;; *) fail "dry-run mi
 case "$out" in *"protection/required-checks: missing"*) ;; *) fail "dry-run missing required-checks line: $out";; esac
 case "$out" in *"Next:"*"protect"*) ;; *) fail "dry-run missing protection guidance: $out";; esac
 
-# --- 2. install locally, then --check fails on protection ---
+# --- 2. install locally, then --check passes with protection guidance ---
 out="$("$tmp/lead" enable --yes)" || fail "enable apply failed: $out"
-out="$("$tmp/lead" enable --check 2>&1)" && fail "enable --check succeeded without protection"
+out="$("$tmp/lead" enable --check 2>&1)" || fail "enable --check failed without protection (must warn, not fail): $out"
 case "$out" in *"protection/branch-protection: missing"*) ;; *) fail "check missing protection line: $out";; esac
+case "$out" in *"Next:"*"protect"*) ;; *) fail "check missing protection guidance: $out";; esac
 
 # --- 3. protected repo: ok lines and --check passes ---
 : > "$PROT_FLAG"

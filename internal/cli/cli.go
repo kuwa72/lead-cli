@@ -365,7 +365,6 @@ agents are not killed on exit.`,
 	dispatchCmd.Flags().Bool("once", false, "run a single pass and exit")
 	dispatchCmd.Flags().Duration("interval", 30*time.Second, "pause between passes")
 	dispatchCmd.Flags().String("agent", "", "headless implementation agent (default: agy)")
-	dispatchCmd.Flags().Bool("skip-protection-check", false, "start even if the default branch lacks protection / required checks (warns)")
 
 	sayCmd := &cobra.Command{
 		Use:   "say <one-liner>",
@@ -756,12 +755,18 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		d.Opts.AgentMode = mode
 	}
 
+	var preflightWarn strings.Builder
+	d.Out = &preflightWarn
 	if err := d.Preflight(dctx); err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), err)
 		// Keep the warning visible inside the TUI: stderr scrolls away
 		// under the alternate screen, but the log pane stays (issue #196).
 		opts.StartupNotice = err.Error()
 	} else {
+		// Missing protection only warns since issue #200: surface the
+		// warning in the log pane as well, then silence the loop.
+		opts.StartupNotice = strings.TrimSpace(preflightWarn.String())
+		d.Out = io.Discard
 		go func() {
 			if err := d.Loop(dctx, 30*time.Second); err != nil {
 				fmt.Fprintln(cmd.ErrOrStderr(), "dispatch:", err)
@@ -884,7 +889,6 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 	once, _ := flags.GetBool("once")
 	interval, _ := flags.GetDuration("interval")
 	agentName, _ := flags.GetString("agent")
-	skipProtection, _ := flags.GetBool("skip-protection-check")
 
 	cwd, err := deps.workDir()
 	if err != nil {
@@ -903,8 +907,6 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 			Agent:    agentName,
 			LogDir:   filepath.Join(filepath.Dir(stateFile), "logs"),
 			WorkDir:  cwd,
-
-			SkipProtectionCheck: skipProtection,
 		},
 	}
 	if err := d.Preflight(cmd.Context()); err != nil {
@@ -1564,9 +1566,6 @@ func runEnable(cmd *cobra.Command, deps Deps) error {
 		if hasMissingLabel(rep.Lines) {
 			return errors.New("required issue labels missing (see report above)")
 		}
-		if hasMissingProtection(rep.Lines) {
-			return errors.New("branch protection missing (dispatch cannot start unattended agents; see report above)")
-		}
 		return errors.New("lead-flow not installed")
 	}
 	if rep.Changed {
@@ -1602,16 +1601,6 @@ func runDisable(cmd *cobra.Command, deps Deps) error {
 	return nil
 }
 
-// hasMissingProtection reports whether an enable report lists a required
-// branch-protection item as missing (issue #197).
-func hasMissingProtection(lines []string) bool {
-	for _, l := range lines {
-		if strings.HasPrefix(l, "protection/") && strings.Contains(l, ": missing") {
-			return true
-		}
-	}
-	return false
-}
 // hasMissingLabel reports whether an enable report lists a required
 // issue label as missing (issue #172).
 func hasMissingLabel(lines []string) bool {

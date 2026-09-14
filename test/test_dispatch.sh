@@ -3,7 +3,7 @@
 # 一時HOME・一時リポジトリ・ダミーgh・ダミーエージェントの下で
 #   ready 取得 → worktree 払い出し → ヘッドレス起動 argv → 完了で削除
 #   失敗 3 回で blocked ラベル + コメント、以後は再ディスパッチしない
-#   保護未設定なら起動拒否（#67）、--skip-protection-check で警告付き続行
+#   保護未設定でも警告付きで続行する (#200 で起動拒否を緩和)
 # をアサートする（grep検査なし・実HOME/実リポジトリに触れない）。
 set -euo pipefail
 
@@ -78,20 +78,13 @@ export PATH="$tmp/bin:$PATH"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 
-# --- 0. safety gate (#67): unprotected main → refuse before any launch -------
-if out="$(cd "$repo" && "$tmp/lead" dispatch --once --parallel 1 --agent claude 2>&1)"; then
-  fail "dispatch on unprotected repo exited 0: $out"
-fi
-case "$out" in *"not protected"*"--skip-protection-check"*) ;; *) fail "refusal lacks guidance: $out";; esac
+# --- 0. unprotected main → warn, then proceed (no refusal, issue #200) -----
+rm -f "$CLOSED_MARK"; : > "$GH_LOG"; : > "$AGENT_LOG"
+out="$(cd "$repo" && "$tmp/lead" dispatch --once --parallel 1 --agent claude 2>&1)" || fail "dispatch on unprotected repo exited non-zero: $out"
+case "$out" in *WARNING*"not protected"*) ;; *) fail "unprotected run lacks warning: $out";; esac
 grep -q '^GH api repos/o/r/branches/main/protection$' "$GH_LOG" || fail "protection API not consulted: $(cat "$GH_LOG")"
-[ -s "$AGENT_LOG" ] && fail "agent launched despite refusal"
-grep -q '^GH issue list' "$GH_LOG" && fail "ready issues listed before the gate"
-
-# --skip-protection-check: warns, then proceeds (success path below).
-rm -f "$CLOSED_MARK"; : > "$GH_LOG"
-out="$(cd "$repo" && "$tmp/lead" dispatch --once --parallel 1 --agent claude --skip-protection-check 2>&1)" || fail "dispatch --skip-protection-check exited non-zero: $out"
-case "$out" in *WARNING*"not protected"*) ;; *) fail "skip run lacks warning: $out";; esac
-grep -qxF 'CWD='"$repo/.worktrees/issue-7" "$AGENT_LOG" || fail "skip run did not launch agent: $(cat "$AGENT_LOG")"
+grep -qxF 'CWD='"$repo/.worktrees/issue-7" "$AGENT_LOG" || fail "unprotected run did not launch agent: $(cat "$AGENT_LOG")"
+case "$out" in *"#7"*"completed"*) ;; *) fail "output lacks completed report: $out";; esac
 
 # --- 1. success path (protected repo) -----------------------------------------
 export PROTECTED=1
@@ -128,20 +121,18 @@ grep -q '"status": "blocked"' "$LEAD_STATE_FILE" || fail "state not blocked"
 launches_after="$(grep -c '^CWD=' "$AGENT_LOG")"
 [ "$launches_after" -eq 3 ] || fail "blocked issue was re-dispatched ($launches_after launches)"
 
-# --- 2b. doctor reports the repository gates (#67) -----------------------------
+# --- 2b. doctor reports the repository gates (optional warnings) --------------
 unset PROTECTED
 doc_out="$(cd "$repo" && "$tmp/lead" doctor --offline 2>&1)" || true
 case "$doc_out" in *"branch protection"*skipped*) ;; *) fail "doctor --offline should skip protection: $doc_out";; esac
-if doc_out="$(cd "$repo" && "$tmp/lead" doctor 2>&1)"; then
-  fail "doctor on unprotected repo exited 0: $doc_out"
-fi
+doc_out="$(cd "$repo" && "$tmp/lead" doctor 2>&1)" || fail "doctor on unprotected repo failed: $doc_out"
 case "$doc_out" in *"branch protection"*"not protected"*"required checks"*) ;; *) fail "doctor lacks protection findings: $doc_out";; esac
 export PROTECTED=1
 doc_json="$(cd "$repo" && "$tmp/lead" doctor --json 2>&1)" || fail "doctor on protected repo failed: $doc_json"
-python3 - "$doc_json" <<'PY' || fail "doctor json lacks OK protection checks: $doc_json"
+python3 - "$doc_json" <<'PY' || fail "doctor json lacks protection checks: $doc_json"
 import json, sys
 d = json.loads(sys.argv[1]); c = {x["name"]: x for x in d["checks"]}
-assert c["branch protection"]["ok"] and c["branch protection"]["required"], c
+assert c["branch protection"]["ok"] and c["branch protection"]["required"] == False, c
 assert c["required checks"]["ok"] and "test" in c["required checks"]["detail"], c
 assert c["auto-merge"]["ok"], c
 PY

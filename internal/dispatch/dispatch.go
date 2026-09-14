@@ -60,9 +60,6 @@ type Options struct {
 	MaxAttempts  int
 	LogDir       string // agent stdout/stderr files; required
 	WorkDir      string // repository context for workflow.Start; required
-	// SkipProtectionCheck makes Preflight warn instead of refusing when the
-	// repository lacks branch protection / required checks (issue #67).
-	SkipProtectionCheck bool
 	// StuckAfter treats a running agent with no log output this long as
 	// failed (issue #186). Zero means DefaultStuckAfter; negative
 	// disables the idle check.
@@ -163,46 +160,34 @@ type Dispatcher struct {
 	mu sync.Mutex
 }
 
-// Preflight is the safety gate of RFC §9 / issue #67: unattended agents
-// merge their own PRs, so the repository must reject unreviewed pushes and
-// failing CI on its own. It refuses (with the same guidance `lead doctor`
-// prints) when the default branch is unprotected or has no required status
-// checks; Opts.SkipProtectionCheck turns the refusal into a warning.
+// Preflight checks the repository safety of RFC §9 / issue #67: unattended
+// agents merge their own PRs, so the repository should reject unreviewed
+// pushes and failing CI on its own. Since issue #200 a missing origin is
+// the only hard error (agents cannot open pull requests without one);
+// missing branch protection or required checks only warn (with the same
+// guidance `lead doctor` prints) so repositories without admin setup can
+// still dispatch.
 func (d *Dispatcher) Preflight(ctx context.Context) error {
 	opts := d.Opts.withDefaults()
 	repoRoot, err := d.Git.RepoRoot(opts.WorkDir)
 	if err != nil {
 		return fmt.Errorf("dispatch: %w", err)
 	}
-	var missing []string
-	if slug := git.RepoSlug(d.Git.OriginURL(repoRoot)); slug == "" {
-		missing = []string{"no GitHub origin remote; agents cannot open pull requests from here"}
-	} else {
-		p, err := doctor.InspectProtection(ctx, d.Gh, slug)
-		if err != nil {
-			return fmt.Errorf("dispatch: preflight: %w", err)
+	slug := git.RepoSlug(d.Git.OriginURL(repoRoot))
+	if slug == "" {
+		return errors.New("dispatch: no GitHub origin remote; agents cannot open pull requests from here")
+	}
+	p, err := doctor.InspectProtection(ctx, d.Gh, slug)
+	if err != nil {
+		return fmt.Errorf("dispatch: preflight: %w", err)
+	}
+	if missing := p.Missing(); len(missing) > 0 && d.Out != nil {
+		fmt.Fprintln(d.Out, "dispatch: WARNING: repository is not fully protected; unattended merges are less safe (see `lead doctor`)")
+		for _, m := range missing {
+			fmt.Fprintln(d.Out, "  - "+m)
 		}
-		missing = p.Missing()
 	}
-	if len(missing) == 0 {
-		return nil
-	}
-	if opts.SkipProtectionCheck {
-		if d.Out != nil {
-			fmt.Fprintln(d.Out, "dispatch: WARNING: repository is not protected; proceeding because of --skip-protection-check")
-			for _, m := range missing {
-				fmt.Fprintln(d.Out, "  - "+m)
-			}
-		}
-		return nil
-	}
-	var b strings.Builder
-	b.WriteString("dispatch: refusing to start unattended agents: the repository would accept their merges unchecked\n")
-	for _, m := range missing {
-		b.WriteString("  - " + m + "\n")
-	}
-	b.WriteString("fix the repository settings (see `lead doctor`), or pass --skip-protection-check to proceed anyway")
-	return errors.New(b.String())
+	return nil
 }
 
 // Once runs a single dispatch pass: reconnect to agents left running by an
