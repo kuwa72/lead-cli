@@ -158,6 +158,7 @@ type Model struct {
 	repoOpenCount     int          // total open issues in repository on GitHub
 	logs              []string     // event log / status history entries
 	logOffset         int          // scroll offset for log view
+	caret             *caretSync   // hardware-cursor target while modeInput renders (issue #160)
 }
 
 // Messages.
@@ -267,6 +268,7 @@ func New(opts Options) Model {
 		agentMode:        opts.AgentMode,
 		issueCreation:    opts.IssueCreation,
 		notifyOff:        opts.NotifyDisabled,
+		caret:            &caretSync{},
 	}
 	if m.agent == "" {
 		m.agent = "agy"
@@ -849,7 +851,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			},
 		}
-		return m, nil
+		return m, tea.ShowCursor
 	}
 
 	row, ok := m.current()
@@ -923,7 +925,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			},
 		}
-		return m, nil
+		return m, tea.ShowCursor
 	case "t":
 		number := it.Number
 		m.mode = modeInput
@@ -944,7 +946,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			},
 		}
-		return m, nil
+		return m, tea.ShowCursor
 	case "o":
 		return m, m.openBrowserCmd(it)
 	case "c":
@@ -1016,7 +1018,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			},
 		}
-		return m, nil
+		return m, tea.ShowCursor
 	}
 	return m, nil
 }
@@ -1241,7 +1243,7 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc, tea.KeyCtrlC:
 		m.mode = modeList
-		return m, m.setStatus("Canceled")
+		return m, tea.Batch(m.setStatus("Canceled"), tea.HideCursor)
 	case tea.KeyEnter:
 		m.mode = modeList
 		text := strings.TrimSpace(string(m.input.text))
@@ -1268,7 +1270,7 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.loading = true
 		}
-		return m, submit(text)
+		return m, tea.Batch(submit(text), tea.HideCursor)
 	case tea.KeyLeft:
 		if m.input.cursor > 0 {
 			m.input.cursor--
@@ -1392,6 +1394,32 @@ func (m Model) renderInputLine() string {
 	return m.input.prompt + before + cur + after
 }
 
+// inputCaretPos returns the 1-based terminal row and column the input caret
+// occupies once the current frame is rendered. rendered is the view content
+// already written above the input line; the renderer drops lines from the
+// top when the frame is taller than the terminal, so the row is measured
+// against the visible tail (issue #160).
+func (m Model) inputCaretPos(rendered string, footerLines int) (row, col int) {
+	row = strings.Count(rendered, "\n") + 1
+	// One more line follows the input line for the footer, plus the empty
+	// last line produced by the trailing newline of the view.
+	if total := row + footerLines + 1; m.height > 0 && total > m.height {
+		row -= total - m.height
+	}
+	cur := m.input.cursor
+	if cur < 0 {
+		cur = 0
+	}
+	if cur > len(m.input.text) {
+		cur = len(m.input.text)
+	}
+	col = 1 + cellWidth(m.input.prompt) + cellWidth(string(m.input.text[:cur]))
+	if m.width > 0 && col > m.width {
+		col = m.width
+	}
+	return row, col
+}
+
 func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch keyString(msg) {
 	case "esc", "q", "enter":
@@ -1437,6 +1465,9 @@ func (m Model) detailPageSize() int {
 
 // View implements tea.Model.
 func (m Model) View() string {
+	if m.mode != modeInput || m.tooSmall() {
+		m.caret.clear()
+	}
 	switch m.mode {
 	case modeDetail:
 		return m.viewDetail()
@@ -1652,6 +1683,8 @@ func (m Model) viewList() string {
 	b.WriteString(m.viewLogPane(w))
 	b.WriteString(m.ruleW(w) + "\n")
 	if m.mode == modeInput {
+		row, col := m.inputCaretPos(b.String(), footerLines)
+		m.caret.set(row, col)
 		b.WriteString(m.renderInputLine() + "\n")
 	} else {
 		b.WriteString(m.statusLine(w) + "\n")
