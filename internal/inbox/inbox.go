@@ -1611,8 +1611,7 @@ func (m Model) viewList() string {
 	b.WriteString(m.ruleW(w) + "\n")
 
 	if m.isSplit() {
-		leftW := (w - 1) * 60 / 100
-		rightW := w - 1 - leftW
+		leftW, rightW := splitPaneWidths(w)
 		cols := m.listColumns(leftW)
 		rightHeader := padRight(m.previewHeader(), rightW-1)
 		if m.theme != nil {

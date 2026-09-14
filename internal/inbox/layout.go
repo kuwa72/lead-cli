@@ -11,11 +11,18 @@ import (
 )
 
 // minWidth/minHeight gate the dashboard layout (docs/rfc-inbox-ui-density.md §2.1).
+// minListW/minPreviewW are the smallest usable widths for the list pane
+// and the preview content column in split mode.
 const (
-	minWidth   = 80
-	minHeight  = 24
-	splitWidth = 120
+	minWidth    = 80
+	minHeight   = 24
+	minListW    = 48
+	minPreviewW = 36
 )
+
+// splitMinW is the smallest terminal width that fits both panes:
+// list minimum + pane border + preview padding + preview minimum.
+const splitMinW = minListW + 1 + 1 + minPreviewW
 
 // screenWidth is the effective terminal width; 0 means "not yet known"
 // (headless / unit tests) and falls back to a plain list width.
@@ -34,7 +41,23 @@ func (m Model) tooSmall() bool {
 
 // isSplit reports whether the terminal is wide enough for the split layout.
 func (m Model) isSplit() bool {
-	return m.width >= splitWidth && (m.height <= 0 || m.height >= minHeight)
+	return m.width >= splitMinW && (m.height <= 0 || m.height >= minHeight)
+}
+
+// splitPaneWidths apportions a terminal of width w between the list pane
+// (leftW) and the preview pane (rightW, including its 1-cell left
+// padding); the pane border takes the remaining cell. The list gets 60%
+// of the pane area, clamped so neither pane shrinks below its minimum.
+func splitPaneWidths(w int) (leftW, rightW int) {
+	avail := w - 1 // pane border
+	leftW = avail * 3 / 5
+	if leftW < minListW {
+		leftW = minListW
+	}
+	if maxLeft := avail - (minPreviewW + 1); leftW > maxLeft {
+		leftW = maxLeft
+	}
+	return leftW, avail - leftW
 }
 
 // bodyHeight is the number of rows reserved for the list/preview body,

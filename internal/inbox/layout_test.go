@@ -54,7 +54,10 @@ func TestLayout_WidthModes(t *testing.T) {
 		split bool
 	}{
 		{80, false},
-		{119, false},
+		{85, false},
+		{86, true},
+		{100, true},
+		{119, true},
 		{120, true},
 		{200, true},
 	}
@@ -182,5 +185,46 @@ func TestLayout_SplitPreview(t *testing.T) {
 	v := m.View()
 	if !strings.Contains(v, "warns on zero") {
 		t.Errorf("split preview should show selected issue body:\n%s", v)
+	}
+}
+
+func TestLayout_NarrowSplitPreview(t *testing.T) {
+	m := newSizedFixture(t, 100, 30)
+	m.detail = ports.Issue{Number: 7, Title: "spec: add warning", Body: "warns on zero", State: "OPEN"}
+	v := m.View()
+	if !strings.Contains(v, "warns on zero") {
+		t.Errorf("width 100 should render the preview pane:\n%s", v)
+	}
+}
+
+func TestLayout_SplitPaneWidths(t *testing.T) {
+	tests := []struct{ w, leftW, rightW int }{
+		{86, 48, 37},
+		{100, 59, 40},
+		{120, 71, 48},
+		{200, 119, 80},
+	}
+	for _, tc := range tests {
+		t.Run(fmt.Sprintf("w%d", tc.w), func(t *testing.T) {
+			leftW, rightW := splitPaneWidths(tc.w)
+			if leftW != tc.leftW || rightW != tc.rightW {
+				t.Errorf("splitPaneWidths(%d) = (%d, %d), want (%d, %d)", tc.w, leftW, rightW, tc.leftW, tc.rightW)
+			}
+		})
+	}
+}
+
+func TestLayout_SplitPaneMinimums(t *testing.T) {
+	for w := splitMinW; w <= 240; w++ {
+		leftW, rightW := splitPaneWidths(w)
+		if leftW < minListW {
+			t.Fatalf("w=%d: list width %d below minimum %d", w, leftW, minListW)
+		}
+		if rightW-1 < minPreviewW {
+			t.Fatalf("w=%d: preview content width %d below minimum %d", w, rightW-1, minPreviewW)
+		}
+		if leftW+1+rightW != w {
+			t.Fatalf("w=%d: panes %d + border + %d do not fill the row", w, leftW, rightW)
+		}
 	}
 }
