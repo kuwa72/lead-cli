@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/testutil"
@@ -304,6 +305,53 @@ func TestSay_RejectsEmptyOneLinerAndConflictingFlags(t *testing.T) {
 	}
 	if len(ag.Calls) != 0 {
 		t.Error("agent ran despite invalid options")
+	}
+}
+
+// issue #204: agy must get --print-timeout (its own 5m default caused
+// "agent printed nothing" failures); Options.Timeout overrides it.
+func TestSay_AgyPrintTimeoutArgv(t *testing.T) {
+	r, _, ag, _ := newRunner(t, `[{"title":"feat: x","body":"b"}]`)
+	r.Opts.Agent = "agy"
+	if _, err := r.Say(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	argv := ag.Calls[0].Argv
+	if argv[0] != "agy" {
+		t.Fatalf("argv = %q", argv)
+	}
+	var timeout string
+	for i, a := range argv {
+		if a == "--print-timeout" && i+1 < len(argv) {
+			timeout = argv[i+1]
+		}
+	}
+	if timeout != "15m0s" {
+		t.Errorf("agy --print-timeout = %q, want default 15m0s: %q", timeout, argv)
+	}
+
+	r2, _, ag2, _ := newRunner(t, `[{"title":"feat: x","body":"b"}]`)
+	r2.Opts.Agent = "agy"
+	r2.Opts.Timeout = 30 * time.Minute
+	if _, err := r2.Say(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	var timeout2 string
+	for i, a := range ag2.Calls[0].Argv {
+		if a == "--print-timeout" && i+1 < len(ag2.Calls[0].Argv) {
+			timeout2 = ag2.Calls[0].Argv[i+1]
+		}
+	}
+	if timeout2 != "30m0s" {
+		t.Errorf("agy --print-timeout = %q, want 30m0s: %q", timeout2, ag2.Calls[0].Argv)
+	}
+}
+
+func TestSay_EmptyOutputHintsPrintTimeout(t *testing.T) {
+	r, _, _, _ := newRunner(t, "")
+	_, err := r.Say(context.Background(), "x")
+	if err == nil || !strings.Contains(err.Error(), "--timeout") || !strings.Contains(err.Error(), "printed nothing") {
+		t.Fatalf("err = %v, want a hint pointing at --timeout/print-timeout", err)
 	}
 }
 

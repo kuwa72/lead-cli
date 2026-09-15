@@ -42,6 +42,10 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
   `--redraft` は `gh issue edit --title --body-file` の後、変更点の要約をコメントする。
 - エージェント選択: `--agent` → `$LEAD_SPEC_AGENT` → 既定（`agy`）。
   `agent.HeadlessArgv` の対応表にある CLI のみ。出力ログは状態ディレクトリの `logs/say-*.log`。
+- タイムアウト: `--timeout` → `$LEAD_SPEC_TIMEOUT` → 既定 15m（issue #204）。
+  agy には `--print-timeout` として渡す（agy 自体の既定は 5m で、超過すると
+  出力が空のまま返り `agent printed nothing` になっていた）。agy 以外の
+  エージェントでは無視される。
 
 ## 2.2 ワークフロープロンプト (`prompter.RenderWorkflowPromptWithOptions`, issue #84, #89)
 

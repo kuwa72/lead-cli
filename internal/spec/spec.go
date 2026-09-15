@@ -48,15 +48,16 @@ type AgentRunner interface {
 
 // Options tunes one Runner.
 type Options struct {
-	Agent      string // spec agent (agents.spec); empty = agent.DefaultAgent
-	Label      string // default needs-review
-	LogDir     string // agent output files; required unless DryRun with a fake
-	WorkDir    string // repository the one-liner is about (AGENTS.md source)
-	Repository string // informational slug/URL for the prompt; "" = local
-	Rules      string // repository rules; "" = read WorkDir/AGENTS.md, else DefaultRules
-	DryRun     bool   // print would-be issues, no gh mutation
-	FollowUp   int    // 実機 NG → 追い Issue: reference this parent issue
-	Redraft    int    // rewrite this issue's body instead of creating
+	Agent      string        // spec agent (agents.spec); empty = agent.DefaultAgent
+	Label      string        // default needs-review
+	LogDir     string        // agent output files; required unless DryRun with a fake
+	WorkDir    string        // repository the one-liner is about (AGENTS.md source)
+	Repository string        // informational slug/URL for the prompt; "" = local
+	Rules      string        // repository rules; "" = read WorkDir/AGENTS.md, else DefaultRules
+	DryRun     bool          // print would-be issues, no gh mutation
+	FollowUp   int           // 実機 NG → 追い Issue: reference this parent issue
+	Redraft    int           // rewrite this issue's body instead of creating
+	Timeout    time.Duration // agent print timeout (agy --print-timeout); <= 0 = agent.DefaultPrintTimeout
 }
 
 func (o Options) withDefaults() (Options, error) {
@@ -142,7 +143,7 @@ func (r *Runner) create(ctx context.Context, opts Options, oneLiner string) (Res
 	}
 	drafts, err := ParseDrafts(out)
 	if err != nil {
-		return res, fmt.Errorf("say: agent output (see %s): %w", logPath, err)
+		return res, outputError(logPath, out, err)
 	}
 	if err := Validate(drafts); err != nil {
 		return res, fmt.Errorf("say: %w", err)
@@ -219,7 +220,7 @@ func (r *Runner) redraft(ctx context.Context, opts Options, oneLiner string) (Re
 	}
 	d, err := ParseDraft(out)
 	if err != nil {
-		return res, fmt.Errorf("say: agent output (see %s): %w", logPath, err)
+		return res, outputError(logPath, out, err)
 	}
 	if err := Validate([]Draft{d}); err != nil {
 		return res, fmt.Errorf("say: %w", err)
@@ -246,7 +247,7 @@ func (r *Runner) redraft(ctx context.Context, opts Options, oneLiner string) (Re
 }
 
 func (r *Runner) runAgent(ctx context.Context, opts Options, prompt string) ([]byte, string, error) {
-	argv, err := agent.HeadlessArgv(opts.Agent, prompt)
+	argv, err := agent.HeadlessArgvWithTimeout(opts.Agent, prompt, opts.Timeout)
 	if err != nil {
 		return nil, "", fmt.Errorf("say: %w", err)
 	}
@@ -256,6 +257,15 @@ func (r *Runner) runAgent(ctx context.Context, opts Options, prompt string) ([]b
 		return nil, logPath, fmt.Errorf("say: agent %s failed (log: %s): %w", opts.Agent, logPath, err)
 	}
 	return out, logPath, nil
+}
+
+// outputError wraps a parse failure; empty output points at the agent's
+// print timeout (issue #204: agy's 5m default silently truncated turns).
+func outputError(logPath string, out []byte, err error) error {
+	if len(bytes.TrimSpace(out)) == 0 {
+		return fmt.Errorf("say: agent printed nothing (see %s) — the agent may have hit its print timeout; raise it with `lead say --timeout` or LEAD_SPEC_TIMEOUT: %w", logPath, err)
+	}
+	return fmt.Errorf("say: agent output (see %s): %w", logPath, err)
 }
 
 func (r *Runner) printf(format string, args ...any) {

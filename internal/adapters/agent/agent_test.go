@@ -46,6 +46,9 @@ func TestLaunch_BatchMode(t *testing.T) {
 	if !strings.Contains(log, "<-p>") {
 		t.Errorf("agy batch argv missing -p, got:\n%s", log)
 	}
+	if !strings.Contains(log, "<--print-timeout>") || !strings.Contains(log, "<15m0s>") {
+		t.Errorf("agy batch argv missing --print-timeout 15m0s, got:\n%s", log)
+	}
 }
 
 func TestLaunch_OtherAgentUsesPositionalPrompt(t *testing.T) {
@@ -143,8 +146,8 @@ func TestCommandStringForMode(t *testing.T) {
 		wantErr bool
 	}{
 		{"agy", "interactive", `agy -i "hello"`, false},
-		{"agy", "batch", `agy --dangerously-skip-permissions -p "hello"`, false},
-		{"agy", "dangerous", `agy --dangerously-skip-permissions -p "hello"`, false},
+		{"agy", "batch", `agy --dangerously-skip-permissions -p --print-timeout 15m0s "hello"`, false},
+		{"agy", "dangerous", `agy --dangerously-skip-permissions -p --print-timeout 15m0s "hello"`, false},
 		{"claude", "batch", `claude -p --dangerously-skip-permissions "hello"`, false},
 		{"codex", "batch", `codex exec --dangerously-bypass-approvals-and-sandbox "hello"`, false},
 		{"gemini", "batch", `gemini -y "hello"`, false},
@@ -178,7 +181,7 @@ func TestArgvForMode(t *testing.T) {
 		wantErr bool
 	}{
 		{"agy", "interactive", []string{"-i", "hello"}, false},
-		{"agy", "batch", []string{"--dangerously-skip-permissions", "-p", "hello"}, false},
+		{"agy", "batch", []string{"--dangerously-skip-permissions", "-p", "--print-timeout", "15m0s", "hello"}, false},
 		{"claude", "batch", []string{"-p", "--dangerously-skip-permissions", "hello"}, false},
 		{"codex", "batch", []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "hello"}, false},
 		{"gemini", "batch", []string{"-y", "hello"}, false},
@@ -258,4 +261,3 @@ func TestLaunchInDir_AllKnownAgents(t *testing.T) {
 		}
 	}
 }
-
