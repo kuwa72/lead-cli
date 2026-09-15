@@ -66,7 +66,13 @@ printf '<%s>\n' "$@" >> "$AGENT_LOG"
 printf 'CWD=%s\n' "$(pwd)" >> "$AGENT_LOG"
 cat "$AGENT_OUT"
 EOF
-chmod +x "$tmp/bin/gh" "$tmp/bin/claude"
+# Dummy agy: same argv recorder (issue #204 verifies --print-timeout reaches it).
+cat > "$tmp/bin/agy" <<'EOF'
+#!/bin/sh
+printf '<%s>\n' "$@" >> "$AGENT_LOG"
+cat "$AGENT_OUT"
+EOF
+chmod +x "$tmp/bin/gh" "$tmp/bin/claude" "$tmp/bin/agy"
 export PATH="$tmp/bin:$PATH"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
@@ -134,7 +140,22 @@ echo 'I refuse.' > "$AGENT_OUT"
 if (cd "$repo" && "$tmp/lead" say "x" --agent claude >/dev/null 2>&1); then fail "invalid agent output accepted"; fi
 [ -s "$GH_LOG" ] && fail "gh called despite invalid agent output"
 
-# --- 6. help ---------------------------------------------------------------------
+# --- 6. agy gets --print-timeout over its 5m default; --timeout/env override ---
+: > "$AGENT_LOG"
+echo '[{"title":"feat: t","body":"b"}]' > "$AGENT_OUT"
+(cd "$repo" && "$tmp/lead" say "x" --agent agy --dry-run >/dev/null 2>&1) || fail "agy say exited non-zero"
+grep -qxF '<--print-timeout>' "$AGENT_LOG" || fail "agy argv missing --print-timeout: $(cat "$AGENT_LOG")"
+grep -qxF '<15m0s>' "$AGENT_LOG" || fail "agy argv missing default 15m0s: $(cat "$AGENT_LOG")"
+
+: > "$AGENT_LOG"
+(cd "$repo" && "$tmp/lead" say "x" --agent agy --timeout 42m --dry-run >/dev/null 2>&1) || fail "--timeout say exited non-zero"
+grep -qxF '<42m0s>' "$AGENT_LOG" || fail "--timeout 42m not passed to agy: $(cat "$AGENT_LOG")"
+
+: > "$AGENT_LOG"
+(cd "$repo" && LEAD_SPEC_TIMEOUT=25m "$tmp/lead" say "x" --agent agy --dry-run >/dev/null 2>&1) || fail "env-timeout say exited non-zero"
+grep -qxF '<25m0s>' "$AGENT_LOG" || fail "LEAD_SPEC_TIMEOUT=25m not passed to agy: $(cat "$AGENT_LOG")"
+
+# --- 7. help ---------------------------------------------------------------------
 "$tmp/lead" say --help | grep -q -- '--follow-up' || fail "say --help lacks --follow-up"
 "$tmp/lead" --help | grep -q 'say' || fail "root help lacks say"
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // Flags below were confirmed against each CLI's `--help` on 2026-09-08
@@ -16,8 +17,8 @@ func TestHeadlessArgv_MapsVerifiedFlags(t *testing.T) {
 	}{
 		{"claude", []string{"claude", "-p", "--dangerously-skip-permissions", p}},
 		{"codex", []string{"codex", "exec", "--dangerously-bypass-approvals-and-sandbox", p}},
-		{"agy", []string{"agy", "--dangerously-skip-permissions", "-p", p}},
-		{"", []string{"agy", "--dangerously-skip-permissions", "-p", p}},
+		{"agy", []string{"agy", "--dangerously-skip-permissions", "-p", "--print-timeout", "15m0s", p}},
+		{"", []string{"agy", "--dangerously-skip-permissions", "-p", "--print-timeout", "15m0s", p}},
 		{"gemini", []string{"gemini", "-y", p}},
 		{"opencode", []string{"opencode", "run", "--auto", p}},
 		{"devin", []string{"devin", "--permission-mode", "dangerous", "-p", p}},
@@ -31,6 +32,57 @@ func TestHeadlessArgv_MapsVerifiedFlags(t *testing.T) {
 			t.Errorf("%q: argv = %q, want %q", c.agent, got, c.want)
 		}
 	}
+}
+
+// issue #204: agy's own --print-timeout default is 5m, too short for headless
+// spec drafting; lead passes a longer one, overridable per call.
+func TestHeadlessArgv_AgyPrintTimeout(t *testing.T) {
+	argv, err := HeadlessArgv("agy", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeout := argvValue(argv, "--print-timeout")
+	if timeout == "" {
+		t.Fatalf("agy argv missing --print-timeout: %q", argv)
+	}
+	d, err := time.ParseDuration(timeout)
+	if err != nil || d <= 5*time.Minute {
+		t.Errorf("--print-timeout = %q, want a duration over agy's 5m default", timeout)
+	}
+}
+
+func TestHeadlessArgvWithTimeout(t *testing.T) {
+	argv, err := HeadlessArgvWithTimeout("agy", "p", 42*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := argvValue(argv, "--print-timeout"); got != "42m0s" {
+		t.Errorf("--print-timeout = %q, want 42m0s: %q", got, argv)
+	}
+	// Non-positive falls back to the default; non-agy agents ignore it.
+	argv, err = HeadlessArgvWithTimeout("agy", "p", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := argvValue(argv, "--print-timeout"); got != "15m0s" {
+		t.Errorf("zero timeout = %q, want default 15m0s", got)
+	}
+	argv, err = HeadlessArgvWithTimeout("claude", "p", 42*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := argvValue(argv, "--print-timeout"); got != "" {
+		t.Errorf("claude argv unexpectedly has --print-timeout %q: %q", got, argv)
+	}
+}
+
+func argvValue(argv []string, flag string) string {
+	for i, a := range argv {
+		if a == flag && i+1 < len(argv) {
+			return argv[i+1]
+		}
+	}
+	return ""
 }
 
 func TestHeadlessArgv_UnsupportedAgents(t *testing.T) {

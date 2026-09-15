@@ -100,6 +100,54 @@ func TestSay_AgentFromEnvWhenFlagAbsent(t *testing.T) {
 	}
 }
 
+// issue #204: --timeout / LEAD_SPEC_TIMEOUT reach agy as --print-timeout.
+func TestSay_TimeoutFlagAndEnvReachAgy(t *testing.T) {
+	argvHasTimeout := func(argv []string, want string) bool {
+		for i, a := range argv {
+			if a == "--print-timeout" && i+1 < len(argv) {
+				return argv[i+1] == want
+			}
+		}
+		return false
+	}
+
+	fake := &testutil.FakeGhClient{}
+	ag := &recordingSpecAgent{Output: `[{"title":"t","body":"b"}]`}
+	deps := Deps{Gh: fake, SpecAgent: ag, StateFile: filepath.Join(t.TempDir(), "w.json"), WorkDir: t.TempDir()}
+	if _, err := executeSay(t, deps, "x", "--agent", "agy", "--timeout", "42m", "--dry-run"); err != nil {
+		t.Fatal(err)
+	}
+	if !argvHasTimeout(ag.Argv[0], "42m0s") {
+		t.Errorf("--timeout 42m argv = %q", ag.Argv[0])
+	}
+
+	t.Setenv("LEAD_SPEC_TIMEOUT", "25m")
+	ag2 := &recordingSpecAgent{Output: `[{"title":"t","body":"b"}]`}
+	deps2 := Deps{Gh: fake, SpecAgent: ag2, StateFile: filepath.Join(t.TempDir(), "w.json"), WorkDir: t.TempDir()}
+	if _, err := executeSay(t, deps2, "x", "--agent", "agy", "--dry-run"); err != nil {
+		t.Fatal(err)
+	}
+	if !argvHasTimeout(ag2.Argv[0], "25m0s") {
+		t.Errorf("LEAD_SPEC_TIMEOUT argv = %q", ag2.Argv[0])
+	}
+
+	// Flag beats env.
+	ag3 := &recordingSpecAgent{Output: `[{"title":"t","body":"b"}]`}
+	deps3 := Deps{Gh: fake, SpecAgent: ag3, StateFile: filepath.Join(t.TempDir(), "w.json"), WorkDir: t.TempDir()}
+	if _, err := executeSay(t, deps3, "x", "--agent", "agy", "--timeout", "10m", "--dry-run"); err != nil {
+		t.Fatal(err)
+	}
+	if !argvHasTimeout(ag3.Argv[0], "10m0s") {
+		t.Errorf("flag-over-env argv = %q", ag3.Argv[0])
+	}
+
+	// Invalid env value is an error, not silently ignored.
+	t.Setenv("LEAD_SPEC_TIMEOUT", "soon")
+	if _, err := executeSay(t, deps3, "x", "--agent", "agy", "--dry-run"); err == nil {
+		t.Error("invalid LEAD_SPEC_TIMEOUT accepted")
+	}
+}
+
 func TestSay_FollowUpAndRedraftFlagsReachRunner(t *testing.T) {
 	fake := &testutil.FakeGhClient{Issues: map[int]ports.Issue{42: {Number: 42, Title: "parent", Body: "p"}}}
 	ag := &recordingSpecAgent{Output: `[{"title":"fix: child","body":"no ref"}]`}

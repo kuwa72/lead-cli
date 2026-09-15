@@ -377,13 +377,15 @@ cross-reference each other). --redraft <n> rewrites issue n's body instead
 and posts a comment describing the change. --dry-run prints the would-be
 issues and touches nothing on GitHub. The agent's output is logged under
 the state directory (logs/say-*.log). Agent: --agent, else $LEAD_SPEC_AGENT,
-else agy.`,
+else agy. Print timeout: --timeout, else $LEAD_SPEC_TIMEOUT, else 15m
+(passed to agy as --print-timeout; its own default is 5m).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSay(cmd, deps, args[0])
 		},
 	}
 	sayCmd.Flags().String("agent", "", "headless spec agent (default: $LEAD_SPEC_AGENT, then agy)")
+	sayCmd.Flags().Duration("timeout", 0, "spec agent print timeout (default: $LEAD_SPEC_TIMEOUT, then 15m; agy only)")
 	sayCmd.Flags().Bool("dry-run", false, "print the would-be issues; no gh mutation")
 	sayCmd.Flags().Int("follow-up", 0, "file follow-up issue(s) for issue <n> (実機 NG); body references #<n>")
 	sayCmd.Flags().Int("redraft", 0, "rewrite issue <n>'s title/body from the one-liner and comment the change")
@@ -796,6 +798,16 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 	dryRun, _ := flags.GetBool("dry-run")
 	followUp, _ := flags.GetInt("follow-up")
 	redraft, _ := flags.GetInt("redraft")
+	timeout, _ := flags.GetDuration("timeout")
+	if timeout <= 0 {
+		if env := os.Getenv("LEAD_SPEC_TIMEOUT"); env != "" {
+			d, err := time.ParseDuration(env)
+			if err != nil {
+				return fmt.Errorf("say: LEAD_SPEC_TIMEOUT: %w", err)
+			}
+			timeout = d
+		}
+	}
 
 	cwd, err := deps.workDir()
 	if err != nil {
@@ -814,6 +826,7 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 			DryRun:     dryRun,
 			FollowUp:   followUp,
 			Redraft:    redraft,
+			Timeout:    timeout,
 		},
 	}
 	_, err = r.Say(cmd.Context(), oneLiner)
