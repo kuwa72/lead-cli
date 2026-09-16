@@ -1,11 +1,12 @@
 // Package dispatch hands `ready` issues to headless coding agents
 // (docs/rfc-inbox-ux.md §7, issue #93 Part A).
 //
-// One pass (Once): list open issues labelled ready, skip ones the local
-// state marks blocked, take up to Parallel, and for each: create/reuse an
-// isolated worktree (workflow.Start), launch the agent non-interactively
-// in that directory with its output going to a log file, wait, then check
-// GitHub. A closed issue means the agent finished the whole loop
+// One pass (Once): list open issues labelled ready, defer ones with open
+// issue dependencies, order the rest by their parent issue's sub-issue
+// list (issue #207), skip ones the local state marks blocked, take up to
+// Parallel, and for each: create/reuse an isolated worktree
+// (workflow.Start), launch the agent non-interactively in that directory
+// with its output going to a log file, wait, then check GitHub. A closed issue means the agent finished the whole loop
 // (PR → CI → merge → close): the worktree and state record are removed.
 // Anything else counts as a failed attempt; MaxAttempts failures swap the
 // ready label for blocked and post the cause to the issue so the inbox
@@ -21,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -136,6 +138,10 @@ type Running struct {
 type Report struct {
 	Results []Result
 	Running []Running
+	// Deferred lists ready issues skipped because an open issue dependency
+	// (blocked-by) is not yet closed (issue #207). They stay ready and are
+	// re-evaluated on the next pass.
+	Deferred []int
 }
 
 // Dispatcher wires the ports together. Store access is serialized with mu
@@ -213,8 +219,9 @@ func (d *Dispatcher) Once(ctx context.Context) (Report, error) {
 	if err != nil {
 		return Report{}, fmt.Errorf("dispatch: list %s issues: %w", opts.ReadyLabel, err)
 	}
+	ordered := d.orderReady(ctx, ready)
 	var picks []int
-	for _, s := range ready {
+	for _, s := range ordered {
 		if skip[s.Number] {
 			continue
 		}
@@ -227,6 +234,11 @@ func (d *Dispatcher) Once(ctx context.Context) (Report, error) {
 		}
 		picks = append(picks, s.Number)
 	}
+	for _, s := range ready {
+		if hasOpenBlocker(s) && !skip[s.Number] {
+			rep.Deferred = append(rep.Deferred, s.Number)
+		}
+	}
 	rep.Results = append(rep.Results, d.runPool(ctx, opts, picks, opts.Parallel-len(running))...)
 	if ctx.Err() == nil {
 		d.print(rep)
@@ -238,7 +250,8 @@ func (d *Dispatcher) Once(ctx context.Context) (Report, error) {
 // notifyResults reports blocked issues and the all-done milestone
 // (issue #189). Best-effort: notification failures never fail the pass.
 // All-done fires only when the pass settled something and nothing remains
-// running or queued, so idle passes (including the first one) stay silent.
+// running, queued, or deferred, so idle passes (including the first one)
+// stay silent.
 func (d *Dispatcher) notifyResults(rep Report) {
 	if d.Notify == nil {
 		return
@@ -248,7 +261,7 @@ func (d *Dispatcher) notifyResults(rep Report) {
 			_ = d.Notify.Notify(fmt.Sprintf("lead: #%d blocked", r.Issue), r.Err.Error())
 		}
 	}
-	if len(rep.Results) == 0 || len(rep.Running) != 0 {
+	if len(rep.Results) == 0 || len(rep.Running) != 0 || len(rep.Deferred) != 0 {
 		return
 	}
 	completed, blocked := 0, 0
@@ -263,6 +276,70 @@ func (d *Dispatcher) notifyResults(rep Report) {
 		}
 	}
 	_ = d.Notify.Notify("lead: all done", fmt.Sprintf("%d completed, %d blocked", completed, blocked))
+}
+
+// orderReady gates and orders the ready queue (issue #207). Issues with an
+// open issue dependency (blocked-by) are dropped — they stay `ready` on
+// GitHub and are re-evaluated next pass. The rest is sorted by position in
+// its parent issue's sub-issue list (the tracking issue's order, e.g.
+// docs/roadmap.md's #50); parent groups run in parent-number order, and
+// untracked issues (no parent, closed parent, or failed sub-issues lookup)
+// run last in updatedAt order.
+func (d *Dispatcher) orderReady(ctx context.Context, ready []ports.IssueSummary) []ports.IssueSummary {
+	var eligible []ports.IssueSummary
+	parents := map[int]bool{}
+	for _, s := range ready {
+		if hasOpenBlocker(s) {
+			continue
+		}
+		eligible = append(eligible, s)
+		if s.Parent > 0 {
+			parents[s.Parent] = true
+		}
+	}
+	if len(eligible) == 0 {
+		return eligible
+	}
+	rank := map[int]int{}
+	for p := range parents {
+		sub, err := d.Gh.SubIssues(ctx, p)
+		if err != nil || strings.EqualFold(sub.State, "CLOSED") {
+			continue // no ordering signal: the group falls back to untracked
+		}
+		for i, n := range sub.Numbers {
+			rank[n] = i
+		}
+	}
+	sort.SliceStable(eligible, func(i, j int) bool {
+		a, b := eligible[i], eligible[j]
+		ra, aok := rank[a.Number]
+		rb, bok := rank[b.Number]
+		if aok != bok {
+			return aok // tracked before untracked
+		}
+		if aok {
+			if a.Parent != b.Parent {
+				return a.Parent < b.Parent
+			}
+			return ra < rb
+		}
+		if !a.UpdatedAt.Equal(b.UpdatedAt) {
+			return a.UpdatedAt.Before(b.UpdatedAt)
+		}
+		return a.Number < b.Number
+	})
+	return eligible
+}
+
+// hasOpenBlocker reports whether s has a dependency blocker that is still
+// open on GitHub.
+func hasOpenBlocker(s ports.IssueSummary) bool {
+	for _, dep := range s.BlockedBy {
+		if strings.EqualFold(dep.State, "OPEN") {
+			return true
+		}
+	}
+	return false
 }
 
 // runPool starts picks through slots workers: the next issue starts as soon
@@ -674,8 +751,11 @@ func (d *Dispatcher) print(rep Report) {
 	for _, r := range rep.Running {
 		fmt.Fprintf(d.Out, "#%d running (pid %d, reconnected)\n", r.Issue, r.PID)
 	}
+	for _, n := range rep.Deferred {
+		fmt.Fprintf(d.Out, "#%d deferred (open dependencies)\n", n)
+	}
 	if len(rep.Results) == 0 {
-		if len(rep.Running) == 0 {
+		if len(rep.Running) == 0 && len(rep.Deferred) == 0 {
 			fmt.Fprintln(d.Out, "dispatch: no ready issues")
 		}
 		return

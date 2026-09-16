@@ -256,13 +256,14 @@ func (c *Client) IssueComment(ctx context.Context, number int, body string) erro
 	return err
 }
 
-// ListByLabel runs `gh issue list --state open --label <l> --limit <limit> --json number,title,updatedAt`.
+// ListByLabel runs `gh issue list --state open --label <l> --limit <limit>
+// --json number,title,updatedAt,parent,blockedBy` (issue #207).
 func (c *Client) ListByLabel(ctx context.Context, label string) ([]ports.IssueSummary, error) {
 	out, err := c.run(ctx, "issue", "list",
 		"--state", "open",
 		"--label", label,
 		"--limit", strconv.Itoa(c.limit()),
-		"--json", "number,title,updatedAt")
+		"--json", "number,title,updatedAt,parent,blockedBy")
 	if err != nil {
 		return nil, err
 	}
@@ -270,15 +271,56 @@ func (c *Client) ListByLabel(ctx context.Context, label string) ([]ports.IssueSu
 		Number    int       `json:"number"`
 		Title     string    `json:"title"`
 		UpdatedAt time.Time `json:"updatedAt"`
+		Parent    *struct {
+			Number int `json:"number"`
+		} `json:"parent"`
+		BlockedBy struct {
+			Nodes []struct {
+				Number int    `json:"number"`
+				State  string `json:"state"`
+			} `json:"nodes"`
+		} `json:"blockedBy"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
 		return nil, fmt.Errorf("gh issue list --label %s: decode JSON: %w", label, err)
 	}
 	summaries := make([]ports.IssueSummary, len(raw))
 	for i, r := range raw {
-		summaries[i] = ports.IssueSummary{Number: r.Number, Title: r.Title, UpdatedAt: r.UpdatedAt}
+		s := ports.IssueSummary{Number: r.Number, Title: r.Title, UpdatedAt: r.UpdatedAt}
+		if r.Parent != nil {
+			s.Parent = r.Parent.Number
+		}
+		for _, n := range r.BlockedBy.Nodes {
+			s.BlockedBy = append(s.BlockedBy, ports.IssueDependency{Number: n.Number, State: n.State})
+		}
+		summaries[i] = s
 	}
 	return summaries, nil
+}
+
+// SubIssues runs `gh issue view <n> --json state,subIssues` (issue #207).
+func (c *Client) SubIssues(ctx context.Context, number int) (ports.SubIssueList, error) {
+	out, err := c.run(ctx, "issue", "view", strconv.Itoa(number),
+		"--json", "state,subIssues")
+	if err != nil {
+		return ports.SubIssueList{}, err
+	}
+	var raw struct {
+		State     string `json:"state"`
+		SubIssues struct {
+			Nodes []struct {
+				Number int `json:"number"`
+			} `json:"nodes"`
+		} `json:"subIssues"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return ports.SubIssueList{}, fmt.Errorf("gh issue view %d subIssues: decode JSON: %w", number, err)
+	}
+	list := ports.SubIssueList{State: raw.State}
+	for _, n := range raw.SubIssues.Nodes {
+		list.Numbers = append(list.Numbers, n.Number)
+	}
+	return list, nil
 }
 
 // ListMergedSince runs `gh issue list --state closed --json number,title,closedAt --limit <limit>`

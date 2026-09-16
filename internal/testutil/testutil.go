@@ -152,6 +152,12 @@ type FakeGhClient struct {
 	LabelListCalls []string
 	LabelErr       error
 
+	// SubIssueLists feeds SubIssues: parent issue → ordered children
+	// (issue #207). SubIssuesErr fails every call.
+	SubIssueLists  map[int]ports.SubIssueList
+	SubIssuesErr   error
+	SubIssuesCalls []int
+
 	// Merged feeds ListMergedSince.
 	Merged       []ports.MergedIssue
 	MergedErr    error
@@ -270,6 +276,15 @@ func (f *FakeGhClient) ListByLabel(ctx context.Context, label string) ([]ports.I
 		return nil, f.LabelListErr
 	}
 	return f.Labeled[label], nil
+}
+
+// SubIssues returns SubIssueLists[number] (or SubIssuesErr) and records the call.
+func (f *FakeGhClient) SubIssues(ctx context.Context, number int) (ports.SubIssueList, error) {
+	f.SubIssuesCalls = append(f.SubIssuesCalls, number)
+	if f.SubIssuesErr != nil {
+		return ports.SubIssueList{}, f.SubIssuesErr
+	}
+	return f.SubIssueLists[number], nil
 }
 
 // ListMergedSince returns Merged (or MergedErr) and records the call.

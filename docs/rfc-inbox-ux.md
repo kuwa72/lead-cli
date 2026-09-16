@@ -123,7 +123,8 @@ lead status / finish / clean                       # 現行どおり（RFC-25）
 ## 7. ディスパッチャ
 
 - 受信箱が開いている間だけ動く。`ready` ラベルの open Issue を定期ポーリング
-- 並列上限 N（既定 2）。空きがあれば古い順に 1 件取り、worktree を払い出し、`agents.impl` で指定された実装 AI をヘッドレスモードで起動
+- 着手順は GitHub 上の関係で決まる（#207）: open な blocked-by 依存を持つ Issue は依存が解消されるまで後回し（deferred、blocked ラベルは付かない）。残りは親（トラッキング）Issue の sub-issues 順。親を持たない Issue は最後に updatedAt 昇順
+- 並列上限 N（既定 2）。空きがあればキュー先頭から 1 件取り、worktree を払い出し、`agents.impl` で指定された実装 AI をヘッドレスモードで起動
 - 受信箱を閉じても起動済みのエージェントは殺さない。再度開いたとき `workflows.json` から実行中を再接続する
 - 起動プロンプト = Issue 番号・タイトル・本文・受入条件 ＋ AGENTS.md の管理ブロック ＋ 完了定義（PR merge・Issue close まで）
 - 各エージェント CLI のヘッドレス／自走フラグへのマッピング層を持つ（#83）。**フラグは実機の `--help` で確認し推測で組み立てない**（AGENTS.md テスト品質ルール 2）

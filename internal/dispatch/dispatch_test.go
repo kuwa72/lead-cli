@@ -951,3 +951,193 @@ func TestOnce_RetryDoesNotNotifyAllDone(t *testing.T) {
 		}
 	}
 }
+
+// queueFixture builds a dispatcher whose ready list is given verbatim so
+// tests control Parent/BlockedBy/UpdatedAt. Parallel=1 keeps launch order
+// deterministic; OnWait closes every issue so passes settle.
+func queueFixture(t *testing.T, ready ...ports.IssueSummary) (*Dispatcher, *testutil.FakeGhClient, *fakeLauncher) {
+	t.Helper()
+	root := t.TempDir()
+	gh := &testutil.FakeGhClient{Issues: map[int]ports.Issue{}, Labeled: map[string][]ports.IssueSummary{"ready": ready}}
+	for _, s := range ready {
+		gh.Issues[s.Number] = ports.Issue{Number: s.Number, Title: "dispatch me", Body: "body", State: "OPEN"}
+	}
+	l := &fakeLauncher{}
+	l.OnWait = func(c launchCall) error {
+		n := issueOf(c)
+		iss := gh.Issues[n]
+		iss.State = "CLOSED"
+		gh.Issues[n] = iss
+		return nil
+	}
+	d := &Dispatcher{
+		Gh: gh, Git: &fakeGit{root: root, origin: "github.com/o/r"}, Launcher: l,
+		Store: &state.Store{Path: filepath.Join(t.TempDir(), "workflows.json")},
+		Opts:  Options{Parallel: 1, Agent: "claude", LogDir: filepath.Join(t.TempDir(), "logs"), WorkDir: root},
+	}
+	return d, gh, l
+}
+
+func launchedOrder(l *fakeLauncher) []int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []int
+	for _, c := range l.Calls {
+		out = append(out, issueOf(c))
+	}
+	return out
+}
+
+// Issue #207: dispatch order follows the parent (tracking) issue's
+// sub-issue order, not `gh issue list` order.
+func TestOnce_SubIssueOrderControlsLaunchOrder(t *testing.T) {
+	base := time.Now()
+	d, gh, l := queueFixture(t,
+		ports.IssueSummary{Number: 3, Parent: 50, UpdatedAt: base},
+		ports.IssueSummary{Number: 1, Parent: 50, UpdatedAt: base.Add(time.Hour)},
+		ports.IssueSummary{Number: 2, Parent: 50, UpdatedAt: base.Add(2 * time.Hour)},
+	)
+	gh.SubIssueLists = map[int]ports.SubIssueList{
+		50: {State: "OPEN", Numbers: []int{1, 2, 3}},
+	}
+
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if got, want := launchedOrder(l), []int{1, 2, 3}; !reflect.DeepEqual(got, want) {
+		t.Errorf("launch order = %v, want %v", got, want)
+	}
+	if !reflect.DeepEqual(gh.SubIssuesCalls, []int{50}) {
+		t.Errorf("SubIssues calls = %v, want [50]", gh.SubIssuesCalls)
+	}
+}
+
+// An open blocker defers a ready issue without labelling it; it dispatches
+// once the blocker is closed.
+func TestOnce_OpenBlockerDefersIssue(t *testing.T) {
+	d, gh, l := queueFixture(t,
+		ports.IssueSummary{Number: 8, BlockedBy: []ports.IssueDependency{{Number: 35, State: "OPEN"}}},
+		ports.IssueSummary{Number: 9},
+	)
+
+	rep, err := d.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if got, want := launchedOrder(l), []int{9}; !reflect.DeepEqual(got, want) {
+		t.Errorf("launch order = %v, want %v (#8 must be deferred)", got, want)
+	}
+	if !reflect.DeepEqual(rep.Deferred, []int{8}) {
+		t.Errorf("deferred = %v, want [8]", rep.Deferred)
+	}
+
+	// #9 closed in pass 1, so a real `--state open` listing drops it.
+	gh.Labeled["ready"] = []ports.IssueSummary{
+		{Number: 8, BlockedBy: []ports.IssueDependency{{Number: 35, State: "CLOSED"}}},
+	}
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once #2: %v", err)
+	}
+	if got, want := launchedOrder(l), []int{9, 8}; !reflect.DeepEqual(got, want) {
+		t.Errorf("launch order after unblock = %v, want %v", got, want)
+	}
+}
+
+// Untracked ready issues run after every tracked group.
+func TestOnce_UntrackedIssueRunsAfterTracked(t *testing.T) {
+	base := time.Now()
+	d, gh, l := queueFixture(t,
+		ports.IssueSummary{Number: 9, UpdatedAt: base}, // no parent
+		ports.IssueSummary{Number: 2, Parent: 50, UpdatedAt: base.Add(2 * time.Hour)},
+		ports.IssueSummary{Number: 1, Parent: 50, UpdatedAt: base.Add(time.Hour)},
+	)
+	gh.SubIssueLists = map[int]ports.SubIssueList{
+		50: {State: "OPEN", Numbers: []int{1, 2}},
+	}
+
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if got, want := launchedOrder(l), []int{1, 2, 9}; !reflect.DeepEqual(got, want) {
+		t.Errorf("launch order = %v, want %v", got, want)
+	}
+}
+
+// A closed tracking issue no longer orders its sub-issues; they fall back
+// to updatedAt order among the untracked.
+func TestOnce_ClosedParentDoesNotOrder(t *testing.T) {
+	base := time.Now()
+	d, gh, l := queueFixture(t,
+		ports.IssueSummary{Number: 2, Parent: 50, UpdatedAt: base.Add(2 * time.Hour)},
+		ports.IssueSummary{Number: 1, Parent: 50, UpdatedAt: base.Add(time.Hour)},
+	)
+	gh.SubIssueLists = map[int]ports.SubIssueList{
+		50: {State: "CLOSED", Numbers: []int{2, 1}},
+	}
+
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if got, want := launchedOrder(l), []int{1, 2}; !reflect.DeepEqual(got, want) {
+		t.Errorf("launch order = %v, want %v (updatedAt order)", got, want)
+	}
+}
+
+// Mixed parents are dispatched as whole groups in parent-number order.
+func TestOnce_MultipleParentsGroupByParentNumber(t *testing.T) {
+	d, gh, l := queueFixture(t,
+		ports.IssueSummary{Number: 6, Parent: 60},
+		ports.IssueSummary{Number: 1, Parent: 50},
+		ports.IssueSummary{Number: 5, Parent: 60},
+		ports.IssueSummary{Number: 2, Parent: 50},
+	)
+	gh.SubIssueLists = map[int]ports.SubIssueList{
+		50: {State: "OPEN", Numbers: []int{1, 2}},
+		60: {State: "OPEN", Numbers: []int{5, 6}},
+	}
+
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if got, want := launchedOrder(l), []int{1, 2, 5, 6}; !reflect.DeepEqual(got, want) {
+		t.Errorf("launch order = %v, want %v", got, want)
+	}
+}
+
+// A SubIssues lookup failure must not stall the pass: the affected group
+// falls back to untracked ordering.
+func TestOnce_SubIssuesErrorFallsBack(t *testing.T) {
+	base := time.Now()
+	d, gh, l := queueFixture(t,
+		ports.IssueSummary{Number: 2, Parent: 50, UpdatedAt: base.Add(2 * time.Hour)},
+		ports.IssueSummary{Number: 1, Parent: 50, UpdatedAt: base.Add(time.Hour)},
+	)
+	gh.SubIssuesErr = errors.New("gh api down")
+
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if got, want := launchedOrder(l), []int{1, 2}; !reflect.DeepEqual(got, want) {
+		t.Errorf("launch order = %v, want %v (updatedAt order)", got, want)
+	}
+}
+
+// Deferred issues are still pending work, so they suppress the all-done
+// notification even when everything dispatched completed.
+func TestOnce_DeferredDoesNotNotifyAllDone(t *testing.T) {
+	d, gh, _ := queueFixture(t,
+		ports.IssueSummary{Number: 8, BlockedBy: []ports.IssueDependency{{Number: 35, State: "OPEN"}}},
+		ports.IssueSummary{Number: 9},
+	)
+	n := &fakeNotifier{}
+	d.Notify = n
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	for _, title := range n.titles() {
+		if strings.Contains(strings.ToLower(title), "all done") {
+			t.Errorf("deferred pass must not report all done: %v", n.titles())
+		}
+	}
+	_ = gh
+}
