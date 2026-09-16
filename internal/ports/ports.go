@@ -14,6 +14,24 @@ type IssueSummary struct {
 	Number    int       `json:"number"`
 	Title     string    `json:"title"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Parent is the tracking/parent issue number (gh `parent`); 0 = none.
+	Parent int `json:"-"`
+	// BlockedBy lists this issue's dependency blockers (gh `blockedBy`);
+	// open entries defer dispatch (issue #207).
+	BlockedBy []IssueDependency `json:"-"`
+}
+
+// IssueDependency is one node of gh's blockedBy/blocking JSON.
+type IssueDependency struct {
+	Number int
+	State  string // OPEN / CLOSED
+}
+
+// SubIssueList is a parent issue's ordered sub-issues plus its own state
+// (dispatch ordering, issue #207).
+type SubIssueList struct {
+	State   string
+	Numbers []int // sub-issue numbers in display order
 }
 
 // MergedIssue is a recently merged/closed issue with its resolution time.
@@ -64,9 +82,13 @@ type GhClient interface {
 	LatestReleaseTag(ctx context.Context, repo string) (string, error)
 	// BrowseIssue mirrors `gh issue view <n> --web`.
 	BrowseIssue(ctx context.Context, number int) error
-	// ListByLabel mirrors `gh issue list --state open --label <l> --json number,title,updatedAt`
-	// (dispatch queue: docs/rfc-inbox-ux.md §7).
+	// ListByLabel mirrors `gh issue list --state open --label <l> --json number,title,updatedAt,parent,blockedBy`
+	// (dispatch queue: docs/rfc-inbox-ux.md §7; parent/blockedBy drive ordering, issue #207).
 	ListByLabel(ctx context.Context, label string) ([]IssueSummary, error)
+	// SubIssues mirrors `gh issue view <n> --json state,subIssues` and
+	// returns the issue's state with its sub-issue numbers in display
+	// order (dispatch ordering, issue #207).
+	SubIssues(ctx context.Context, number int) (SubIssueList, error)
 	// ListMergedSince mirrors `gh issue list --state closed --json number,title,closedAt --limit 50`
 	// and returns closed issues with closedAt mapped to MergedAt.
 	ListMergedSince(ctx context.Context, since time.Time) ([]MergedIssue, error)
