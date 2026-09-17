@@ -6,12 +6,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/testutil"
+	"github.com/kuwa72/lead-cli/internal/watchdog"
 )
 
 // fakeAgent records the launch and prints canned output. Hook, when set,
@@ -315,7 +318,8 @@ func TestSay_RejectsEmptyOneLinerAndConflictingFlags(t *testing.T) {
 }
 
 // issue #204: agy must get --print-timeout (its own 5m default caused
-// "agent printed nothing" failures); Options.Timeout overrides it.
+// "agent printed nothing" failures). Since issue #215 lead's own watchdog
+// decides when a headless run ends, so the flag is a generous backstop.
 func TestSay_AgyPrintTimeoutArgv(t *testing.T) {
 	r, _, ag, _ := newRunner(t, `[{"title":"feat: x","body":"b"}]`)
 	r.Opts.Agent = "agy"
@@ -332,32 +336,52 @@ func TestSay_AgyPrintTimeoutArgv(t *testing.T) {
 			timeout = argv[i+1]
 		}
 	}
-	if timeout != "15m0s" {
-		t.Errorf("agy --print-timeout = %q, want default 15m0s: %q", timeout, argv)
-	}
-
-	r2, _, ag2, _ := newRunner(t, `[{"title":"feat: x","body":"b"}]`)
-	r2.Opts.Agent = "agy"
-	r2.Opts.Timeout = 30 * time.Minute
-	if _, err := r2.Say(context.Background(), "x"); err != nil {
-		t.Fatal(err)
-	}
-	var timeout2 string
-	for i, a := range ag2.Calls[0].Argv {
-		if a == "--print-timeout" && i+1 < len(ag2.Calls[0].Argv) {
-			timeout2 = ag2.Calls[0].Argv[i+1]
-		}
-	}
-	if timeout2 != "30m0s" {
-		t.Errorf("agy --print-timeout = %q, want 30m0s: %q", timeout2, ag2.Calls[0].Argv)
+	d, err := time.ParseDuration(timeout)
+	if err != nil || d < 12*time.Hour {
+		t.Errorf("agy --print-timeout = %q, want a backstop far beyond the watchdog's stall threshold: %q", timeout, argv)
 	}
 }
 
-func TestSay_EmptyOutputHintsPrintTimeout(t *testing.T) {
+func TestSay_EmptyOutputHintsStallTimeout(t *testing.T) {
 	r, _, _, _ := newRunner(t, "")
 	_, err := r.Say(context.Background(), "x")
-	if err == nil || !strings.Contains(err.Error(), "--timeout") || !strings.Contains(err.Error(), "printed nothing") {
-		t.Fatalf("err = %v, want a hint pointing at --timeout/print-timeout", err)
+	if err == nil || !strings.Contains(err.Error(), "stall_timeout") || !strings.Contains(err.Error(), "printed nothing") {
+		t.Fatalf("err = %v, want a hint pointing at stall_timeout in inbox-config.json", err)
+	}
+}
+
+// issue #215: a stalled run must reach notify.Notifier (desktop/OSC).
+type fakeNotifier struct{ calls []string }
+
+func (f *fakeNotifier) Notify(title, message string) error {
+	f.calls = append(f.calls, title+"\n"+message)
+	return nil
+}
+
+func TestSay_NotifiesOnStall(t *testing.T) {
+	r, _, ag, _ := newRunner(t, "")
+	ag.Err = &watchdog.StalledError{Reason: errors.New("agent produced no output for 30m0s")}
+	n := &fakeNotifier{}
+	r.Notify = n
+	_, err := r.Say(context.Background(), "x")
+	if err == nil || !strings.Contains(err.Error(), "stalled") || !strings.Contains(err.Error(), "log:") {
+		t.Fatalf("err = %v, want stalled reason plus log path", err)
+	}
+	if len(n.calls) != 1 || !strings.Contains(n.calls[0], "stall") {
+		t.Errorf("notify calls = %v, want one stalled notification", n.calls)
+	}
+}
+
+func TestSay_NoNotifyOnOtherFailures(t *testing.T) {
+	r, _, ag, _ := newRunner(t, "")
+	ag.Err = errors.New("exit status 1")
+	n := &fakeNotifier{}
+	r.Notify = n
+	if _, err := r.Say(context.Background(), "x"); err == nil {
+		t.Fatal("expected error")
+	}
+	if len(n.calls) != 0 {
+		t.Errorf("non-stall failure notified: %v", n.calls)
 	}
 }
 
@@ -535,6 +559,69 @@ func TestExecRunner_MissingBinaryAndFailure(t *testing.T) {
 	_, err = (&ExecRunner{}).Run(context.Background(), t.TempDir(), []string{"claude", "x"}, filepath.Join(t.TempDir(), "l.log"))
 	if err == nil || !strings.Contains(err.Error(), "exit status 3") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// issue #215: a silent agent is killed once the log has been idle for
+// StallTimeout, with a StalledError carrying the reason. The whole process
+// group (script + its children) must be dead afterwards.
+func TestExecRunner_StallKillsSilentAgent(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	t.Setenv("STALL_PID_FILE", pidFile)
+	testutil.InstallDummy(t, "claude", "echo $$ > \"$STALL_PID_FILE\"\nsleep 60")
+	r := &ExecRunner{StallTimeout: 300 * time.Millisecond}
+	logPath := filepath.Join(t.TempDir(), "say.log")
+	start := time.Now()
+	_, err := r.Run(context.Background(), t.TempDir(), []string{"claude", "p"}, logPath)
+	if err == nil {
+		t.Fatal("silent agent run succeeded")
+	}
+	var se *watchdog.StalledError
+	if !errors.As(err, &se) {
+		t.Fatalf("err = %v (%T), want StalledError", err, err)
+	}
+	if !strings.Contains(err.Error(), "no output") {
+		t.Errorf("err = %v, want the stall reason", err)
+	}
+	if elapsed := time.Since(start); elapsed > 30*time.Second {
+		t.Errorf("watchdog took %s for a 300ms stall timeout", elapsed)
+	}
+	pidB, readErr := os.ReadFile(pidFile)
+	if readErr != nil {
+		t.Fatalf("dummy did not record its pid: %v", readErr)
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(pidB)))
+	if convErr != nil {
+		t.Fatalf("pid file = %q", pidB)
+	}
+	if sigErr := syscall.Kill(pid, 0); sigErr == nil {
+		t.Errorf("agent pid %d still alive after stall kill", pid)
+	}
+}
+
+// issue #215: output resets the clock — an agent that keeps logging must
+// not be killed even when the run lasts longer than StallTimeout.
+func TestExecRunner_KeepsAliveWhileOutputFlows(t *testing.T) {
+	testutil.InstallDummy(t, "claude", "for i in 1 2 3 4 5 6; do echo tick; sleep 0.1; done\necho '[{\"title\":\"t\",\"body\":\"b\"}]'")
+	r := &ExecRunner{StallTimeout: 250 * time.Millisecond}
+	out, err := r.Run(context.Background(), t.TempDir(), []string{"claude", "p"}, filepath.Join(t.TempDir(), "say.log"))
+	if err != nil {
+		t.Fatalf("chatty agent killed: %v", err)
+	}
+	if !strings.Contains(string(out), `"title":"t"`) {
+		t.Errorf("stdout = %q", out)
+	}
+}
+
+// A stalled run that dies between the last output and the kill still
+// reports StalledError rather than the raw exit status.
+func TestExecRunner_StallBeatsExitError(t *testing.T) {
+	testutil.InstallDummy(t, "claude", "sleep 60")
+	r := &ExecRunner{StallTimeout: 200 * time.Millisecond}
+	_, err := r.Run(context.Background(), t.TempDir(), []string{"claude", "p"}, filepath.Join(t.TempDir(), "say.log"))
+	var se *watchdog.StalledError
+	if !errors.As(err, &se) {
+		t.Fatalf("err = %v, want StalledError (not exit status)", err)
 	}
 }
 

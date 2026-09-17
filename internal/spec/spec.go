@@ -20,15 +20,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"text/template"
 	"time"
 
 	"golang.org/x/term"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
+	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/prompter"
 	"github.com/kuwa72/lead-cli/internal/state"
+	"github.com/kuwa72/lead-cli/internal/watchdog"
 )
 
 // DefaultLabel marks issues awaiting human approval (RFC §8, §13).
@@ -51,16 +54,15 @@ type AgentRunner interface {
 
 // Options tunes one Runner.
 type Options struct {
-	Agent      string        // spec agent (agents.spec); empty = agent.DefaultAgent
-	Label      string        // default needs-review
-	LogDir     string        // agent output files; required unless DryRun with a fake
-	WorkDir    string        // repository the one-liner is about (AGENTS.md source)
-	Repository string        // informational slug/URL for the prompt; "" = local
-	Rules      string        // repository rules; "" = read WorkDir/AGENTS.md, else DefaultRules
-	DryRun     bool          // print would-be issues, no gh mutation
-	FollowUp   int           // 実機 NG → 追い Issue: reference this parent issue
-	Redraft    int           // rewrite this issue's body instead of creating
-	Timeout    time.Duration // agent print timeout (agy --print-timeout); <= 0 = agent.DefaultPrintTimeout
+	Agent      string // spec agent (agents.spec); empty = agent.DefaultAgent
+	Label      string // default needs-review
+	LogDir     string // agent output files; required unless DryRun with a fake
+	WorkDir    string // repository the one-liner is about (AGENTS.md source)
+	Repository string // informational slug/URL for the prompt; "" = local
+	Rules      string // repository rules; "" = read WorkDir/AGENTS.md, else DefaultRules
+	DryRun     bool   // print would-be issues, no gh mutation
+	FollowUp   int    // 実機 NG → 追い Issue: reference this parent issue
+	Redraft    int    // rewrite this issue's body instead of creating
 	// ProgressInterval is the cadence of the running status line while the
 	// agent works (issue #216). 0 = DefaultProgressInterval; <0 disables it.
 	ProgressInterval time.Duration
@@ -122,6 +124,9 @@ type Runner struct {
 	Agent AgentRunner
 	Opts  Options
 	Out   io.Writer // human-readable progress; nil = silent
+	// Notify receives a stalled-run notification when the agent watchdog
+	// kills the process (issue #215). Nil means silent.
+	Notify notify.Notifier
 }
 
 // Say turns oneLiner into issues (or a redraft) per Opts.
@@ -264,7 +269,7 @@ func (r *Runner) redraft(ctx context.Context, opts Options, oneLiner string) (Re
 }
 
 func (r *Runner) runAgent(ctx context.Context, opts Options, prompt string) ([]byte, string, error) {
-	argv, err := agent.HeadlessArgvWithTimeout(opts.Agent, prompt, opts.Timeout)
+	argv, err := agent.HeadlessArgv(opts.Agent, prompt)
 	if err != nil {
 		return nil, "", fmt.Errorf("say: %w", err)
 	}
@@ -273,6 +278,10 @@ func (r *Runner) runAgent(ctx context.Context, opts Options, prompt string) ([]b
 	out, err := r.Agent.Run(ctx, opts.WorkDir, argv, logPath)
 	stop()
 	if err != nil {
+		var stalled *watchdog.StalledError
+		if errors.As(err, &stalled) && r.Notify != nil {
+			_ = r.Notify.Notify("lead say: agent stalled", fmt.Sprintf("%s (log: %s)", stalled.Reason, logPath))
+		}
 		return nil, logPath, fmt.Errorf("say: agent %s failed (log: %s): %w", opts.Agent, logPath, err)
 	}
 	return out, logPath, nil
@@ -325,11 +334,12 @@ func (r *Runner) startProgress(logPath string, interval time.Duration) func() {
 	return func() { close(stop); <-finished }
 }
 
-// outputError wraps a parse failure; empty output points at the agent's
-// print timeout (issue #204: agy's 5m default silently truncated turns).
+// outputError wraps a parse failure; empty output suggests the agent died
+// before printing (issue #204), which since issue #215 means the stall
+// watchdog — tunable via stall_timeout in inbox-config.json.
 func outputError(logPath string, out []byte, err error) error {
 	if len(bytes.TrimSpace(out)) == 0 {
-		return fmt.Errorf("say: agent printed nothing (see %s) — the agent may have hit its print timeout; raise it with `lead say --timeout` or LEAD_SPEC_TIMEOUT: %w", logPath, err)
+		return fmt.Errorf("say: agent printed nothing (see %s) — the stall watchdog may have killed it; tune stall_timeout in inbox-config.json: %w", logPath, err)
 	}
 	return fmt.Errorf("say: agent output (see %s): %w", logPath, err)
 }
@@ -626,8 +636,19 @@ func BuildPrompt(in PromptInput) (string, error) {
 // ExecRunner runs the agent binary as a child process: stdout is captured
 // and, together with stderr, appended to logPath; stdin is /dev/null so a
 // prompt for input fails fast instead of hanging.
+//
+// The child runs in its own process group under a stall watchdog
+// (issue #215): while the log keeps growing the agent runs unbounded; once
+// output stops for StallTimeout the whole group is SIGKILLed and Run
+// returns *watchdog.StalledError. MaxRuntime additionally caps the wall
+// clock when set.
 type ExecRunner struct {
 	LookPath func(name string) (string, error)
+	// StallTimeout kills the agent after this much log silence.
+	// Zero = watchdog.DefaultStallTimeout; negative disables the check.
+	StallTimeout time.Duration
+	// MaxRuntime caps the whole run. Zero disables the wall-clock check.
+	MaxRuntime time.Duration
 }
 
 var _ AgentRunner = (*ExecRunner)(nil)
@@ -658,8 +679,55 @@ func (e *ExecRunner) Run(ctx context.Context, dir string, argv []string, logPath
 	cmd.Stdin = nil // /dev/null
 	cmd.Stdout = io.MultiWriter(&stdout, f)
 	cmd.Stderr = f
-	if err := cmd.Run(); err != nil {
+	// Own process group so the watchdog can SIGKILL the whole tree.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("spec: start %s: %w", argv[0], err)
+	}
+	stop := make(chan struct{})
+	killReason := e.watch(cmd.Process.Pid, logPath, stop)
+	err = cmd.Wait()
+	close(stop)
+	if reason := <-killReason; reason != nil {
+		return stdout.Bytes(), &watchdog.StalledError{Reason: reason}
+	}
+	if err != nil {
 		return stdout.Bytes(), fmt.Errorf("spec: %s: %w", argv[0], err)
 	}
 	return stdout.Bytes(), nil
+}
+
+// watch polls the agent's log mtime until stop is closed (i.e. cmd.Wait
+// returned), killing the process group on stall or wall-clock overrun.
+// The returned channel yields the kill reason (nil when the agent ended
+// on its own); it always receives exactly one value.
+func (e *ExecRunner) watch(pid int, logPath string, stop <-chan struct{}) <-chan error {
+	out := make(chan error, 1)
+	stall := e.StallTimeout
+	if stall == 0 {
+		stall = watchdog.DefaultStallTimeout
+	}
+	if stall <= 0 && e.MaxRuntime <= 0 {
+		out <- nil
+		return out
+	}
+	started := time.Now()
+	go func() {
+		ticker := time.NewTicker(watchdog.PollInterval(stall, e.MaxRuntime))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				out <- nil
+				return
+			case now := <-ticker.C:
+				if reason := watchdog.StuckReason(logPath, started, now, stall, e.MaxRuntime); reason != nil {
+					_ = watchdog.KillProcessGroup(pid)
+					out <- reason
+					return
+				}
+			}
+		}
+	}()
+	return out
 }
