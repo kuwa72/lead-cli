@@ -157,7 +157,7 @@ esac
 
 # 1b. #144 has no log file: last-activity must fall back to started_at
 # (issue #216 — same definition as the dispatch watchdog).
-out="$(LEAD_TEST_INBOX_WIDTH=130 LEAD_TEST_INBOX_HEIGHT=30 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,q "$tmp/lead" 2>&1)" || fail "lead exited non-zero: $out"
+out="$(LEAD_TEST_INBOX_WIDTH=130 LEAD_TEST_INBOX_HEIGHT=30 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,j,q "$tmp/lead" 2>&1)" || fail "lead exited non-zero: $out"
 printf '%s\n' "$out" > "$tmp/screen-144.log"
 case "$out" in
   *"Active: 2h ago"*) ;;
