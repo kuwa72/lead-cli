@@ -129,6 +129,29 @@ func (d Deps) stateFile() string {
 	return state.ResolvePath()
 }
 
+// inboxConfigPath locates the persisted inbox settings beside the state file.
+func (d Deps) inboxConfigPath() string {
+	return filepath.Join(filepath.Dir(d.stateFile()), "inbox-config.json")
+}
+
+// loadInboxConfig reads the inbox settings written by the settings view
+// (issue #214). Missing or corrupt files are not errors: a zero Config is
+// returned so every caller falls back to built-in defaults.
+func (d Deps) loadInboxConfig() inbox.Config {
+	var cfg inbox.Config
+	if data, err := os.ReadFile(d.inboxConfigPath()); err == nil {
+		_ = json.Unmarshal(data, &cfg)
+	}
+	return cfg
+}
+
+// configuredAgent is the inbox settings' active coding agent ("" = unset).
+// Subcommands layer it between an explicit --agent / $LEAD_SPEC_AGENT and
+// agent.Resolve's agy fallback.
+func (d Deps) configuredAgent() string {
+	return d.loadInboxConfig().Agent
+}
+
 func (d Deps) workDir() (string, error) {
 	if d.WorkDir != "" {
 		return d.WorkDir, nil
@@ -221,11 +244,12 @@ func (d Deps) selector() tui.Selector {
 		}
 		return &tui.FakeSelector{Selection: sel}
 	}
-	return tui.NewBubbleteaSelector()
+	return &tui.BubbleteaSelector{DefaultAgent: d.configuredAgent()}
 }
 
 // parseTestSelection parses the LEAD_TEST_SELECTION hook:
-// "36" (default agent), "36:devin", or "36:browser".
+// "36" (no explicit agent — the default resolution chain applies),
+// "36:devin", or "36:browser".
 func parseTestSelection(raw string) (tui.Selection, error) {
 	parts := strings.SplitN(raw, ":", 2)
 	number, err := strconv.Atoi(parts[0])
@@ -233,7 +257,7 @@ func parseTestSelection(raw string) (tui.Selection, error) {
 		return tui.Selection{}, fmt.Errorf("invalid LEAD_TEST_SELECTION %q: want <number>[:<agent|browser>]", raw)
 	}
 	if len(parts) == 1 {
-		return tui.Selection{IssueNumber: number, Agent: agent.DefaultAgent, Action: tui.ActionWork}, nil
+		return tui.Selection{IssueNumber: number, Action: tui.ActionWork}, nil
 	}
 	if parts[1] == "" {
 		return tui.Selection{}, fmt.Errorf("invalid LEAD_TEST_SELECTION %q: empty action", raw)
@@ -315,7 +339,7 @@ issue. Normal operation is ` + "`lead dispatch`" + `, which needs no human step.
 		c.Flags().String("worktree", "", "create isolated worktree: bare flag = auto path, or --worktree=<path>")
 		c.Flags().String("part", "", "work unit within a multi-PR issue")
 		c.Flags().Bool("draft", false, "create PR as draft")
-		c.Flags().String("agent", "", "coding agent (default: agy)")
+		c.Flags().String("agent", "", "coding agent (default: inbox settings agent, then agy)")
 		c.Flags().String("agent-mode", "interactive", "agent execution mode (interactive|batch|dangerous)")
 		c.Flags().String("prompt-template", "", "prompt template name (resolves from prompts/<name>.md or built-in)")
 		// Bare `--worktree` means "auto path under <repo>/.worktrees".
@@ -339,7 +363,7 @@ Git and GitHub.`,
 	}
 	resumeCmd.Flags().String("worktree", "", "use or create isolated worktree: bare flag = auto path, or --worktree=<path>")
 	resumeCmd.Flags().Lookup("worktree").NoOptDefVal = "auto"
-	resumeCmd.Flags().String("agent", "", "coding agent (default: agy or previous agent)")
+	resumeCmd.Flags().String("agent", "", "coding agent (default: previous agent, then inbox settings, then agy)")
 	resumeCmd.Flags().String("agent-mode", "", "agent execution mode (interactive|batch|dangerous)")
 	resumeCmd.Flags().Bool("repair", false, "reconstruct state file from Git/GitHub if corrupt or missing")
 	resumeCmd.Flags().String("prompt-template", "", "prompt template name (resolves from prompts/<name>.md or built-in)")
@@ -364,7 +388,7 @@ agents are not killed on exit.`,
 	dispatchCmd.Flags().Int("parallel", dispatch.DefaultParallel, "max agents running at once")
 	dispatchCmd.Flags().Bool("once", false, "run a single pass and exit")
 	dispatchCmd.Flags().Duration("interval", 30*time.Second, "pause between passes")
-	dispatchCmd.Flags().String("agent", "", "headless implementation agent (default: agy)")
+	dispatchCmd.Flags().String("agent", "", "headless implementation agent (default: inbox settings agent, then agy)")
 
 	sayCmd := &cobra.Command{
 		Use:   "say <one-liner>",
@@ -377,14 +401,15 @@ cross-reference each other). --redraft <n> rewrites issue n's body instead
 and posts a comment describing the change. --dry-run prints the would-be
 issues and touches nothing on GitHub. The agent's output is logged under
 the state directory (logs/say-*.log). Agent: --agent, else $LEAD_SPEC_AGENT,
-else agy. Print timeout: --timeout, else $LEAD_SPEC_TIMEOUT, else 15m
+else the inbox settings agent, else agy. Print timeout: --timeout, else
+$LEAD_SPEC_TIMEOUT, else 15m
 (passed to agy as --print-timeout; its own default is 5m).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSay(cmd, deps, args[0])
 		},
 	}
-	sayCmd.Flags().String("agent", "", "headless spec agent (default: $LEAD_SPEC_AGENT, then agy)")
+	sayCmd.Flags().String("agent", "", "headless spec agent (default: $LEAD_SPEC_AGENT, then inbox settings, then agy)")
 	sayCmd.Flags().Duration("timeout", 0, "spec agent print timeout (default: $LEAD_SPEC_TIMEOUT, then 15m; agy only)")
 	sayCmd.Flags().Bool("dry-run", false, "print the would-be issues; no gh mutation")
 	sayCmd.Flags().Int("follow-up", 0, "file follow-up issue(s) for issue <n> (実機 NG); body references #<n>")
@@ -692,16 +717,8 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	}
 
 	configDir := filepath.Dir(deps.stateFile())
-	configFile := filepath.Join(configDir, "inbox-config.json")
-	var cfg struct {
-		Agent          string `json:"agent"`
-		AgentMode      string `json:"agent_mode"`
-		IssueCreation  string `json:"issue_creation"`
-		NotifyDisabled bool   `json:"notify_disabled"`
-	}
-	if data, err := os.ReadFile(configFile); err == nil {
-		_ = json.Unmarshal(data, &cfg)
-	}
+	configFile := deps.inboxConfigPath()
+	cfg := deps.loadInboxConfig()
 	if cfg.Agent != "" {
 		opts.Agent = cfg.Agent
 	}
@@ -794,6 +811,9 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 	agentName, _ := flags.GetString("agent")
 	if agentName == "" {
 		agentName = os.Getenv("LEAD_SPEC_AGENT")
+	}
+	if agentName == "" {
+		agentName = deps.configuredAgent()
 	}
 	dryRun, _ := flags.GetBool("dry-run")
 	followUp, _ := flags.GetInt("follow-up")
@@ -902,6 +922,9 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 	once, _ := flags.GetBool("once")
 	interval, _ := flags.GetDuration("interval")
 	agentName, _ := flags.GetString("agent")
+	if agentName == "" {
+		agentName = deps.configuredAgent()
+	}
 
 	cwd, err := deps.workDir()
 	if err != nil {
@@ -985,6 +1008,9 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 
 	out := cmd.OutOrStdout()
 	agentName, _ := flags.GetString("agent")
+	if agentName == "" {
+		agentName = deps.configuredAgent()
+	}
 	resolvedAgent := agent.Resolve(agentName)
 	launchDir := res.RepoRoot
 	if res.Worktree != "" {
@@ -1056,6 +1082,9 @@ func runResume(cmd *cobra.Command, deps Deps, target string) error {
 	out := cmd.OutOrStdout()
 	if agentName == "" {
 		agentName = res.Agent
+	}
+	if agentName == "" {
+		agentName = deps.configuredAgent()
 	}
 	resolvedAgent := agent.Resolve(agentName)
 	launchDir := res.RepoRoot

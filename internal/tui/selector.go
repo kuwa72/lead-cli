@@ -10,15 +10,16 @@ import (
 )
 
 type selectorModel struct {
-	issues    []IssueItem
-	cursor    int
-	previewFn PreviewFunc
-	ctx       context.Context
-	selection Selection
-	aborted   bool
-	width     int
-	height    int
-	preview   string
+	issues       []IssueItem
+	cursor       int
+	previewFn    PreviewFunc
+	ctx          context.Context
+	selection    Selection
+	aborted      bool
+	width        int
+	height       int
+	preview      string
+	defaultAgent string
 }
 
 func (m selectorModel) Init() tea.Cmd {
@@ -74,7 +75,7 @@ func (m selectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.issues) > 0 {
 				m.selection = Selection{
 					IssueNumber: m.issues[m.cursor].Number,
-					Agent:       agent.Resolve(""),
+					Agent:       agent.Resolve(m.defaultAgent),
 					Action:      ActionWork,
 				}
 			}
@@ -114,7 +115,11 @@ func (m selectorModel) View() string {
 }
 
 // BubbleteaSelector implements Selector using a Bubble Tea model.
-type BubbleteaSelector struct{}
+type BubbleteaSelector struct {
+	// DefaultAgent is the agent reported for an ActionWork selection when
+	// the user did not name one (e.g. the inbox settings pick; "" = agy).
+	DefaultAgent string
+}
 
 var _ Selector = (*BubbleteaSelector)(nil)
 
@@ -128,9 +133,10 @@ func (s *BubbleteaSelector) SelectIssue(ctx context.Context, issues []IssueItem,
 		return Selection{}, fmt.Errorf("no issues to select")
 	}
 	m := selectorModel{
-		issues:    issues,
-		previewFn: preview,
-		ctx:       ctx,
+		issues:       issues,
+		previewFn:    preview,
+		ctx:          ctx,
+		defaultAgent: s.DefaultAgent,
 	}
 	p := tea.NewProgram(m)
 	finalModel, err := p.Run()
