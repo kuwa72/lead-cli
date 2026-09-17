@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/state"
 )
 
 // previewSnapshot is the complete data shown in a preview or detail pane.
@@ -592,14 +593,11 @@ func runningMetaLine(it *Item, prNum int, prErr bool, now time.Time) string {
 	if age := relAge(it.StartedAt, now); age != "" {
 		parts = append(parts, fmt.Sprintf("Elapsed: %s", age))
 	}
-	if it.LogPath != "" {
-		if fi, err := os.Stat(it.LogPath); err == nil {
-			mtime := fi.ModTime()
-			if mtime.After(now) {
-				mtime = now
-			}
-			parts = append(parts, fmt.Sprintf("Active: %s ago", relAge(mtime, now)))
+	if last := state.LastActivity(it.LogPath, it.StartedAt); !last.IsZero() {
+		if last.After(now) {
+			last = now
 		}
+		parts = append(parts, fmt.Sprintf("Active: %s ago", relAge(last, now)))
 	}
 	if prNum > 0 {
 		if prErr {

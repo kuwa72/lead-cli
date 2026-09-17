@@ -46,6 +46,10 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
   agy には `--print-timeout` として渡す（agy 自体の既定は 5m で、超過すると
   出力が空のまま返り `agent printed nothing` になっていた）。agy 以外の
   エージェントでは無視される。
+- 進捗表示: 実行中はステータス行に起動からの経過時間と最終出力からの経過時間を
+  定期表示する（issue #216）。間隔は `$LEAD_SPEC_PROGRESS_INTERVAL`（既定 10s、
+  負値で無効）。最終出力の定義は dispatch の stall 検知と同じ
+  （ログ mtime → なければ started_at）。
 
 ## 2.2 ワークフロープロンプト (`prompter.RenderWorkflowPromptWithOptions`, issue #84, #89)
 

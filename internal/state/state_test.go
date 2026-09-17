@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func tempStore(t *testing.T) *Store {
@@ -250,5 +251,43 @@ func TestFindByTarget(t *testing.T) {
 	m, err = s.FindByTarget("/path/to/wt-20")
 	if err != nil || len(m) != 1 || m[0].Issue != 20 {
 		t.Errorf("FindByTarget(worktree) = %+v, %v; want w2", m, err)
+	}
+}
+
+// LastActivity is the watchdog's liveness signal shared by `say`, `status`
+// and the inbox (issue #216): log mtime when present and newer, else the
+// launch time.
+func TestLastActivity(t *testing.T) {
+	started := time.Now().Add(-time.Hour).Truncate(time.Second)
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "agent.log")
+
+	if got := LastActivity("", started); !got.Equal(started) {
+		t.Errorf("no log path: LastActivity = %v, want startedAt %v", got, started)
+	}
+	if got := LastActivity(logPath, started); !got.Equal(started) {
+		t.Errorf("missing log: LastActivity = %v, want startedAt %v", got, started)
+	}
+	if got := LastActivity("", time.Time{}); !got.IsZero() {
+		t.Errorf("nothing known: LastActivity = %v, want zero", got)
+	}
+
+	if err := os.WriteFile(logPath, []byte("partial output\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mtime := time.Now().Add(-5 * time.Minute).Truncate(time.Second)
+	if err := os.Chtimes(logPath, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	if got := LastActivity(logPath, started); !got.Equal(mtime) {
+		t.Errorf("newer log: LastActivity = %v, want log mtime %v", got, mtime)
+	}
+
+	older := started.Add(-time.Minute)
+	if err := os.Chtimes(logPath, older, older); err != nil {
+		t.Fatal(err)
+	}
+	if got := LastActivity(logPath, started); !got.Equal(started) {
+		t.Errorf("stale log: LastActivity = %v, want startedAt %v", got, started)
 	}
 }

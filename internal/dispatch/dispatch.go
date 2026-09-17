@@ -705,12 +705,7 @@ func stuckReason(logPath string, startedAt, now time.Time, idleTimeout, maxRunti
 	if idleTimeout <= 0 {
 		return nil
 	}
-	last := startedAt
-	if logPath != "" {
-		if fi, err := os.Stat(logPath); err == nil && fi.ModTime().After(last) {
-			last = fi.ModTime()
-		}
-	}
+	last := state.LastActivity(logPath, startedAt)
 	if last.IsZero() || now.Sub(last) <= idleTimeout {
 		return nil
 	}
