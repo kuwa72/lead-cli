@@ -378,7 +378,9 @@ and posts a comment describing the change. --dry-run prints the would-be
 issues and touches nothing on GitHub. The agent's output is logged under
 the state directory (logs/say-*.log). Agent: --agent, else $LEAD_SPEC_AGENT,
 else agy. Print timeout: --timeout, else $LEAD_SPEC_TIMEOUT, else 15m
-(passed to agy as --print-timeout; its own default is 5m).`,
+(passed to agy as --print-timeout; its own default is 5m). While the agent
+runs, a status line reports elapsed time and time since the last output
+(every 10s, or $LEAD_SPEC_PROGRESS_INTERVAL; negative disables).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSay(cmd, deps, args[0])
@@ -663,16 +665,24 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		return fmt.Sprintf("Stopped #%d", number), nil
 	}
 	opts.Say = func(ctx context.Context, oneLiner string, followUp int) (string, error) {
+		// Under the TUI stdout is a terminal owned by bubbletea: progress
+		// lines would corrupt the screen, and the status bar already shows
+		// "Generating issue with spec AI...". Headless runs get the lines.
+		progressInterval, _ := sayProgressInterval()
+		if isTerminal(os.Stdout) {
+			progressInterval = -1
+		}
 		r := &spec.Runner{
 			Gh:    deps.gh(),
 			Agent: deps.specAgent(),
 			Out:   cmd.OutOrStdout(),
 			Opts: spec.Options{
-				Agent:      os.Getenv("LEAD_SPEC_AGENT"),
-				LogDir:     filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
-				WorkDir:    root,
-				Repository: deps.gitRunner().OriginURL(root),
-				FollowUp:   followUp,
+				Agent:            os.Getenv("LEAD_SPEC_AGENT"),
+				LogDir:           filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
+				WorkDir:          root,
+				Repository:       deps.gitRunner().OriginURL(root),
+				FollowUp:         followUp,
+				ProgressInterval: progressInterval,
 			},
 		}
 		res, err := r.Say(ctx, oneLiner)
@@ -788,6 +798,20 @@ func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
+// sayProgressInterval reads LEAD_SPEC_PROGRESS_INTERVAL (issue #216); unset
+// means spec.DefaultProgressInterval. An invalid value is an error.
+func sayProgressInterval() (time.Duration, error) {
+	env := os.Getenv("LEAD_SPEC_PROGRESS_INTERVAL")
+	if env == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(env)
+	if err != nil {
+		return 0, fmt.Errorf("say: LEAD_SPEC_PROGRESS_INTERVAL: %w", err)
+	}
+	return d, nil
+}
+
 // runSay implements `lead say` (RFC inbox §8, issue #94).
 func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 	flags := cmd.Flags()
@@ -808,6 +832,10 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 			timeout = d
 		}
 	}
+	progressInterval, err := sayProgressInterval()
+	if err != nil {
+		return err
+	}
 
 	cwd, err := deps.workDir()
 	if err != nil {
@@ -819,14 +847,15 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 		Agent: deps.specAgent(),
 		Out:   cmd.OutOrStdout(),
 		Opts: spec.Options{
-			Agent:      agentName,
-			LogDir:     filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
-			WorkDir:    cwd,
-			Repository: repo,
-			DryRun:     dryRun,
-			FollowUp:   followUp,
-			Redraft:    redraft,
-			Timeout:    timeout,
+			Agent:            agentName,
+			LogDir:           filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
+			WorkDir:          cwd,
+			Repository:       repo,
+			DryRun:           dryRun,
+			FollowUp:         followUp,
+			Redraft:          redraft,
+			Timeout:          timeout,
+			ProgressInterval: progressInterval,
 		},
 	}
 	_, err = r.Say(cmd.Context(), oneLiner)
@@ -1161,10 +1190,11 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 		return err
 	}
 	out := cmd.OutOrStdout()
+	now := time.Now()
 	if asJSON {
 		raw, err := json.MarshalIndent(struct {
-			Workflows []state.Workflow `json:"workflows"`
-		}{Workflows: all}, "", "  ")
+			Workflows []statusWorkflow `json:"workflows"`
+		}{Workflows: statusRows(all, now)}, "", "  ")
 		if err != nil {
 			return err
 		}
@@ -1182,6 +1212,20 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 			fmt.Fprintf(out, "  Worktree: %s", w.Worktree)
 		}
 		fmt.Fprintln(out)
+		if w.Status == state.StatusInProgress {
+			// Same last-activity as the dispatch watchdog (issue #216):
+			// log mtime, else started_at.
+			var parts []string
+			if !w.StartedAt.IsZero() {
+				parts = append(parts, fmt.Sprintf("Elapsed: %s", shortDur(now.Sub(w.StartedAt))))
+			}
+			if last := state.LastActivity(w.LogPath, w.StartedAt); !last.IsZero() {
+				parts = append(parts, fmt.Sprintf("Last activity: %s ago", shortDur(now.Sub(last))))
+			}
+			if len(parts) > 0 {
+				fmt.Fprintf(out, "%s\n", strings.Join(parts, "   "))
+			}
+		}
 		if w.Status != state.StatusClosed && w.Status != state.StatusCompleted {
 			target := strconv.Itoa(w.Issue)
 			if w.Issue <= 0 && w.Branch != "" {
@@ -1193,6 +1237,57 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 		}
 	}
 	return nil
+}
+
+// statusWorkflow is a state.Workflow plus computed liveness fields for
+// `lead status --json` (issue #216). The fields appear only on in_progress
+// records: elapsed is started_at→now, last_activity is the watchdog's
+// definition (log mtime, else started_at).
+type statusWorkflow struct {
+	state.Workflow
+	ElapsedSeconds      *int64     `json:"elapsed_seconds,omitempty"`
+	LastActivityAt      *time.Time `json:"last_activity_at,omitempty"`
+	LastActivitySeconds *int64     `json:"last_activity_seconds,omitempty"`
+}
+
+func statusRows(all []state.Workflow, now time.Time) []statusWorkflow {
+	rows := make([]statusWorkflow, len(all))
+	for i, w := range all {
+		rows[i].Workflow = w
+		if w.Status != state.StatusInProgress {
+			continue
+		}
+		if !w.StartedAt.IsZero() {
+			s := int64(now.Sub(w.StartedAt).Seconds())
+			rows[i].ElapsedSeconds = &s
+		}
+		if last := state.LastActivity(w.LogPath, w.StartedAt); !last.IsZero() {
+			l := last.UTC()
+			s := int64(now.Sub(last).Seconds())
+			if s < 0 {
+				s = 0
+			}
+			rows[i].LastActivityAt = &l
+			rows[i].LastActivitySeconds = &s
+		}
+	}
+	return rows
+}
+
+// shortDur renders a compact duration like the inbox ages ("45s"/"12m"/"3h"/"2d").
+func shortDur(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
 // genCompletion renders the cobra completion script for a setup shell name.

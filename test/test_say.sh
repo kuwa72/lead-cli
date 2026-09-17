@@ -60,10 +60,12 @@ case "$1 $2" in
 esac
 EOF
 # Dummy agent: log argv one per line, cwd, then print canned output.
+# AGENT_SLEEP delays output so progress reporting can be observed.
 cat > "$tmp/bin/claude" <<'EOF'
 #!/bin/sh
 printf '<%s>\n' "$@" >> "$AGENT_LOG"
 printf 'CWD=%s\n' "$(pwd)" >> "$AGENT_LOG"
+sleep "${AGENT_SLEEP:-0}"
 cat "$AGENT_OUT"
 EOF
 # Dummy agy: same argv recorder (issue #204 verifies --print-timeout reaches it).
@@ -155,7 +157,14 @@ grep -qxF '<42m0s>' "$AGENT_LOG" || fail "--timeout 42m not passed to agy: $(cat
 (cd "$repo" && LEAD_SPEC_TIMEOUT=25m "$tmp/lead" say "x" --agent agy --dry-run >/dev/null 2>&1) || fail "env-timeout say exited non-zero"
 grep -qxF '<25m0s>' "$AGENT_LOG" || fail "LEAD_SPEC_TIMEOUT=25m not passed to agy: $(cat "$AGENT_LOG")"
 
-# --- 7. help ---------------------------------------------------------------------
+# --- 7. progress: 遅延出力エージェント実行中に経過時間・最終出力からの経過を表示 ---
+: > "$AGENT_LOG"
+echo '[{"title":"feat: t","body":"b"}]' > "$AGENT_OUT"
+out="$(cd "$repo" && AGENT_SLEEP=3 LEAD_SPEC_PROGRESS_INTERVAL=1s "$tmp/lead" say "x" --agent claude --dry-run 2>&1)" \
+  || fail "slow say exited non-zero: $out"
+case "$out" in *"running"*"last output"*) ;; *) fail "no elapsed/last-output progress lines: $out";; esac
+
+# --- 8. help ---------------------------------------------------------------------
 "$tmp/lead" say --help | grep -q -- '--follow-up' || fail "say --help lacks --follow-up"
 "$tmp/lead" --help | grep -q 'say' || fail "root help lacks say"
 

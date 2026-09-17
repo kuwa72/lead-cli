@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/ports"
@@ -215,6 +216,124 @@ func TestStatus_JSON(t *testing.T) {
 	}
 	if len(decoded.Workflows) != 1 || decoded.Workflows[0].Issue != 36 {
 		t.Errorf("status --json = %+v, want one record for #36", decoded.Workflows)
+	}
+}
+
+// issue #216: in_progress workflows show elapsed (since started_at) and
+// last-activity (log mtime, else started_at); --json carries both fields.
+func TestStatus_ShowsActivityForInProgress(t *testing.T) {
+	repo := initRepo(t)
+	deps, _, stateFile := workflowDeps(t, repo)
+	logPath := filepath.Join(t.TempDir(), "agent-7.log")
+	if err := os.WriteFile(logPath, []byte("working\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mtime := time.Now().Add(-5 * time.Minute).Truncate(time.Second)
+	if err := os.Chtimes(logPath, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	store := &state.Store{Path: stateFile}
+	if err := store.Upsert(state.Workflow{
+		Repository: "o/r", Issue: 7, Mode: state.ModeImplement, Status: state.StatusInProgress,
+		Branch: "issue/7", Agent: "agy", LogPath: logPath, StartedAt: time.Now().Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A completed workflow must not carry activity fields.
+	if err := store.Upsert(state.Workflow{
+		Repository: "o/r", Issue: 8, Mode: state.ModeImplement, Status: state.StatusCompleted,
+		Branch: "issue/8",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := executeWith(t, deps, "status")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	for _, want := range []string{"Elapsed:", "Last activity:"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status missing %q for in_progress workflow:\n%s", want, out)
+		}
+	}
+
+	out, err = executeWith(t, deps, "status", "--json")
+	if err != nil {
+		t.Fatalf("status --json: %v", err)
+	}
+	var decoded struct {
+		Workflows []struct {
+			Issue               int        `json:"issue"`
+			ElapsedSeconds      *int64     `json:"elapsed_seconds"`
+			LastActivityAt      *time.Time `json:"last_activity_at"`
+			LastActivitySeconds *int64     `json:"last_activity_seconds"`
+		} `json:"workflows"`
+	}
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("status --json not valid JSON: %v\n%s", err, out)
+	}
+	var inProg, done *struct {
+		Issue               int        `json:"issue"`
+		ElapsedSeconds      *int64     `json:"elapsed_seconds"`
+		LastActivityAt      *time.Time `json:"last_activity_at"`
+		LastActivitySeconds *int64     `json:"last_activity_seconds"`
+	}
+	for i := range decoded.Workflows {
+		switch decoded.Workflows[i].Issue {
+		case 7:
+			inProg = &decoded.Workflows[i]
+		case 8:
+			done = &decoded.Workflows[i]
+		}
+	}
+	if inProg == nil {
+		t.Fatalf("status --json missing #7:\n%s", out)
+	}
+	if inProg.ElapsedSeconds == nil || *inProg.ElapsedSeconds < 3500 {
+		t.Errorf("elapsed_seconds = %v, want ~3600", inProg.ElapsedSeconds)
+	}
+	if inProg.LastActivitySeconds == nil || *inProg.LastActivitySeconds < 240 || *inProg.LastActivitySeconds > 400 {
+		t.Errorf("last_activity_seconds = %v, want ~300", inProg.LastActivitySeconds)
+	}
+	if inProg.LastActivityAt == nil || !inProg.LastActivityAt.Equal(mtime) {
+		t.Errorf("last_activity_at = %v, want %v", inProg.LastActivityAt, mtime)
+	}
+	if done != nil && (done.ElapsedSeconds != nil || done.LastActivitySeconds != nil) {
+		t.Errorf("completed workflow #8 carries activity fields: %+v", done)
+	}
+}
+
+// issue #216: last-activity falls back to started_at when the log file is
+// absent — the watchdog's definition.
+func TestStatus_ActivityFallsBackToStartedAt(t *testing.T) {
+	repo := initRepo(t)
+	deps, _, stateFile := workflowDeps(t, repo)
+	store := &state.Store{Path: stateFile}
+	if err := store.Upsert(state.Workflow{
+		Repository: "o/r", Issue: 9, Mode: state.ModeImplement, Status: state.StatusInProgress,
+		Branch: "issue/9", Agent: "agy", LogPath: filepath.Join(t.TempDir(), "missing.log"),
+		StartedAt: time.Now().Add(-30 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := executeWith(t, deps, "status", "--json")
+	if err != nil {
+		t.Fatalf("status --json: %v", err)
+	}
+	var decoded struct {
+		Workflows []struct {
+			Issue               int    `json:"issue"`
+			LastActivitySeconds *int64 `json:"last_activity_seconds"`
+		} `json:"workflows"`
+	}
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("status --json not valid JSON: %v\n%s", err, out)
+	}
+	if len(decoded.Workflows) != 1 || decoded.Workflows[0].LastActivitySeconds == nil {
+		t.Fatalf("status --json missing last_activity_seconds:\n%s", out)
+	}
+	if got := *decoded.Workflows[0].LastActivitySeconds; got < 1700 {
+		t.Errorf("last_activity_seconds = %d, want ~1800 (started_at fallback)", got)
 	}
 }
 
