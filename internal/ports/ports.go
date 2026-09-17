@@ -80,7 +80,9 @@ type GhClient interface {
 	ApiUser(ctx context.Context) (string, error)
 	// LatestReleaseTag mirrors `gh api repos/<repo>/releases/latest --jq .tag_name`.
 	LatestReleaseTag(ctx context.Context, repo string) (string, error)
-	// BrowseIssue mirrors `gh issue view <n> --web`.
+	// BrowseIssue opens issue <n> in a browser. Implementations fetch
+	// the URL (`gh issue view <n> --json url`) and pick the opener
+	// themselves (issue #217).
 	BrowseIssue(ctx context.Context, number int) error
 	// ListByLabel mirrors `gh issue list --state open --label <l> --json number,title,updatedAt,parent,blockedBy`
 	// (dispatch queue: docs/rfc-inbox-ux.md §7; parent/blockedBy drive ordering, issue #207).

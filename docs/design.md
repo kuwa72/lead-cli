@@ -45,7 +45,7 @@ Issue一覧から2段階の選択（Issue選定→エージェント選定）を
   - `[Ctrl-C]`: `claude` を指定して起動（複雑なタスク向け）
   - `[Ctrl-X]`: `codex` を指定して起動（軽量・高速タスク向け）
   - `[Ctrl-W]`: `git worktree` による分離ディレクトリで起動
-  - `[Ctrl-O]`: ブラウザ（`gh issue view --web`）で開く
+  - `[Ctrl-O]`: ブラウザで開く（`gh issue view --json url` + 自前 opener; issue #217）
 
 ### 3.3 堅牢な CI 待機 & マージ
 - **`bin/ci-wait`**:
