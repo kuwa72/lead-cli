@@ -44,6 +44,12 @@ case "$1 $2" in
           printf '[{"number":7,"title":"spec: warn on zero stock"},{"number":8,"title":"spec: second"}]'
         fi ;;
       *"--label blocked"*) printf '[{"number":9,"title":"impl: stuck on flaky test"}]' ;;
+      *"--label ready"*)
+        if [ -f "$APPROVED_FLAG" ]; then
+          printf '[{"number":7,"title":"spec: warn on zero stock"}]'
+        else
+          printf '[]'
+        fi ;;
       *"--state closed"*) printf '[]' ;;
       *) printf '[{"number":7,"title":"spec: warn on zero stock"},{"number":8,"title":"spec: second"},{"number":9,"title":"impl: stuck on flaky test"}]' ;;
     esac ;;
@@ -75,7 +81,9 @@ CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 cd "$repo"
 
 # approve #7, then quit. The dummy gh drops #7 from needs-review on
-# subsequent listings, so a correct inbox shows #7 under Backlog.
+# subsequent listings; since issue #212 the approved issue shows under the
+# Ready section (it carried the `ready` label all along — it used to fall
+# through to Backlog because no Ready section existed).
 : > "$GH_LOG"
 out="$(LEAD_TEST_INBOX_KEYS=a,q "$tmp/lead" 2>&1)" || fail "headless a,q exited non-zero: $out"
 
@@ -85,13 +93,14 @@ case "$out" in *"Approved #7 (ready)"*) ;; *) fail "approve status missing: $out
 
 # Needs review now holds only #8.
 case "$out" in *"Needs review (1)"*) ;; *) fail "needs-review count wrong after approve: $out";; esac
-# Backlog now holds the approved #7.
-case "$out" in *"Backlog (1)"*) ;; *) fail "backlog count wrong after approve: $out";; esac
-# The #7 row (title) must render after the Backlog header, i.e. inside
+# Ready now holds the approved #7.
+case "$out" in *"Ready (1)"*) ;; *) fail "ready count wrong after approve: $out";; esac
+case "$out" in *"Backlog (0)"*) ;; *) fail "#7 must not fall through to Backlog: $out";; esac
+# The #7 row (title) must render after the Ready header, i.e. inside
 # that box. Compare last occurrences: the dump contains the initial
 # screen too, so only the final screen counts.
-pos_backlog="$(printf '%s\n' "$out" | awk '/Backlog/{p=NR} END{print p+0}')"
+pos_ready="$(printf '%s\n' "$out" | awk '/Ready \(1\)/{p=NR} END{print p+0}')"
 pos_row="$(printf '%s\n' "$out" | awk '/warn on zero stock/{p=NR} END{print p+0}')"
-[ "$pos_row" -gt "$pos_backlog" ] || fail "#7 did not move under Backlog (row=$pos_row backlog=$pos_backlog): $out"
+[ "$pos_row" -gt "$pos_ready" ] || fail "#7 did not move under Ready (row=$pos_row ready=$pos_ready): $out"
 
 echo "approve-move tests passed"

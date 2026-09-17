@@ -280,29 +280,42 @@ func (d *Dispatcher) notifyResults(rep Report) {
 
 // orderReady gates and orders the ready queue (issue #207). Issues with an
 // open issue dependency (blocked-by) are dropped — they stay `ready` on
-// GitHub and are re-evaluated next pass. The rest is sorted by position in
-// its parent issue's sub-issue list (the tracking issue's order, e.g.
-// docs/roadmap.md's #50); parent groups run in parent-number order, and
-// untracked issues (no parent, closed parent, or failed sub-issues lookup)
-// run last in updatedAt order.
+// GitHub and are re-evaluated next pass. The rest is sorted by OrderReady,
+// the same ordering the inbox Ready section displays (issue #212).
 func (d *Dispatcher) orderReady(ctx context.Context, ready []ports.IssueSummary) []ports.IssueSummary {
 	var eligible []ports.IssueSummary
-	parents := map[int]bool{}
 	for _, s := range ready {
 		if hasOpenBlocker(s) {
 			continue
 		}
 		eligible = append(eligible, s)
+	}
+	return OrderReady(eligible, func(p int) (ports.SubIssueList, error) {
+		return d.Gh.SubIssues(ctx, p)
+	})
+}
+
+// OrderReady sorts a ready queue into dispatch order (issue #207): each
+// issue takes its position in its parent issue's sub-issue list (the
+// tracking issue's order, e.g. docs/roadmap.md's #50); parent groups run
+// in parent-number order, and untracked issues (no parent, closed parent,
+// or failed sub-issues lookup) run last in updatedAt order. The input is
+// not mutated. subIssues resolves a parent's ordered sub-issue list —
+// callers may cache it (the inbox does so per session, issue #212).
+func OrderReady(ready []ports.IssueSummary, subIssues func(parent int) (ports.SubIssueList, error)) []ports.IssueSummary {
+	ordered := append([]ports.IssueSummary(nil), ready...)
+	if len(ordered) == 0 {
+		return ordered
+	}
+	parents := map[int]bool{}
+	for _, s := range ordered {
 		if s.Parent > 0 {
 			parents[s.Parent] = true
 		}
 	}
-	if len(eligible) == 0 {
-		return eligible
-	}
 	rank := map[int]int{}
 	for p := range parents {
-		sub, err := d.Gh.SubIssues(ctx, p)
+		sub, err := subIssues(p)
 		if err != nil || strings.EqualFold(sub.State, "CLOSED") {
 			continue // no ordering signal: the group falls back to untracked
 		}
@@ -310,8 +323,8 @@ func (d *Dispatcher) orderReady(ctx context.Context, ready []ports.IssueSummary)
 			rank[n] = i
 		}
 	}
-	sort.SliceStable(eligible, func(i, j int) bool {
-		a, b := eligible[i], eligible[j]
+	sort.SliceStable(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
 		ra, aok := rank[a.Number]
 		rb, bok := rank[b.Number]
 		if aok != bok {
@@ -328,18 +341,26 @@ func (d *Dispatcher) orderReady(ctx context.Context, ready []ports.IssueSummary)
 		}
 		return a.Number < b.Number
 	})
-	return eligible
+	return ordered
+}
+
+// OpenBlocker returns the first issue dependency of s that is still open
+// on GitHub — the number the inbox shows as the deferred reason
+// (issue #212).
+func OpenBlocker(s ports.IssueSummary) (int, bool) {
+	for _, dep := range s.BlockedBy {
+		if strings.EqualFold(dep.State, "OPEN") {
+			return dep.Number, true
+		}
+	}
+	return 0, false
 }
 
 // hasOpenBlocker reports whether s has a dependency blocker that is still
 // open on GitHub.
 func hasOpenBlocker(s ports.IssueSummary) bool {
-	for _, dep := range s.BlockedBy {
-		if strings.EqualFold(dep.State, "OPEN") {
-			return true
-		}
-	}
-	return false
+	_, ok := OpenBlocker(s)
+	return ok
 }
 
 // runPool starts picks through slots workers: the next issue starts as soon

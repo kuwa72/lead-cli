@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kuwa72/lead-cli/internal/openurl"
 	"github.com/kuwa72/lead-cli/internal/ports"
 )
 
@@ -30,6 +31,10 @@ type Client struct {
 	// A missing binary yields *ports.BinaryNotFoundError so callers
 	// can fall back gracefully.
 	LookPath func(name string) (string, error)
+	// OpenURL opens a URL in a browser; nil means the openurl default
+	// (explicit GH_BROWSER/`gh config get browser`/BROWSER first, then
+	// powershell.exe on WSL, open on darwin, xdg-open on linux).
+	OpenURL func(ctx context.Context, url string) error
 }
 
 // New returns a Client with defaults.
@@ -483,10 +488,36 @@ func (c *Client) BranchProtection(ctx context.Context, repo, branch string) (por
 	return bp, nil
 }
 
-// BrowseIssue runs `gh issue view <n> --web`.
+// BrowseIssue fetches the issue URL via `gh issue view <n> --json url`
+// and opens it with the configured or detected browser (issue #217).
+// It no longer delegates to `--web`, whose opener discovery fails on
+// WSL installs lacking xdg-open/wslview.
 func (c *Client) BrowseIssue(ctx context.Context, number int) error {
-	_, err := c.run(ctx, "issue", "view", strconv.Itoa(number), "--web")
-	return err
+	out, err := c.run(ctx, "issue", "view", strconv.Itoa(number), "--json", "url")
+	if err != nil {
+		return err
+	}
+	var raw struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return fmt.Errorf("gh issue view %d: decode JSON: %w", number, err)
+	}
+	if raw.URL == "" {
+		return fmt.Errorf("gh issue view %d: empty url", number)
+	}
+	if c.OpenURL != nil {
+		return c.OpenURL(ctx, raw.URL)
+	}
+	return openurl.Open(ctx, raw.URL, openurl.Deps{
+		GhConfigGet: func(ctx context.Context, key string) (string, error) {
+			out, err := c.run(ctx, "config", "get", key)
+			if err != nil {
+				return "", nil // unset keys exit non-zero; treat as unset
+			}
+			return strings.TrimSpace(string(out)), nil
+		},
+	})
 }
 
 // AuthStatus runs `gh auth status` (exit 0 = authenticated).

@@ -20,6 +20,9 @@ type IssueCache struct {
 	Merged      []ports.MergedIssue  `json:"merged"`
 	OpenNumbers []int                `json:"open_numbers"`
 	OpenIssues  []ports.IssueSummary `json:"open_issues,omitempty"`
+	// Ready is the dispatch queue in display order (already sorted by
+	// dispatch.OrderReady, deferred issues last). Issue #212.
+	Ready []ports.IssueSummary `json:"ready,omitempty"`
 }
 
 // ResolveCachePath picks the cache file location next to workflows.json.

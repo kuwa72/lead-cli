@@ -131,8 +131,8 @@ CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 
 cd "$repo"
 
-# 1. Start inbox headless, expand all (z), move down 4 times to issue 143 in Running, quit
-out="$(LEAD_TEST_INBOX_WIDTH=130 LEAD_TEST_INBOX_HEIGHT=30 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,q "$tmp/lead" 2>&1)" || fail "lead exited non-zero: $out"
+# 1. Start inbox headless, expand all (z), move down 5 times to issue 143 in Running, quit
+out="$(LEAD_TEST_INBOX_WIDTH=130 LEAD_TEST_INBOX_HEIGHT=30 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,q "$tmp/lead" 2>&1)" || fail "lead exited non-zero: $out"
 printf '%s\n' "$out" > "$tmp/screen.log"
 
 case "$out" in
@@ -179,7 +179,7 @@ case "$1 $2" in
 esac
 EOF
 
-HERDR_LOG="$herdr_log" HERDR_ENV=1 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,p,q "$tmp/lead" >/dev/null 2>&1 || fail "peek keypress failed"
+HERDR_LOG="$herdr_log" HERDR_ENV=1 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,p,q "$tmp/lead" >/dev/null 2>&1 || fail "peek keypress failed"
 grep -qxF '<tab>' "$herdr_log" || fail "p did not call herdr tab create: $(cat "$herdr_log")"
 grep -qxF '<create>' "$herdr_log" || fail "p herdr tab create args wrong: $(cat "$herdr_log")"
 grep -qxF '<--focus>' "$herdr_log" || fail "p herdr tab create missing --focus: $(cat "$herdr_log")"

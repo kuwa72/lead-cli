@@ -39,13 +39,21 @@ case "$1 $2" in
   "issue list")
     printf '[{"number":36,"title":"ports adapter"}]' ;;
   "issue view")
-    if [ "$3" = "--web" ] || [ "$4" = "--web" ]; then :; else
+    if [ "$4 $5" = "--json url" ]; then
+      printf '{"url":"https://github.com/acme/widgets/issues/36"}'
+    else
       printf '{"number":36,"title":"ports adapter","body":"demo body","state":"OPEN"}'
     fi ;;
+  "config get") echo 'could not find key' >&2; exit 1 ;;
   *) echo "unexpected gh call: $@" >&2; exit 3 ;;
 esac
 EOF
-chmod +x "$tmp/bin/gh"
+# Dummy browser: the opener must log its argv (issue #217).
+cat > "$tmp/bin/fakebrowser" <<'EOF'
+#!/bin/sh
+for a in "$@"; do printf '<%s>\n' "$a" >> "$BROWSER_LOG"; done
+EOF
+chmod +x "$tmp/bin/gh" "$tmp/bin/fakebrowser"
 cat > "$tmp/bin/herdr" <<'EOF'
 #!/bin/sh
 echo "HERDR $@" >> "$HERDR_LOG"
@@ -59,8 +67,11 @@ chmod +x "$tmp/bin/herdr"
 export PATH="$tmp/bin:$PATH"
 export GH_ARGS_LOG="$tmp/gh-args.log"
 export HERDR_LOG="$tmp/herdr.log"
+export BROWSER_LOG="$tmp/browser.log"
+export GH_BROWSER=fakebrowser
 : > "$GH_ARGS_LOG"
 : > "$HERDR_LOG"
+: > "$BROWSER_LOG"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 cd "$repo"
@@ -78,13 +89,16 @@ LEAD_TEST_SELECTION=36:agy "$tmp/lead" work >/dev/null || fail "re-work via pick
 views_after=$(grep -c "GHLOG issue view 36 --json" "$GH_ARGS_LOG")
 [ "$views_after" = "$views_before" ] || fail "cache miss: gh view calls $views_before -> $views_after"
 
-# --- 3. browser selection: --web call, no branch, no state ---
+# --- 3. browser selection: URL fetch + self opener, no branch, no state ---
 git -C "$repo" checkout -q main
 git -C "$repo" branch -D issue/36-ports-adapter >/dev/null 2>&1 || true
 rm -f "$HOME/.local/state/lead/workflows.json"
 LEAD_TEST_SELECTION=36:browser "$tmp/lead" work | grep -q "browser" \
   || fail "browser selection missing notice"
-grep -q "GHLOG issue view 36 --web" "$GH_ARGS_LOG" || fail "browser open not invoked"
+grep -q "GHLOG issue view 36 --json url" "$GH_ARGS_LOG" || fail "browser URL not fetched"
+grep -q "GHLOG issue view 36 --web" "$GH_ARGS_LOG" && fail "--web must not be used"
+grep -qxF '<https://github.com/acme/widgets/issues/36>' "$BROWSER_LOG" \
+  || fail "opener did not receive the issue URL: $(cat "$BROWSER_LOG")"
 git -C "$repo" rev-parse --verify --quiet refs/heads/issue/36-ports-adapter >/dev/null 2>&1 \
   && fail "browse created a branch"
 [ ! -f "$HOME/.local/state/lead/workflows.json" ] || fail "browse recorded state"
