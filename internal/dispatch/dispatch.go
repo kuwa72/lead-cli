@@ -22,7 +22,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -239,6 +241,9 @@ func (d *Dispatcher) Once(ctx context.Context) (Report, error) {
 			rep.Deferred = append(rep.Deferred, s.Number)
 		}
 	}
+	if len(rep.Deferred) > 0 {
+		d.reportDependencyCycles(ctx, ready)
+	}
 	rep.Results = append(rep.Results, d.runPool(ctx, opts, picks, opts.Parallel-len(running))...)
 	if ctx.Err() == nil {
 		d.print(rep)
@@ -361,6 +366,110 @@ func OpenBlocker(s ports.IssueSummary) (int, bool) {
 func hasOpenBlocker(s ports.IssueSummary) bool {
 	_, ok := OpenBlocker(s)
 	return ok
+}
+
+// reportDependencyCycles finds blocked-by cycles inside the ready set and
+// reports each one on its member issues (issue #213). GitHub rejects direct
+// A↔B dependencies but accepts transitive cycles (A→B→C→A); every member
+// then has an open blocker and stays deferred forever — a silent deadlock.
+// Only edges between ready issues are traversed (the listing already
+// carries their blockers, so a pass without a cycle makes no extra API
+// calls); a cycle through a not-yet-ready issue surfaces once all its
+// members are labelled ready. Best-effort: gh failures never fail the pass.
+func (d *Dispatcher) reportDependencyCycles(ctx context.Context, ready []ports.IssueSummary) {
+	inReady := map[int]bool{}
+	for _, s := range ready {
+		inReady[s.Number] = true
+	}
+	// Per-pass cache: ready issue → its open blockers inside the ready set.
+	blockers := map[int][]int{}
+	for _, s := range ready {
+		for _, dep := range s.BlockedBy {
+			if strings.EqualFold(dep.State, "OPEN") && inReady[dep.Number] {
+				blockers[s.Number] = append(blockers[s.Number], dep.Number)
+			}
+		}
+	}
+	var stack []int
+	const (
+		white = iota // unvisited
+		gray         // on the DFS stack
+		black        // fully explored
+	)
+	color := map[int]int{}
+	seen := map[string]bool{}
+	var visit func(n int)
+	visit = func(n int) {
+		color[n] = gray
+		stack = append(stack, n)
+		for _, m := range blockers[n] {
+			switch color[m] {
+			case gray:
+				cycle := append([]int(nil), stack[slices.Index(stack, m):]...)
+				if key := cycleMarker(cycle); !seen[key] {
+					seen[key] = true
+					d.commentCycle(ctx, cycle)
+				}
+			case white:
+				visit(m)
+			}
+		}
+		stack = stack[:len(stack)-1]
+		color[n] = black
+	}
+	for _, s := range ready {
+		if color[s.Number] == white {
+			visit(s.Number)
+		}
+	}
+}
+
+// cycleMarker is the dedupe key embedded in a cycle report comment: the
+// sorted member set, so the same cycle is recognized however the DFS
+// entered it. Brackets keep member lists prefix-distinct ([1,2,3] vs
+// [1,2,30]).
+func cycleMarker(cycle []int) string {
+	members := append([]int(nil), cycle...)
+	sort.Ints(members)
+	parts := make([]string, len(members))
+	for i, n := range members {
+		parts[i] = strconv.Itoa(n)
+	}
+	return "lead:dependency-cycle:[" + strings.Join(parts, ",") + "]"
+}
+
+// commentCycle posts the cycle report on every member issue that does not
+// already carry it (the marker check keeps repeat passes quiet). Members
+// stay deferred — untangling the dependency is a human decision.
+func (d *Dispatcher) commentCycle(ctx context.Context, cycle []int) {
+	marker := cycleMarker(cycle)
+	var path strings.Builder
+	for _, n := range cycle {
+		fmt.Fprintf(&path, "#%d → ", n)
+	}
+	fmt.Fprintf(&path, "#%d", cycle[0])
+	if d.Out != nil {
+		fmt.Fprintf(d.Out, "dispatch: dependency cycle detected: %s\n", path.String())
+	}
+	body := fmt.Sprintf(`lead dispatch: blocked-by 依存が循環しているため、この Issue は deferred のまま dispatch されません。
+
+循環: %s
+
+どれかの blocked-by 依存を外すと循環が解消します（依存関係の修正は人間が行ってください）。
+
+<!-- %s -->`, path.String(), marker)
+	for _, n := range cycle {
+		existing, err := d.Gh.IssueComments(ctx, n)
+		if err != nil {
+			continue // cannot confirm absence; skip rather than risk a duplicate
+		}
+		if slices.ContainsFunc(existing, func(c ports.Comment) bool {
+			return strings.Contains(c.Body, marker)
+		}) {
+			continue
+		}
+		_ = d.Gh.IssueComment(ctx, n, body)
+	}
 }
 
 // runPool starts picks through slots workers: the next issue starts as soon
