@@ -698,46 +698,6 @@ func TestStop_ProcessAlreadyGoneStillCleansUp(t *testing.T) {
 	}
 }
 
-func TestStuckReason(t *testing.T) {
-	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-	touch := func(t *testing.T, mtime time.Time) string {
-		t.Helper()
-		p := filepath.Join(t.TempDir(), "agent.log")
-		if err := os.WriteFile(p, []byte("out\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chtimes(p, mtime, mtime); err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
-	fresh := touch(t, now.Add(-time.Minute))
-	stale := touch(t, now.Add(-time.Hour))
-	cases := []struct {
-		name    string
-		log     string
-		started time.Time
-		idle    time.Duration
-		maxRun  time.Duration
-		stuck   bool
-	}{
-		{"active output", fresh, now.Add(-time.Hour), time.Minute * 30, time.Hour * 3, false},
-		{"idle too long", stale, now.Add(-time.Hour), time.Minute * 30, time.Hour * 3, true},
-		{"idle check disabled", stale, now.Add(-time.Hour), 0, time.Hour * 3, false},
-		{"runtime exceeded", fresh, now.Add(-4 * time.Hour), time.Minute * 30, time.Hour * 3, true},
-		{"runtime check disabled", fresh, now.Add(-4 * time.Hour), time.Minute * 30, 0, false},
-		{"nothing known", "", time.Time{}, time.Minute * 30, time.Hour * 3, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			err := stuckReason(c.log, c.started, now, c.idle, c.maxRun)
-			if (err != nil) != c.stuck {
-				t.Errorf("stuckReason() = %v, want stuck=%v", err, c.stuck)
-			}
-		})
-	}
-}
-
 func stuckFixture(t *testing.T, attempts int, logAge time.Duration, startedAgo time.Duration) (*Dispatcher, *testutil.FakeGhClient, *os.Process) {
 	t.Helper()
 	d, gh, _, _ := newFixture(t)

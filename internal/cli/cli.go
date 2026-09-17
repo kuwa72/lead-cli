@@ -48,6 +48,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/tui"
 	"github.com/kuwa72/lead-cli/internal/update"
+	"github.com/kuwa72/lead-cli/internal/watchdog"
 	"github.com/kuwa72/lead-cli/internal/workflow"
 )
 
@@ -94,11 +95,18 @@ type Deps struct {
 	SpecAgent spec.AgentRunner
 }
 
-func (d Deps) specAgent() spec.AgentRunner {
+func (d Deps) specAgent(stallTimeout, maxRuntime time.Duration) spec.AgentRunner {
 	if d.SpecAgent != nil {
 		return d.SpecAgent
 	}
-	return &spec.ExecRunner{LookPath: d.LookPath}
+	return &spec.ExecRunner{LookPath: d.LookPath, StallTimeout: stallTimeout, MaxRuntime: maxRuntime}
+}
+
+// headlessConfig loads the shared inbox-config.json next to the state file
+// (issue #215): stall_timeout / max_runtime apply to every headless launch
+// path (`say`, `dispatch`, inbox).
+func (d Deps) headlessConfig() (inbox.Config, error) {
+	return inbox.LoadConfig(filepath.Join(filepath.Dir(d.stateFile()), "inbox-config.json"))
 }
 
 func (d Deps) launcher() dispatch.Launcher {
@@ -377,15 +385,14 @@ cross-reference each other). --redraft <n> rewrites issue n's body instead
 and posts a comment describing the change. --dry-run prints the would-be
 issues and touches nothing on GitHub. The agent's output is logged under
 the state directory (logs/say-*.log). Agent: --agent, else $LEAD_SPEC_AGENT,
-else agy. Print timeout: --timeout, else $LEAD_SPEC_TIMEOUT, else 15m
-(passed to agy as --print-timeout; its own default is 5m).`,
+else agy. The run ends when the log goes silent for stall_timeout
+(inbox-config.json, default 30m); a stalled run is reported and notified.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSay(cmd, deps, args[0])
 		},
 	}
 	sayCmd.Flags().String("agent", "", "headless spec agent (default: $LEAD_SPEC_AGENT, then agy)")
-	sayCmd.Flags().Duration("timeout", 0, "spec agent print timeout (default: $LEAD_SPEC_TIMEOUT, then 15m; agy only)")
 	sayCmd.Flags().Bool("dry-run", false, "print the would-be issues; no gh mutation")
 	sayCmd.Flags().Int("follow-up", 0, "file follow-up issue(s) for issue <n> (実機 NG); body references #<n>")
 	sayCmd.Flags().Int("redraft", 0, "rewrite issue <n>'s title/body from the one-liner and comment the change")
@@ -633,6 +640,17 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 
 	repoSlug := inbox.RepoSlug(deps.gitRunner().OriginURL(root))
 	store := &state.Store{Path: deps.stateFile()}
+
+	// Shared headless settings (issue #215): stall_timeout / max_runtime in
+	// inbox-config.json feed both the dispatcher and the spec-agent watchdog.
+	configDir := filepath.Dir(deps.stateFile())
+	configFile := filepath.Join(configDir, "inbox-config.json")
+	cfg, cfgErr := inbox.LoadConfig(configFile)
+	stallTimeout, stallErr := cfg.StallTimeoutOr(dispatch.DefaultStuckAfter)
+	maxRuntime, maxErr := cfg.MaxRuntimeOr(dispatch.DefaultMaxRuntime)
+	sayMaxRuntime, sayMaxErr := cfg.MaxRuntimeOr(0)
+	notifier := notify.New(notify.Options{Disabled: cfg.NotifyDisabled})
+
 	opts := inbox.Options{
 		Gh:         deps.gh(),
 		Store:      store,
@@ -664,9 +682,10 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	}
 	opts.Say = func(ctx context.Context, oneLiner string, followUp int) (string, error) {
 		r := &spec.Runner{
-			Gh:    deps.gh(),
-			Agent: deps.specAgent(),
-			Out:   cmd.OutOrStdout(),
+			Gh:     deps.gh(),
+			Agent:  deps.specAgent(stallTimeout, sayMaxRuntime),
+			Out:    cmd.OutOrStdout(),
+			Notify: notifier,
 			Opts: spec.Options{
 				Agent:      os.Getenv("LEAD_SPEC_AGENT"),
 				LogDir:     filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
@@ -691,17 +710,6 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		return errors.New("lead: the inbox needs an interactive terminal (stdin/stdout are not a TTY); run `lead --help` for subcommands")
 	}
 
-	configDir := filepath.Dir(deps.stateFile())
-	configFile := filepath.Join(configDir, "inbox-config.json")
-	var cfg struct {
-		Agent          string `json:"agent"`
-		AgentMode      string `json:"agent_mode"`
-		IssueCreation  string `json:"issue_creation"`
-		NotifyDisabled bool   `json:"notify_disabled"`
-	}
-	if data, err := os.ReadFile(configFile); err == nil {
-		_ = json.Unmarshal(data, &cfg)
-	}
 	if cfg.Agent != "" {
 		opts.Agent = cfg.Agent
 	}
@@ -711,7 +719,6 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	if cfg.IssueCreation != "" {
 		opts.IssueCreation = cfg.IssueCreation
 	}
-	notifier := notify.New(notify.Options{Disabled: cfg.NotifyDisabled})
 	opts.NotifyDisabled = cfg.NotifyDisabled
 	opts.Notifier = notifier
 
@@ -725,11 +732,13 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		Out:      io.Discard,
 		Notify:   notifier,
 		Opts: dispatch.Options{
-			Parallel:  parallel,
-			Agent:     opts.Agent,
-			AgentMode: opts.AgentMode,
-			LogDir:    filepath.Join(configDir, "logs"),
-			WorkDir:   cwd,
+			Parallel:   parallel,
+			Agent:      opts.Agent,
+			AgentMode:  opts.AgentMode,
+			LogDir:     filepath.Join(configDir, "logs"),
+			WorkDir:    cwd,
+			StuckAfter: stallTimeout,
+			MaxRuntime: maxRuntime,
 		},
 	}
 	opts.RunningCount = d.RunningCount
@@ -757,6 +766,15 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		d.Opts.AgentMode = mode
 	}
 
+	// A malformed inbox-config.json must not kill the inbox: fall back to
+	// defaults and surface the problem in the log pane (issue #215).
+	var configWarn strings.Builder
+	for _, e := range []error{cfgErr, stallErr, maxErr, sayMaxErr} {
+		if e != nil {
+			fmt.Fprintln(&configWarn, e)
+		}
+	}
+
 	var preflightWarn strings.Builder
 	d.Out = &preflightWarn
 	if err := d.Preflight(dctx); err != nil {
@@ -775,6 +793,9 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 			}
 		}()
 	}
+	if w := configWarn.String(); w != "" {
+		opts.StartupNotice = strings.TrimSpace(opts.StartupNotice + "\n" + w)
+	}
 
 	if keys != "" {
 		opts.Shell = inbox.SyncShell{}
@@ -788,7 +809,9 @@ func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
-// runSay implements `lead say` (RFC inbox §8, issue #94).
+// runSay implements `lead say` (RFC inbox §8, issue #94). The headless run
+// is bounded by the shared stall watchdog (issue #215): stall_timeout in
+// inbox-config.json, with no wall-clock cap unless max_runtime is set.
 func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 	flags := cmd.Flags()
 	agentName, _ := flags.GetString("agent")
@@ -798,15 +821,18 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 	dryRun, _ := flags.GetBool("dry-run")
 	followUp, _ := flags.GetInt("follow-up")
 	redraft, _ := flags.GetInt("redraft")
-	timeout, _ := flags.GetDuration("timeout")
-	if timeout <= 0 {
-		if env := os.Getenv("LEAD_SPEC_TIMEOUT"); env != "" {
-			d, err := time.ParseDuration(env)
-			if err != nil {
-				return fmt.Errorf("say: LEAD_SPEC_TIMEOUT: %w", err)
-			}
-			timeout = d
-		}
+
+	cfg, err := deps.headlessConfig()
+	if err != nil {
+		return fmt.Errorf("say: %w", err)
+	}
+	stall, err := cfg.StallTimeoutOr(watchdog.DefaultStallTimeout)
+	if err != nil {
+		return fmt.Errorf("say: %w", err)
+	}
+	maxRun, err := cfg.MaxRuntimeOr(0)
+	if err != nil {
+		return fmt.Errorf("say: %w", err)
 	}
 
 	cwd, err := deps.workDir()
@@ -815,9 +841,10 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 	}
 	repo := deps.gitRunner().OriginURL(cwd)
 	r := &spec.Runner{
-		Gh:    deps.gh(),
-		Agent: deps.specAgent(),
-		Out:   cmd.OutOrStdout(),
+		Gh:     deps.gh(),
+		Agent:  deps.specAgent(stall, maxRun),
+		Out:    cmd.OutOrStdout(),
+		Notify: notify.New(notify.Options{Disabled: cfg.NotifyDisabled}),
 		Opts: spec.Options{
 			Agent:      agentName,
 			LogDir:     filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
@@ -826,7 +853,6 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 			DryRun:     dryRun,
 			FollowUp:   followUp,
 			Redraft:    redraft,
-			Timeout:    timeout,
 		},
 	}
 	_, err = r.Say(cmd.Context(), oneLiner)
@@ -907,6 +933,20 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 	if err != nil {
 		return fmt.Errorf("dispatch: working directory: %w", err)
 	}
+	// Shared stall-detection settings (issue #215): stall_timeout /
+	// max_runtime in inbox-config.json; unset keys keep the #186 defaults.
+	cfg, err := deps.headlessConfig()
+	if err != nil {
+		return fmt.Errorf("dispatch: %w", err)
+	}
+	stuckAfter, err := cfg.StallTimeoutOr(dispatch.DefaultStuckAfter)
+	if err != nil {
+		return fmt.Errorf("dispatch: %w", err)
+	}
+	maxRuntime, err := cfg.MaxRuntimeOr(dispatch.DefaultMaxRuntime)
+	if err != nil {
+		return fmt.Errorf("dispatch: %w", err)
+	}
 	stateFile := deps.stateFile()
 	d := &dispatch.Dispatcher{
 		Gh:       deps.gh(),
@@ -914,12 +954,14 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 		Store:    &state.Store{Path: stateFile},
 		Launcher: deps.launcher(),
 		Out:      cmd.OutOrStdout(),
-		Notify:   notify.New(notify.Options{}),
+		Notify:   notify.New(notify.Options{Disabled: cfg.NotifyDisabled}),
 		Opts: dispatch.Options{
-			Parallel: parallel,
-			Agent:    agentName,
-			LogDir:   filepath.Join(filepath.Dir(stateFile), "logs"),
-			WorkDir:  cwd,
+			Parallel:   parallel,
+			Agent:      agentName,
+			LogDir:     filepath.Join(filepath.Dir(stateFile), "logs"),
+			WorkDir:    cwd,
+			StuckAfter: stuckAfter,
+			MaxRuntime: maxRuntime,
 		},
 	}
 	if err := d.Preflight(cmd.Context()); err != nil {

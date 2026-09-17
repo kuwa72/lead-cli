@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/testutil"
@@ -100,51 +102,60 @@ func TestSay_AgentFromEnvWhenFlagAbsent(t *testing.T) {
 	}
 }
 
-// issue #204: --timeout / LEAD_SPEC_TIMEOUT reach agy as --print-timeout.
-func TestSay_TimeoutFlagAndEnvReachAgy(t *testing.T) {
-	argvHasTimeout := func(argv []string, want string) bool {
-		for i, a := range argv {
-			if a == "--print-timeout" && i+1 < len(argv) {
-				return argv[i+1] == want
-			}
-		}
-		return false
-	}
-
-	fake := &testutil.FakeGhClient{}
+// issue #215: --timeout / LEAD_SPEC_TIMEOUT are gone — the shared
+// stall_timeout in inbox-config.json is the only knob, and agy gets a
+// --print-timeout backstop far above the watchdog threshold.
+func TestSay_TimeoutFlagAndEnvRemoved(t *testing.T) {
 	ag := &recordingSpecAgent{Output: `[{"title":"t","body":"b"}]`}
-	deps := Deps{Gh: fake, SpecAgent: ag, StateFile: filepath.Join(t.TempDir(), "w.json"), WorkDir: t.TempDir()}
-	if _, err := executeSay(t, deps, "x", "--agent", "agy", "--timeout", "42m", "--dry-run"); err != nil {
-		t.Fatal(err)
-	}
-	if !argvHasTimeout(ag.Argv[0], "42m0s") {
-		t.Errorf("--timeout 42m argv = %q", ag.Argv[0])
+	deps := Deps{Gh: &testutil.FakeGhClient{}, SpecAgent: ag, StateFile: filepath.Join(t.TempDir(), "w.json"), WorkDir: t.TempDir()}
+	if _, err := executeSay(t, deps, "x", "--agent", "agy", "--timeout", "42m", "--dry-run"); err == nil {
+		t.Error("--timeout still accepted")
 	}
 
-	t.Setenv("LEAD_SPEC_TIMEOUT", "25m")
-	ag2 := &recordingSpecAgent{Output: `[{"title":"t","body":"b"}]`}
-	deps2 := Deps{Gh: fake, SpecAgent: ag2, StateFile: filepath.Join(t.TempDir(), "w.json"), WorkDir: t.TempDir()}
-	if _, err := executeSay(t, deps2, "x", "--agent", "agy", "--dry-run"); err != nil {
+	t.Setenv("LEAD_SPEC_TIMEOUT", "soon") // ignored now: must not error
+	if _, err := executeSay(t, deps, "x", "--agent", "agy", "--dry-run"); err != nil {
+		t.Fatalf("LEAD_SPEC_TIMEOUT should be ignored: %v", err)
+	}
+	var timeout string
+	for i, a := range ag.Argv[0] {
+		if a == "--print-timeout" && i+1 < len(ag.Argv[0]) {
+			timeout = ag.Argv[0][i+1]
+		}
+	}
+	if timeout != "24h0m0s" {
+		t.Errorf("agy --print-timeout = %q, want 24h0m0s backstop: %q", timeout, ag.Argv[0])
+	}
+}
+
+// issue #215: `lead say` reads stall_timeout from inbox-config.json and the
+// real ExecRunner watchdog kills a silent agent. Behavior verified with a
+// PATH-injected dummy that never prints.
+func TestSay_StallTimeoutFromConfigKillsSilentAgent(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state", "workflows.json")
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if !argvHasTimeout(ag2.Argv[0], "25m0s") {
-		t.Errorf("LEAD_SPEC_TIMEOUT argv = %q", ag2.Argv[0])
-	}
-
-	// Flag beats env.
-	ag3 := &recordingSpecAgent{Output: `[{"title":"t","body":"b"}]`}
-	deps3 := Deps{Gh: fake, SpecAgent: ag3, StateFile: filepath.Join(t.TempDir(), "w.json"), WorkDir: t.TempDir()}
-	if _, err := executeSay(t, deps3, "x", "--agent", "agy", "--timeout", "10m", "--dry-run"); err != nil {
+	cfg := filepath.Join(filepath.Dir(stateFile), "inbox-config.json")
+	if err := os.WriteFile(cfg, []byte(`{"stall_timeout":"300ms"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !argvHasTimeout(ag3.Argv[0], "10m0s") {
-		t.Errorf("flag-over-env argv = %q", ag3.Argv[0])
+	testutil.InstallDummy(t, "claude", "sleep 60")
+	deps := Deps{
+		Gh:        &testutil.FakeGhClient{},
+		StateFile: stateFile,
+		WorkDir:   t.TempDir(),
+		LookPath:  func(name string) (string, error) { return name, nil },
 	}
-
-	// Invalid env value is an error, not silently ignored.
-	t.Setenv("LEAD_SPEC_TIMEOUT", "soon")
-	if _, err := executeSay(t, deps3, "x", "--agent", "agy", "--dry-run"); err == nil {
-		t.Error("invalid LEAD_SPEC_TIMEOUT accepted")
+	start := time.Now()
+	_, err := executeSay(t, deps, "x", "--agent", "claude")
+	if err == nil {
+		t.Fatal("silent agent run succeeded")
+	}
+	if !strings.Contains(err.Error(), "stalled") {
+		t.Errorf("err = %v, want stalled reason", err)
+	}
+	if time.Since(start) > 30*time.Second {
+		t.Error("watchdog did not fire promptly")
 	}
 }
 

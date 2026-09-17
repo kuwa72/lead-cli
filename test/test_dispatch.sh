@@ -137,6 +137,34 @@ assert c["required checks"]["ok"] and "test" in c["required checks"]["detail"], 
 assert c["auto-merge"]["ok"], c
 PY
 
+# --- 2c. stall_timeout in inbox-config.json kills a reconnected silent agent ---
+# issue #215: dispatch reads the shared setting; a live agent whose log is
+# idle past stall_timeout is SIGKILLed and counted as a failed attempt.
+printf '{"stall_timeout":"1s"}' > "$tmp/state/inbox-config.json"
+sleep 300 &
+sleeper=$!
+mkdir -p "$tmp/state/logs"
+stale_log="$tmp/state/logs/issue-7-stale.log"
+echo old > "$stale_log"
+python3 - "$LEAD_STATE_FILE" "$stale_log" "$sleeper" <<'PY' || fail "failed to plant stale workflow record"
+import json, os, sys, time, datetime
+state_file, log_path, pid = sys.argv[1], sys.argv[2], int(sys.argv[3])
+old = time.time() - 3600
+os.utime(log_path, (old, old))
+started = datetime.datetime.fromtimestamp(old, datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+rec = {"repository": "o/r", "issue": 7, "mode": "implement", "branch": "issue/7",
+       "status": "in_progress", "agent": "claude", "pid": pid,
+       "log_path": log_path, "started_at": started, "updated_at": started}
+os.makedirs(os.path.dirname(state_file), exist_ok=True)
+json.dump({"version": 1, "workflows": [rec]}, open(state_file, "w"))
+PY
+out="$(cd "$repo" && "$tmp/lead" dispatch --once --parallel 1 --agent claude 2>&1)" || fail "dispatch on stalled agent exited non-zero: $out"
+case "$out" in *"#7"*"retry"*"no output"*) ;; *) fail "stalled agent not reported as retry: $out";; esac
+wait "$sleeper" 2>/dev/null || true
+kill -0 "$sleeper" 2>/dev/null && fail "stalled agent pid $sleeper still alive"
+grep -q '"attempts": 1' "$LEAD_STATE_FILE" || fail "attempt not counted: $(cat "$LEAD_STATE_FILE")"
+rm -f "$tmp/state/inbox-config.json" "$LEAD_STATE_FILE"
+
 # --- 3. run keeps work as hidden alias ----------------------------------------
 "$tmp/lead" run --help | grep -q "lead run" || fail "lead run --help missing usage"
 "$tmp/lead" work --help >/dev/null 2>&1 || fail "lead work alias broken"

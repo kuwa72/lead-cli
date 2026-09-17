@@ -60,10 +60,17 @@ case "$1 $2" in
 esac
 EOF
 # Dummy agent: log argv one per line, cwd, then print canned output.
+# AGENT_STALL=<sec> sleeps silently first (watchdog bait, issue #215);
+# AGENT_CHAT=<n> prints a tick every 0.3s before the payload (keeps the
+# log mtime fresh so the stall watchdog must not fire).
 cat > "$tmp/bin/claude" <<'EOF'
 #!/bin/sh
 printf '<%s>\n' "$@" >> "$AGENT_LOG"
 printf 'CWD=%s\n' "$(pwd)" >> "$AGENT_LOG"
+if [ -n "${AGENT_STALL:-}" ]; then sleep "$AGENT_STALL"; fi
+if [ -n "${AGENT_CHAT:-}" ]; then
+  i=0; while [ "$i" -lt "$AGENT_CHAT" ]; do echo tick; sleep 0.3; i=$((i+1)); done
+fi
 cat "$AGENT_OUT"
 EOF
 # Dummy agy: same argv recorder (issue #204 verifies --print-timeout reaches it).
@@ -140,23 +147,41 @@ echo 'I refuse.' > "$AGENT_OUT"
 if (cd "$repo" && "$tmp/lead" say "x" --agent claude >/dev/null 2>&1); then fail "invalid agent output accepted"; fi
 [ -s "$GH_LOG" ] && fail "gh called despite invalid agent output"
 
-# --- 6. agy gets --print-timeout over its 5m default; --timeout/env override ---
+# --- 6. agy gets a --print-timeout backstop; --timeout/LEAD_SPEC_TIMEOUT are gone (issue #215) ---
 : > "$AGENT_LOG"
 echo '[{"title":"feat: t","body":"b"}]' > "$AGENT_OUT"
 (cd "$repo" && "$tmp/lead" say "x" --agent agy --dry-run >/dev/null 2>&1) || fail "agy say exited non-zero"
 grep -qxF '<--print-timeout>' "$AGENT_LOG" || fail "agy argv missing --print-timeout: $(cat "$AGENT_LOG")"
-grep -qxF '<15m0s>' "$AGENT_LOG" || fail "agy argv missing default 15m0s: $(cat "$AGENT_LOG")"
+grep -qxF '<24h0m0s>' "$AGENT_LOG" || fail "agy argv missing 24h0m0s backstop: $(cat "$AGENT_LOG")"
 
-: > "$AGENT_LOG"
-(cd "$repo" && "$tmp/lead" say "x" --agent agy --timeout 42m --dry-run >/dev/null 2>&1) || fail "--timeout say exited non-zero"
-grep -qxF '<42m0s>' "$AGENT_LOG" || fail "--timeout 42m not passed to agy: $(cat "$AGENT_LOG")"
+if (cd "$repo" && "$tmp/lead" say "x" --agent agy --timeout 42m --dry-run >/dev/null 2>&1); then
+  fail "--timeout flag is still accepted"
+fi
 
 : > "$AGENT_LOG"
 (cd "$repo" && LEAD_SPEC_TIMEOUT=25m "$tmp/lead" say "x" --agent agy --dry-run >/dev/null 2>&1) || fail "env-timeout say exited non-zero"
-grep -qxF '<25m0s>' "$AGENT_LOG" || fail "LEAD_SPEC_TIMEOUT=25m not passed to agy: $(cat "$AGENT_LOG")"
+grep -qxF '<25m0s>' "$AGENT_LOG" && fail "LEAD_SPEC_TIMEOUT still reaches agy: $(cat "$AGENT_LOG")"
+grep -qxF '<24h0m0s>' "$AGENT_LOG" || fail "agy argv lost the 24h0m0s backstop: $(cat "$AGENT_LOG")"
 
-# --- 7. help ---------------------------------------------------------------------
+# --- 7. stall watchdog: silent agent is killed at stall_timeout (issue #215) ------
+mkdir -p "$tmp/state"
+printf '{"stall_timeout":"1s"}' > "$tmp/state/inbox-config.json"
+: > "$AGENT_LOG"
+out="$(cd "$repo" && AGENT_STALL=60 timeout 30 "$tmp/lead" say "x" --agent claude 2>&1)" && fail "silent agent run succeeded: $out"
+case "$out" in *stalled*"no output"*) ;; *) fail "error lacks stall reason: $out";; esac
+case "$out" in *say-*".log"*) ;; *) fail "error lacks log path: $out";; esac
+
+# --- 7b. an agent that keeps writing is never killed by the stall watchdog -------
+: > "$AGENT_LOG"; : > "$GH_LOG"
+echo '[{"title":"feat: chatty","body":"b"}]' > "$AGENT_OUT"
+out="$(cd "$repo" && AGENT_CHAT=8 timeout 30 "$tmp/lead" say "chatty" --agent claude 2>&1)" || fail "chatty agent was killed: $out"
+grep -q '^GH issue create --title feat: chatty ' "$GH_LOG" || fail "chatty run did not file the issue: $(cat "$GH_LOG")"
+
+rm -f "$tmp/state/inbox-config.json"
+
+# --- 8. help ---------------------------------------------------------------------
 "$tmp/lead" say --help | grep -q -- '--follow-up' || fail "say --help lacks --follow-up"
+"$tmp/lead" say --help | grep -q -- '--timeout' && fail "say --help still lists --timeout"
 "$tmp/lead" --help | grep -q 'say' || fail "root help lacks say"
 
 echo "PASS: test_say"

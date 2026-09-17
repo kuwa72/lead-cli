@@ -35,6 +35,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
+	"github.com/kuwa72/lead-cli/internal/watchdog"
 	"github.com/kuwa72/lead-cli/internal/workflow"
 )
 
@@ -46,10 +47,11 @@ const (
 	DefaultBlockedLabel = "blocked"
 	// DefaultStuckAfter treats an agent with no log output this long as
 	// failed (issue #186). Silent stretches cover legitimate CI waits,
-	// so the default is generous.
-	DefaultStuckAfter = 30 * time.Minute
+	// so the default is generous. Shared with `lead say` via
+	// watchdog.DefaultStallTimeout (issue #215).
+	DefaultStuckAfter = watchdog.DefaultStallTimeout
 	// DefaultMaxRuntime caps one headless run (issue #186).
-	DefaultMaxRuntime = 3 * time.Hour
+	DefaultMaxRuntime = watchdog.DefaultMaxRuntime
 )
 
 // Options tunes one Dispatcher. Zero fields take the defaults above.
@@ -405,10 +407,10 @@ func (d *Dispatcher) reconnect(ctx context.Context, opts Options) ([]Running, []
 			continue
 		}
 		if d.alive(w.PID) {
-			if reason := stuckReason(w.LogPath, w.StartedAt, time.Now(), opts.StuckAfter, opts.MaxRuntime); reason != nil {
+			if reason := watchdog.StuckReason(w.LogPath, w.StartedAt, time.Now(), opts.StuckAfter, opts.MaxRuntime); reason != nil {
 				kill := d.Kill
 				if kill == nil {
-					kill = killProcessGroup
+					kill = watchdog.KillProcessGroup
 				}
 				if err := kill(w.PID); err != nil {
 					// Kill failed: leave it running; the next pass retries.
@@ -675,7 +677,7 @@ func (d *Dispatcher) Stop(ctx context.Context, number int) error {
 	}
 	kill := d.Kill
 	if kill == nil {
-		kill = killProcessGroup
+		kill = watchdog.KillProcessGroup
 	}
 	if err := kill(w.PID); err != nil {
 		return fmt.Errorf("stop: kill agent for #%d: %w", number, err)
@@ -690,42 +692,6 @@ func (d *Dispatcher) Stop(ctx context.Context, number int) error {
 	}
 	if _, err := d.Store.Delete(number, ""); err != nil {
 		return fmt.Errorf("stop: delete state for #%d: %w", number, err)
-	}
-	return nil
-}
-
-// stuckReason returns non-nil when a running agent should be treated as
-// failed: past MaxRuntime, or silent longer than idleTimeout (issue #186).
-// Non-positive timeouts disable their check. Zero startedAt with no log
-// means nothing is known: never stuck.
-func stuckReason(logPath string, startedAt, now time.Time, idleTimeout, maxRuntime time.Duration) error {
-	if maxRuntime > 0 && !startedAt.IsZero() && now.Sub(startedAt) > maxRuntime {
-		return fmt.Errorf("agent exceeded maximum runtime of %s", maxRuntime)
-	}
-	if idleTimeout <= 0 {
-		return nil
-	}
-	last := startedAt
-	if logPath != "" {
-		if fi, err := os.Stat(logPath); err == nil && fi.ModTime().After(last) {
-			last = fi.ModTime()
-		}
-	}
-	if last.IsZero() || now.Sub(last) <= idleTimeout {
-		return nil
-	}
-	return fmt.Errorf("agent produced no output for %s", now.Sub(last).Round(time.Second))
-}
-
-// killProcessGroup SIGKILLs the process group (agents start in their own
-// group via ExecLauncher) and falls back to the single pid. ESRCH anywhere
-// means already gone, which counts as success.
-func killProcessGroup(pid int) error {
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
-	}
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
 	}
 	return nil
 }

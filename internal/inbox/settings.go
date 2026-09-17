@@ -14,12 +14,17 @@ const (
 	IssueCreationAI     = "ai"
 )
 
-// Config represents the persisted user configuration for lead inbox.
+// Config represents the persisted user configuration (inbox-config.json).
+// StallTimeout/MaxRuntime are Go duration strings shared by every headless
+// launch path (issue #215); they are not editable from the settings UI, so
+// OnSettingsChange must preserve them when writing the file back.
 type Config struct {
 	Agent          string `json:"agent"`
 	AgentMode      string `json:"agent_mode"`
 	IssueCreation  string `json:"issue_creation"`
 	NotifyDisabled bool   `json:"notify_disabled"`
+	StallTimeout   string `json:"stall_timeout,omitempty"`
+	MaxRuntime     string `json:"max_runtime,omitempty"`
 }
 
 // IssueCreation returns the current issue creation default ("direct" or "ai").
