@@ -1122,6 +1122,149 @@ func TestOnce_SubIssuesErrorFallsBack(t *testing.T) {
 	}
 }
 
+// OrderReady is the queue ordering shared with the inbox Ready section
+// (issue #212): sub-issue rank first (parent groups in parent-number
+// order), untracked issues last in updatedAt order.
+func TestOrderReady_SharedOrdering(t *testing.T) {
+	base := time.Now()
+	ready := []ports.IssueSummary{
+		{Number: 3, Parent: 50, UpdatedAt: base},
+		{Number: 9, UpdatedAt: base.Add(-time.Hour)}, // untracked
+		{Number: 1, Parent: 50, UpdatedAt: base.Add(time.Hour)},
+		{Number: 6, Parent: 60, UpdatedAt: base.Add(-time.Hour)},
+		{Number: 2, Parent: 50, UpdatedAt: base.Add(2 * time.Hour)},
+	}
+	gh := &testutil.FakeGhClient{SubIssueLists: map[int]ports.SubIssueList{
+		50: {State: "OPEN", Numbers: []int{1, 2, 3}},
+		60: {State: "OPEN", Numbers: []int{6}},
+	}}
+	ordered := OrderReady(ready, func(p int) (ports.SubIssueList, error) {
+		return gh.SubIssues(context.Background(), p)
+	})
+	var got []int
+	for _, s := range ordered {
+		got = append(got, s.Number)
+	}
+	if want := []int{1, 2, 3, 6, 9}; !reflect.DeepEqual(got, want) {
+		t.Errorf("OrderReady = %v, want %v", got, want)
+	}
+	// The input slice must not be reordered in place: callers keep the raw
+	// listing for other section bookkeeping.
+	if ready[0].Number != 3 {
+		t.Errorf("OrderReady mutated its input: %v", ready)
+	}
+}
+
+func TestOpenBlocker(t *testing.T) {
+	s := ports.IssueSummary{BlockedBy: []ports.IssueDependency{
+		{Number: 34, State: "CLOSED"},
+		{Number: 35, State: "OPEN"},
+	}}
+	if n, ok := OpenBlocker(s); !ok || n != 35 {
+		t.Errorf("OpenBlocker = %d,%v, want 35,true", n, ok)
+	}
+	if _, ok := OpenBlocker(ports.IssueSummary{}); ok {
+		t.Error("OpenBlocker on no deps = true, want false")
+	}
+	if _, ok := OpenBlocker(ports.IssueSummary{BlockedBy: []ports.IssueDependency{{Number: 34, State: "CLOSED"}}}); ok {
+		t.Error("OpenBlocker on closed dep = true, want false")
+	}
+}
+
+// Issue #213: a transitive blocked-by cycle (A→B→C→A) leaves every member
+// deferred forever — a silent deadlock. The pass must report the cycle path
+// on each member issue, once per unique cycle, and never re-report it while
+// the report comment is still on GitHub.
+func TestOnce_DependencyCycleCommentedOnce(t *testing.T) {
+	d, gh, l := queueFixture(t,
+		ports.IssueSummary{Number: 1, BlockedBy: []ports.IssueDependency{{Number: 2, State: "OPEN"}}},
+		ports.IssueSummary{Number: 2, BlockedBy: []ports.IssueDependency{{Number: 3, State: "OPEN"}}},
+		ports.IssueSummary{Number: 3, BlockedBy: []ports.IssueDependency{{Number: 1, State: "OPEN"}}},
+		ports.IssueSummary{Number: 9},
+	)
+
+	rep, err := d.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if !reflect.DeepEqual(rep.Deferred, []int{1, 2, 3}) {
+		t.Errorf("deferred = %v, want [1 2 3]", rep.Deferred)
+	}
+	if got, want := launchedOrder(l), []int{9}; !reflect.DeepEqual(got, want) {
+		t.Errorf("launch order = %v, want %v (cycle members stay deferred, no forced dispatch)", got, want)
+	}
+	for n := 1; n <= 3; n++ {
+		var bodies []string
+		for _, c := range gh.Comments {
+			if c.Number == n {
+				bodies = append(bodies, c.Body)
+			}
+		}
+		if len(bodies) != 1 {
+			t.Fatalf("cycle comments on #%d = %d, want 1: %+v", n, len(bodies), gh.Comments)
+		}
+		if !strings.Contains(bodies[0], "#1 → #2 → #3 → #1") {
+			t.Errorf("comment on #%d lacks the cycle path:\n%s", n, bodies[0])
+		}
+	}
+	for _, c := range gh.Comments {
+		if c.Number == 9 {
+			t.Errorf("non-cycle issue #9 got a cycle comment: %+v", c)
+		}
+	}
+
+	// Mirror GitHub: posted comments become existing comments. Pass 2 must
+	// re-check them and post nothing for the same cycle.
+	gh.CommentsByNo = map[int][]ports.Comment{}
+	for _, c := range gh.Comments {
+		gh.CommentsByNo[c.Number] = append(gh.CommentsByNo[c.Number], ports.Comment{Body: c.Body})
+	}
+	gh.Labeled["ready"] = gh.Labeled["ready"][:3] // #9 closed in pass 1
+	before := len(gh.Comments)
+	rep, err = d.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once #2: %v", err)
+	}
+	if len(gh.Comments) != before {
+		t.Errorf("cycle re-reported on pass 2: %+v", gh.Comments[before:])
+	}
+	if len(gh.CommentsCalls) == 0 {
+		t.Error("pass 2 never consulted existing comments; dedupe cannot work")
+	}
+	if !reflect.DeepEqual(rep.Deferred, []int{1, 2, 3}) {
+		t.Errorf("pass 2 deferred = %v, want [1 2 3]", rep.Deferred)
+	}
+}
+
+// Without a cycle, comment-related API calls must not run even when the
+// pass has a deferred issue (blocked by a non-ready issue).
+func TestOnce_NoCycleMakesNoCommentCalls(t *testing.T) {
+	d, gh, _ := queueFixture(t,
+		ports.IssueSummary{Number: 8, BlockedBy: []ports.IssueDependency{{Number: 35, State: "OPEN"}}},
+		ports.IssueSummary{Number: 9},
+	)
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(gh.CommentsCalls) != 0 || len(gh.Comments) != 0 {
+		t.Errorf("comment API used without a cycle: calls=%v comments=%+v", gh.CommentsCalls, gh.Comments)
+	}
+}
+
+// With no deferred issues the pass must not touch the comment API either.
+func TestOnce_NoDeferredMakesNoCommentCalls(t *testing.T) {
+	d, gh, _ := queueFixture(t,
+		ports.IssueSummary{Number: 1},
+		ports.IssueSummary{Number: 9},
+	)
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(gh.CommentsCalls) != 0 || len(gh.Comments) != 0 {
+		t.Errorf("comment API used with nothing deferred: calls=%v comments=%+v", gh.CommentsCalls, gh.Comments)
+	}
+}
+
 // Deferred issues are still pending work, so they suppress the all-done
 // notification even when everything dispatched completed.
 func TestOnce_DeferredDoesNotNotifyAllDone(t *testing.T) {

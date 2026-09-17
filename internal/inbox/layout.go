@@ -2,12 +2,13 @@ package inbox
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+
+	"github.com/kuwa72/lead-cli/internal/state"
 )
 
 // minWidth/minHeight gate the dashboard layout (docs/rfc-inbox-ui-density.md §2.1).
@@ -150,13 +151,14 @@ func shortAge(t, now time.Time) string {
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
-// rowAge is the Updated column value. Running agents show last log
-// activity instead of the issue update time (issue #187): liveness at a
-// glance in narrow layouts without a preview pane.
+// rowAge is the Updated column value. Running agents show last activity
+// instead of the issue update time (issue #187): liveness at a glance in
+// narrow layouts without a preview pane. Last-activity is the watchdog's
+// definition (issue #216): log mtime, else started_at.
 func rowAge(r Row, now time.Time) string {
-	if r.Item != nil && r.Section.Kind == KindRunning && r.Item.LogPath != "" {
-		if fi, err := os.Stat(r.Item.LogPath); err == nil {
-			return shortAge(fi.ModTime(), now)
+	if r.Item != nil && r.Section.Kind == KindRunning {
+		if last := state.LastActivity(r.Item.LogPath, r.Item.StartedAt); !last.IsZero() {
+			return shortAge(last, now)
 		}
 	}
 	if r.Item == nil {
@@ -289,6 +291,16 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 	}
 	it := *r.Item
 	title := Sanitize(it.Title)
+	if it.DeferredBy > 0 {
+		// Deferred rows carry the reason in the title column; the note is
+		// kept whole while the title yields space for it (issue #212).
+		note := fmt.Sprintf("deferred: blocked by #%d", it.DeferredBy)
+		title = truncTail(title, c.titleW-cellWidth(note)-2)
+		if title != "" {
+			title += "  "
+		}
+		title += note
+	}
 	b.WriteString(fitRight(fmt.Sprintf("#%d", it.Number), c.issueW))
 	b.WriteString(" ")
 	b.WriteString(fitLeft(title, c.titleW))

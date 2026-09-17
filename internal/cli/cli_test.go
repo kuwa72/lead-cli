@@ -115,7 +115,7 @@ func TestInboxSettingsDisablesNotifications(t *testing.T) {
 
 func runningHeadlessDeps(t *testing.T, startedAgo time.Duration, logAge time.Duration) Deps {
 	t.Helper()
-	t.Setenv("LEAD_TEST_INBOX_KEYS", "j,j,j,enter,j,q")
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "j,j,j,j,enter,j,q")
 	stateFile := filepath.Join(t.TempDir(), "workflows.json")
 	t.Setenv("LEAD_STATE_FILE", stateFile)
 	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {
@@ -128,12 +128,14 @@ func runningHeadlessDeps(t *testing.T, startedAgo time.Duration, logAge time.Dur
 		7: {Number: 7, Title: "work", Body: "body", State: "OPEN"},
 	}}
 	logPath := filepath.Join(t.TempDir(), "issue-7.log")
-	if err := os.WriteFile(logPath, []byte("working\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-logAge)
-	if err := os.Chtimes(logPath, old, old); err != nil {
-		t.Fatal(err)
+	if logAge >= 0 {
+		if err := os.WriteFile(logPath, []byte("working\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-logAge)
+		if err := os.Chtimes(logPath, old, old); err != nil {
+			t.Fatal(err)
+		}
 	}
 	store := &state.Store{Path: stateFile}
 	rec := state.Workflow{Issue: 7, Repository: "o/r", Branch: "issue/7", Status: state.StatusInProgress, Agent: "agy", PID: 1 << 30, LogPath: logPath, StartedAt: time.Now().Add(-startedAgo)}
@@ -172,8 +174,34 @@ func TestInboxRunningPreviewShowsActivity(t *testing.T) {
 	}
 }
 
+// issue #216: when the agent log is absent, last-activity falls back to
+// started_at — the watchdog's definition — in both the list row and the
+// preview meta line.
+func TestInboxRunningRowActivityFallsBackToStartedAt(t *testing.T) {
+	out, err := runLeadCmd(t, runningHeadlessDeps(t, 90*time.Minute, -1))
+	if err != nil {
+		t.Fatalf("headless inbox: %v\n%s", err, out)
+	}
+	// Updated column: started_at (1h30m ago) renders "1h", not "0s" from
+	// the freshly stamped UpdatedAt.
+	if !strings.Contains(out, "1h") {
+		t.Errorf("running row missing started_at fallback age, got:\n%s", out)
+	}
+}
+
+func TestInboxRunningPreviewActivityFallsBackToStartedAt(t *testing.T) {
+	t.Setenv("LEAD_TEST_INBOX_WIDTH", "200")
+	out, err := runLeadCmd(t, runningHeadlessDeps(t, 90*time.Minute, -1))
+	if err != nil {
+		t.Fatalf("headless inbox: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Active: 1h ago") {
+		t.Errorf("running preview missing Active fallback, got:\n%s", out)
+	}
+}
+
 func TestInboxStopKeyStopsRunningAgent(t *testing.T) {
-	t.Setenv("LEAD_TEST_INBOX_KEYS", "j,j,j,enter,j,d,q")
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "j,j,j,j,enter,j,d,q")
 	stateFile := filepath.Join(t.TempDir(), "workflows.json")
 	t.Setenv("LEAD_STATE_FILE", stateFile)
 	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {

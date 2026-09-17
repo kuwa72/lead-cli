@@ -22,7 +22,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -239,6 +241,9 @@ func (d *Dispatcher) Once(ctx context.Context) (Report, error) {
 			rep.Deferred = append(rep.Deferred, s.Number)
 		}
 	}
+	if len(rep.Deferred) > 0 {
+		d.reportDependencyCycles(ctx, ready)
+	}
 	rep.Results = append(rep.Results, d.runPool(ctx, opts, picks, opts.Parallel-len(running))...)
 	if ctx.Err() == nil {
 		d.print(rep)
@@ -280,29 +285,42 @@ func (d *Dispatcher) notifyResults(rep Report) {
 
 // orderReady gates and orders the ready queue (issue #207). Issues with an
 // open issue dependency (blocked-by) are dropped — they stay `ready` on
-// GitHub and are re-evaluated next pass. The rest is sorted by position in
-// its parent issue's sub-issue list (the tracking issue's order, e.g.
-// docs/roadmap.md's #50); parent groups run in parent-number order, and
-// untracked issues (no parent, closed parent, or failed sub-issues lookup)
-// run last in updatedAt order.
+// GitHub and are re-evaluated next pass. The rest is sorted by OrderReady,
+// the same ordering the inbox Ready section displays (issue #212).
 func (d *Dispatcher) orderReady(ctx context.Context, ready []ports.IssueSummary) []ports.IssueSummary {
 	var eligible []ports.IssueSummary
-	parents := map[int]bool{}
 	for _, s := range ready {
 		if hasOpenBlocker(s) {
 			continue
 		}
 		eligible = append(eligible, s)
+	}
+	return OrderReady(eligible, func(p int) (ports.SubIssueList, error) {
+		return d.Gh.SubIssues(ctx, p)
+	})
+}
+
+// OrderReady sorts a ready queue into dispatch order (issue #207): each
+// issue takes its position in its parent issue's sub-issue list (the
+// tracking issue's order, e.g. docs/roadmap.md's #50); parent groups run
+// in parent-number order, and untracked issues (no parent, closed parent,
+// or failed sub-issues lookup) run last in updatedAt order. The input is
+// not mutated. subIssues resolves a parent's ordered sub-issue list —
+// callers may cache it (the inbox does so per session, issue #212).
+func OrderReady(ready []ports.IssueSummary, subIssues func(parent int) (ports.SubIssueList, error)) []ports.IssueSummary {
+	ordered := append([]ports.IssueSummary(nil), ready...)
+	if len(ordered) == 0 {
+		return ordered
+	}
+	parents := map[int]bool{}
+	for _, s := range ordered {
 		if s.Parent > 0 {
 			parents[s.Parent] = true
 		}
 	}
-	if len(eligible) == 0 {
-		return eligible
-	}
 	rank := map[int]int{}
 	for p := range parents {
-		sub, err := d.Gh.SubIssues(ctx, p)
+		sub, err := subIssues(p)
 		if err != nil || strings.EqualFold(sub.State, "CLOSED") {
 			continue // no ordering signal: the group falls back to untracked
 		}
@@ -310,8 +328,8 @@ func (d *Dispatcher) orderReady(ctx context.Context, ready []ports.IssueSummary)
 			rank[n] = i
 		}
 	}
-	sort.SliceStable(eligible, func(i, j int) bool {
-		a, b := eligible[i], eligible[j]
+	sort.SliceStable(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
 		ra, aok := rank[a.Number]
 		rb, bok := rank[b.Number]
 		if aok != bok {
@@ -328,18 +346,130 @@ func (d *Dispatcher) orderReady(ctx context.Context, ready []ports.IssueSummary)
 		}
 		return a.Number < b.Number
 	})
-	return eligible
+	return ordered
+}
+
+// OpenBlocker returns the first issue dependency of s that is still open
+// on GitHub — the number the inbox shows as the deferred reason
+// (issue #212).
+func OpenBlocker(s ports.IssueSummary) (int, bool) {
+	for _, dep := range s.BlockedBy {
+		if strings.EqualFold(dep.State, "OPEN") {
+			return dep.Number, true
+		}
+	}
+	return 0, false
 }
 
 // hasOpenBlocker reports whether s has a dependency blocker that is still
 // open on GitHub.
 func hasOpenBlocker(s ports.IssueSummary) bool {
-	for _, dep := range s.BlockedBy {
-		if strings.EqualFold(dep.State, "OPEN") {
-			return true
+	_, ok := OpenBlocker(s)
+	return ok
+}
+
+// reportDependencyCycles finds blocked-by cycles inside the ready set and
+// reports each one on its member issues (issue #213). GitHub rejects direct
+// A↔B dependencies but accepts transitive cycles (A→B→C→A); every member
+// then has an open blocker and stays deferred forever — a silent deadlock.
+// Only edges between ready issues are traversed (the listing already
+// carries their blockers, so a pass without a cycle makes no extra API
+// calls); a cycle through a not-yet-ready issue surfaces once all its
+// members are labelled ready. Best-effort: gh failures never fail the pass.
+func (d *Dispatcher) reportDependencyCycles(ctx context.Context, ready []ports.IssueSummary) {
+	inReady := map[int]bool{}
+	for _, s := range ready {
+		inReady[s.Number] = true
+	}
+	// Per-pass cache: ready issue → its open blockers inside the ready set.
+	blockers := map[int][]int{}
+	for _, s := range ready {
+		for _, dep := range s.BlockedBy {
+			if strings.EqualFold(dep.State, "OPEN") && inReady[dep.Number] {
+				blockers[s.Number] = append(blockers[s.Number], dep.Number)
+			}
 		}
 	}
-	return false
+	var stack []int
+	const (
+		white = iota // unvisited
+		gray         // on the DFS stack
+		black        // fully explored
+	)
+	color := map[int]int{}
+	seen := map[string]bool{}
+	var visit func(n int)
+	visit = func(n int) {
+		color[n] = gray
+		stack = append(stack, n)
+		for _, m := range blockers[n] {
+			switch color[m] {
+			case gray:
+				cycle := append([]int(nil), stack[slices.Index(stack, m):]...)
+				if key := cycleMarker(cycle); !seen[key] {
+					seen[key] = true
+					d.commentCycle(ctx, cycle)
+				}
+			case white:
+				visit(m)
+			}
+		}
+		stack = stack[:len(stack)-1]
+		color[n] = black
+	}
+	for _, s := range ready {
+		if color[s.Number] == white {
+			visit(s.Number)
+		}
+	}
+}
+
+// cycleMarker is the dedupe key embedded in a cycle report comment: the
+// sorted member set, so the same cycle is recognized however the DFS
+// entered it. Brackets keep member lists prefix-distinct ([1,2,3] vs
+// [1,2,30]).
+func cycleMarker(cycle []int) string {
+	members := append([]int(nil), cycle...)
+	sort.Ints(members)
+	parts := make([]string, len(members))
+	for i, n := range members {
+		parts[i] = strconv.Itoa(n)
+	}
+	return "lead:dependency-cycle:[" + strings.Join(parts, ",") + "]"
+}
+
+// commentCycle posts the cycle report on every member issue that does not
+// already carry it (the marker check keeps repeat passes quiet). Members
+// stay deferred — untangling the dependency is a human decision.
+func (d *Dispatcher) commentCycle(ctx context.Context, cycle []int) {
+	marker := cycleMarker(cycle)
+	var path strings.Builder
+	for _, n := range cycle {
+		fmt.Fprintf(&path, "#%d → ", n)
+	}
+	fmt.Fprintf(&path, "#%d", cycle[0])
+	if d.Out != nil {
+		fmt.Fprintf(d.Out, "dispatch: dependency cycle detected: %s\n", path.String())
+	}
+	body := fmt.Sprintf(`lead dispatch: blocked-by 依存が循環しているため、この Issue は deferred のまま dispatch されません。
+
+循環: %s
+
+どれかの blocked-by 依存を外すと循環が解消します（依存関係の修正は人間が行ってください）。
+
+<!-- %s -->`, path.String(), marker)
+	for _, n := range cycle {
+		existing, err := d.Gh.IssueComments(ctx, n)
+		if err != nil {
+			continue // cannot confirm absence; skip rather than risk a duplicate
+		}
+		if slices.ContainsFunc(existing, func(c ports.Comment) bool {
+			return strings.Contains(c.Body, marker)
+		}) {
+			continue
+		}
+		_ = d.Gh.IssueComment(ctx, n, body)
+	}
 }
 
 // runPool starts picks through slots workers: the next issue starts as soon
@@ -705,12 +835,7 @@ func stuckReason(logPath string, startedAt, now time.Time, idleTimeout, maxRunti
 	if idleTimeout <= 0 {
 		return nil
 	}
-	last := startedAt
-	if logPath != "" {
-		if fi, err := os.Stat(logPath); err == nil && fi.ModTime().After(last) {
-			last = fi.ModTime()
-		}
-	}
+	last := state.LastActivity(logPath, startedAt)
 	if last.IsZero() || now.Sub(last) <= idleTimeout {
 		return nil
 	}

@@ -74,6 +74,21 @@ type Workflow struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// LastActivity is when the workflow's agent last produced output
+// (issue #216): the log file mtime when it exists and is newer than
+// startedAt, else startedAt. Zero means nothing is known. This is the
+// watchdog's liveness definition (issue #186), shared by `lead status`,
+// the inbox running section, and `lead say`'s progress line.
+func LastActivity(logPath string, startedAt time.Time) time.Time {
+	last := startedAt
+	if logPath != "" {
+		if fi, err := os.Stat(logPath); err == nil && fi.ModTime().After(last) {
+			last = fi.ModTime()
+		}
+	}
+	return last
+}
+
 // Key identifies a workflow: issue number plus optional --part slug.
 func Key(issue int, part string) string {
 	if part == "" {
