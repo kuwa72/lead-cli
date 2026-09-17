@@ -1122,6 +1122,55 @@ func TestOnce_SubIssuesErrorFallsBack(t *testing.T) {
 	}
 }
 
+// OrderReady is the queue ordering shared with the inbox Ready section
+// (issue #212): sub-issue rank first (parent groups in parent-number
+// order), untracked issues last in updatedAt order.
+func TestOrderReady_SharedOrdering(t *testing.T) {
+	base := time.Now()
+	ready := []ports.IssueSummary{
+		{Number: 3, Parent: 50, UpdatedAt: base},
+		{Number: 9, UpdatedAt: base.Add(-time.Hour)}, // untracked
+		{Number: 1, Parent: 50, UpdatedAt: base.Add(time.Hour)},
+		{Number: 6, Parent: 60, UpdatedAt: base.Add(-time.Hour)},
+		{Number: 2, Parent: 50, UpdatedAt: base.Add(2 * time.Hour)},
+	}
+	gh := &testutil.FakeGhClient{SubIssueLists: map[int]ports.SubIssueList{
+		50: {State: "OPEN", Numbers: []int{1, 2, 3}},
+		60: {State: "OPEN", Numbers: []int{6}},
+	}}
+	ordered := OrderReady(ready, func(p int) (ports.SubIssueList, error) {
+		return gh.SubIssues(context.Background(), p)
+	})
+	var got []int
+	for _, s := range ordered {
+		got = append(got, s.Number)
+	}
+	if want := []int{1, 2, 3, 6, 9}; !reflect.DeepEqual(got, want) {
+		t.Errorf("OrderReady = %v, want %v", got, want)
+	}
+	// The input slice must not be reordered in place: callers keep the raw
+	// listing for other section bookkeeping.
+	if ready[0].Number != 3 {
+		t.Errorf("OrderReady mutated its input: %v", ready)
+	}
+}
+
+func TestOpenBlocker(t *testing.T) {
+	s := ports.IssueSummary{BlockedBy: []ports.IssueDependency{
+		{Number: 34, State: "CLOSED"},
+		{Number: 35, State: "OPEN"},
+	}}
+	if n, ok := OpenBlocker(s); !ok || n != 35 {
+		t.Errorf("OpenBlocker = %d,%v, want 35,true", n, ok)
+	}
+	if _, ok := OpenBlocker(ports.IssueSummary{}); ok {
+		t.Error("OpenBlocker on no deps = true, want false")
+	}
+	if _, ok := OpenBlocker(ports.IssueSummary{BlockedBy: []ports.IssueDependency{{Number: 34, State: "CLOSED"}}}); ok {
+		t.Error("OpenBlocker on closed dep = true, want false")
+	}
+}
+
 // Deferred issues are still pending work, so they suppress the all-done
 // notification even when everything dispatched completed.
 func TestOnce_DeferredDoesNotNotifyAllDone(t *testing.T) {

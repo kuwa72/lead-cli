@@ -154,6 +154,9 @@ type Model struct {
 	settingsCursor    int          // selected row in settings view
 	knownNeedsReview  map[int]bool // tracked needs-review issues for completion notify
 	knownBlocked      map[int]bool // tracked blocked issues for completion notify
+	// subIssuesCache memoizes parent sub-issue lists for the session so
+	// reloads do not repeat SubIssues calls (issue #212).
+	subIssuesCache    map[int]ports.SubIssueList
 	hasInitialLoad    bool         // suppresses notifications on initial load
 	repoOpenCount     int          // total open issues in repository on GitHub
 	logs              []string     // event log / status history entries
@@ -243,6 +246,7 @@ func New(opts Options) Model {
 				Repo:        opts.Repo,
 				OpenNumbers: openNums,
 				OpenIssues:  cache.OpenIssues,
+				Ready:       cache.Ready,
 			})
 			initialStatus = "cached"
 		}
@@ -263,6 +267,7 @@ func New(opts Options) Model {
 		pendingOps:          make(map[int]bool),
 		knownNeedsReview: make(map[int]bool),
 		knownBlocked:     make(map[int]bool),
+		subIssuesCache:   make(map[int]ports.SubIssueList),
 		theme:            NewTheme(ModeTerminal, termenv.Ascii, nil),
 		agent:            opts.Agent,
 		agentMode:        opts.AgentMode,
@@ -393,6 +398,11 @@ func (m Model) loadCmd() tea.Cmd {
 		if err != nil {
 			return loadedMsg{err: err}
 		}
+		ready, err := opts.Gh.ListByLabel(ctx, LabelReady)
+		if err != nil {
+			return loadedMsg{err: err}
+		}
+		orderedReady := dispatch.OrderReady(ready, m.cachedSubIssues(ctx))
 		var wfs []state.Workflow
 		if opts.Store != nil {
 			if wfs, err = opts.Store.List(); err != nil {
@@ -447,6 +457,7 @@ func (m Model) loadCmd() tea.Cmd {
 			Repo:        opts.Repo,
 			OpenNumbers: openNumbers,
 			OpenIssues:  openIssuesList,
+			Ready:       orderedReady,
 		})
 		if loadErr == nil && opts.Cache != nil {
 			var openList []int
@@ -461,9 +472,29 @@ func (m Model) loadCmd() tea.Cmd {
 				Merged:      merged,
 				OpenNumbers: openList,
 				OpenIssues:  openIssuesList,
+				Ready:       orderedReady,
 			})
 		}
 		return loadedMsg{sections: sections, sessionSince: sessionSince, err: loadErr, repoOpenCount: openCount}
+	}
+}
+
+// cachedSubIssues wraps GhClient.SubIssues with the session cache so
+// periodic reloads do not repeat the same parent lookups (issue #212).
+// Errors are not cached: a transient failure retries on the next load.
+func (m Model) cachedSubIssues(ctx context.Context) func(parent int) (ports.SubIssueList, error) {
+	return func(parent int) (ports.SubIssueList, error) {
+		if l, ok := m.subIssuesCache[parent]; ok {
+			return l, nil
+		}
+		l, err := m.opts.Gh.SubIssues(ctx, parent)
+		if err != nil {
+			return ports.SubIssueList{}, err
+		}
+		if m.subIssuesCache != nil {
+			m.subIssuesCache[parent] = l
+		}
+		return l, nil
 	}
 }
 
@@ -583,16 +614,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !msg.sessionSince.IsZero() && m.sessionSince.IsZero() {
 			m.sessionSince = msg.sessionSince
 		}
-		var reviewCount, blockedCount int
+		var reviewCount, blockedCount, readyCount int
 		for _, s := range msg.sections {
 			switch s.Kind {
 			case KindNeedsReview:
 				reviewCount = len(s.Items)
 			case KindBlocked:
 				blockedCount = len(s.Items)
+			case KindReady:
+				readyCount = len(s.Items)
 			}
 		}
-		totalActive := reviewCount + blockedCount
+		totalActive := reviewCount + blockedCount + readyCount
 		var statusText string
 		if totalActive == 0 {
 			if msg.repoOpenCount > 0 {
@@ -601,7 +634,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				statusText = "Loaded: 0 open issues in repo"
 			}
 		} else {
-			statusText = fmt.Sprintf("Loaded: %d needs-review, %d blocked (%d open in repo)", reviewCount, blockedCount, msg.repoOpenCount)
+			statusText = fmt.Sprintf("Loaded: %d needs-review, %d blocked, %d ready (%d open in repo)", reviewCount, blockedCount, readyCount, msg.repoOpenCount)
 		}
 		m.addLog(statusText)
 		var statusCmd tea.Cmd
@@ -1767,6 +1800,8 @@ func (m Model) footerTokens() []string {
 				tokens = []string{"[Enter] Open", "[a] Approve", "[t] Reply"}
 			case KindBlocked:
 				tokens = []string{"[Enter] Open", "[t] Reply", "[p] Peek"}
+			case KindReady:
+				tokens = []string{"[Enter] Open", "[x] Reject", "[t] Reply", "[o] Browser"}
 			case KindMerged:
 				tokens = []string{"[Enter] Open", "[n] Report bug", "[c] Mark seen"}
 			case KindRunning:

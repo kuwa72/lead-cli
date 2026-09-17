@@ -289,6 +289,16 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 	}
 	it := *r.Item
 	title := Sanitize(it.Title)
+	if it.DeferredBy > 0 {
+		// Deferred rows carry the reason in the title column; the note is
+		// kept whole while the title yields space for it (issue #212).
+		note := fmt.Sprintf("deferred: blocked by #%d", it.DeferredBy)
+		title = truncTail(title, c.titleW-cellWidth(note)-2)
+		if title != "" {
+			title += "  "
+		}
+		title += note
+	}
 	b.WriteString(fitRight(fmt.Sprintf("#%d", it.Number), c.issueW))
 	b.WriteString(" ")
 	b.WriteString(fitLeft(title, c.titleW))

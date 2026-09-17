@@ -34,11 +34,11 @@ func TestBuild_SectionsFromLabelsAndState(t *testing.T) {
 	}
 
 	got := Build(needsReview, blocked, merged, nil, wfs)
-	if len(got) != 5 {
-		t.Fatalf("Build returned %d sections, want 5", len(got))
+	if len(got) != 6 {
+		t.Fatalf("Build returned %d sections, want 6", len(got))
 	}
-	kinds := []Kind{got[0].Kind, got[1].Kind, got[2].Kind, got[3].Kind, got[4].Kind}
-	if want := []Kind{KindNeedsReview, KindBlocked, KindMerged, KindRunning, KindBacklog}; !reflect.DeepEqual(kinds, want) {
+	kinds := []Kind{got[0].Kind, got[1].Kind, got[2].Kind, got[3].Kind, got[4].Kind, got[5].Kind}
+	if want := []Kind{KindNeedsReview, KindBlocked, KindReady, KindMerged, KindRunning, KindBacklog}; !reflect.DeepEqual(kinds, want) {
 		t.Fatalf("section order = %v, want %v", kinds, want)
 	}
 	if nums := numbers(got[0]); !reflect.DeepEqual(nums, []int{92, 93}) {
@@ -51,17 +51,17 @@ func TestBuild_SectionsFromLabelsAndState(t *testing.T) {
 	if b.Agent != "claude" || b.Attempts != 3 || b.LogPath != "/logs/issue-88.log" {
 		t.Errorf("blocked item not enriched from state: %+v", b)
 	}
-	if nums := numbers(got[2]); !reflect.DeepEqual(nums, []int{60, 61}) {
+	if nums := numbers(got[3]); !reflect.DeepEqual(nums, []int{60, 61}) {
 		t.Errorf("merged = %v, want [60 61]", nums)
 	}
-	if nums := numbers(got[3]); !reflect.DeepEqual(nums, []int{70}) {
+	if nums := numbers(got[4]); !reflect.DeepEqual(nums, []int{70}) {
 		t.Errorf("running = %v, want [70]", nums)
 	}
-	if got[3].Items[0].Agent != "agy" || got[3].Items[0].Branch != "issue/70-x" {
-		t.Errorf("running item lacks agent/branch: %+v", got[3].Items[0])
+	if got[4].Items[0].Agent != "agy" || got[4].Items[0].Branch != "issue/70-x" {
+		t.Errorf("running item lacks agent/branch: %+v", got[4].Items[0])
 	}
-	if got[0].Collapsed || got[1].Collapsed || !got[2].Collapsed || !got[3].Collapsed || !got[4].Collapsed {
-		t.Errorf("collapsed flags: %v %v %v %v %v, want false false true true true", got[0].Collapsed, got[1].Collapsed, got[2].Collapsed, got[3].Collapsed, got[4].Collapsed)
+	if got[0].Collapsed || got[1].Collapsed || got[2].Collapsed || !got[3].Collapsed || !got[4].Collapsed || !got[5].Collapsed {
+		t.Errorf("collapsed flags: %v %v %v %v %v %v, want false false false true true true", got[0].Collapsed, got[1].Collapsed, got[2].Collapsed, got[3].Collapsed, got[4].Collapsed, got[5].Collapsed)
 	}
 }
 
@@ -198,13 +198,13 @@ func TestKeyA_ApprovesBacklogIssue(t *testing.T) {
 		Headless: true,
 	})
 	m = drive(t, m, nil, m.Init())
-	// Backlog is section index 4, collapsed initially.
-	// Headers: Review (0), Blocked (0), Merged (0), Running (0), Backlog (4).
-	// Cursor starts at 0. Press "j" 4 times to reach Backlog header.
+	// Backlog is the last section, collapsed initially.
+	// Headers: Review (0), Blocked (0), Ready (0), Merged (0), Running (0), Backlog.
+	// Cursor starts at 0. Press "j" 5 times to reach Backlog header.
 	// Press "enter" to expand Backlog.
 	// Press "j" to select issue #42.
 	// Press "a" to approve #42.
-	m = press(t, m, "j", "j", "j", "j", "enter", "j", "a")
+	m = press(t, m, "j", "j", "j", "j", "j", "enter", "j", "a")
 	if want := []testutil.LabelCall{{Number: 42, Label: LabelReady}}; !reflect.DeepEqual(gh.AddedLabels, want) {
 		t.Errorf("AddedLabels = %+v, want %+v", gh.AddedLabels, want)
 	}
@@ -441,7 +441,7 @@ func TestKeyP_HerdrAttachesPaneForRunningAgent(t *testing.T) {
 	fh := &testutil.FakeHerdrRunner{}
 	m.opts.Herdr = fh
 	m.expanded = true
-	m.cursor = 7 // running #70
+	m.cursor = 8 // running #70 (Ready header sits between Blocked and Merged)
 	m = press(t, m, "p")
 	if len(fh.PeekCalls) != 1 || fh.PeekCalls[0].Pane != "w1:p70" || fh.PeekCalls[0].LogPath != "" {
 		t.Errorf("Peek calls = %+v, want Pane=w1:p70", fh.PeekCalls)
@@ -816,7 +816,7 @@ func newMergedFixture(t *testing.T) (*testutil.FakeGhClient, *fakeShell, *SeenSt
 func TestKeyC_ConfirmsMergedAndRefreshes(t *testing.T) {
 	_, _, seen, m := newMergedFixture(t)
 	m.expanded = true
-	m.cursor = 4 // merged #42
+	m.cursor = 5 // merged #42 (Ready header sits between Blocked and Merged)
 	m = press(t, m, "c")
 
 	st, err := seen.Load()
@@ -847,7 +847,7 @@ func TestKeyC_OnNonMergedDoesNothing(t *testing.T) {
 func TestKeyN_OnMergedConfirmsAndFollowsUp(t *testing.T) {
 	_, _, seen, m := newMergedFixture(t)
 	m.expanded = true
-	m.cursor = 4 // merged #42
+	m.cursor = 5 // merged #42 (Ready header sits between Blocked and Merged)
 	var calls []sayCall
 	m.opts.Say = fakeSay(&calls)
 	m = press(t, m, "n", "text:still broken", "enter")
@@ -1891,6 +1891,80 @@ func TestInputCaret_InactiveOutsideInputMode(t *testing.T) {
 	_ = m.View()
 	if _, _, live := m.caret.pos(); live {
 		t.Error("caret must be inactive after leaving modeInput")
+	}
+}
+
+// newReadyFixture builds a model whose gh has a ready queue ordered by
+// tracking issue #50's sub-issue list ([1,2,3] listed as 3,1,2) plus a
+// gated issue #8 (open blocked-by #35). Issue #212.
+func newReadyFixture(t *testing.T) (*testutil.FakeGhClient, Model) {
+	t.Helper()
+	gh := &testutil.FakeGhClient{
+		Labeled: map[string][]ports.IssueSummary{
+			LabelNeedsReview: {},
+			LabelBlocked:     {},
+			LabelReady: {
+				{Number: 3, Title: "third", Parent: 50},
+				{Number: 1, Title: "first", Parent: 50},
+				{Number: 2, Title: "second", Parent: 50},
+				{Number: 8, Title: "gated", BlockedBy: []ports.IssueDependency{{Number: 35, State: "OPEN"}}},
+			},
+		},
+		SubIssueLists: map[int]ports.SubIssueList{
+			50: {State: "OPEN", Numbers: []int{1, 2, 3}},
+		},
+	}
+	m := New(Options{Gh: gh, Shell: &fakeShell{}, Headless: true})
+	m = drive(t, m, nil, m.Init())
+	return gh, m
+}
+
+func findSection(t *testing.T, m Model, kind Kind) *Section {
+	t.Helper()
+	for i := range m.sections {
+		if m.sections[i].Kind == kind {
+			return &m.sections[i]
+		}
+	}
+	t.Fatalf("no section for kind %v", kind)
+	return nil
+}
+
+// The Ready section must list the queue in dispatch order (sub-issues
+// order) and annotate deferred issues with their open blocker.
+func TestLoad_ReadySectionMatchesDispatchOrder(t *testing.T) {
+	gh, m := newReadyFixture(t)
+	ready := findSection(t, m, KindReady)
+	var order []int
+	for _, it := range ready.Items {
+		order = append(order, it.Number)
+	}
+	if want := []int{1, 2, 3, 8}; !reflect.DeepEqual(order, want) {
+		t.Errorf("ready order = %v, want %v (dispatch order, deferred last)", order, want)
+	}
+	if ready.Items[3].DeferredBy != 35 {
+		t.Errorf("#8 DeferredBy = %d, want 35", ready.Items[3].DeferredBy)
+	}
+	if !reflect.DeepEqual(gh.SubIssuesCalls, []int{50}) {
+		t.Errorf("SubIssues calls = %v, want [50]", gh.SubIssuesCalls)
+	}
+	v := m.View()
+	if !strings.Contains(v, "Ready") {
+		t.Errorf("view should contain the Ready section, got:\n%s", v)
+	}
+	if !strings.Contains(v, "deferred: blocked by #35") {
+		t.Errorf("view should annotate deferred #8, got:\n%s", v)
+	}
+}
+
+// SubIssues results are cached for the session: periodic reloads must not
+// repeat the parent lookups.
+func TestReload_SubIssuesCachedAcrossReloads(t *testing.T) {
+	gh, m := newReadyFixture(t)
+	m = press(t, m, "R")
+	m = press(t, m, "R")
+	if !reflect.DeepEqual(gh.SubIssuesCalls, []int{50}) {
+		t.Errorf("SubIssues calls after 3 loads = %v, want cached [50]", gh.SubIssuesCalls)
 	}
 }
 
