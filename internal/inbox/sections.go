@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kuwa72/lead-cli/internal/dispatch"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 )
@@ -26,10 +27,12 @@ const (
 // Kind identifies one inbox section.
 type Kind int
 
-// Sections in display order: human work first (RFC §5.1).
+// Sections in display order: human work first (RFC §5.1). Ready shows the
+// dispatch queue (issue #212).
 const (
 	KindNeedsReview Kind = iota
 	KindBlocked
+	KindReady
 	KindMerged
 	KindRunning
 	KindBacklog
@@ -42,6 +45,8 @@ func (k Kind) Title() string {
 		return "Needs review"
 	case KindBlocked:
 		return "Blocked"
+	case KindReady:
+		return "Ready"
 	case KindMerged:
 		return "Merged"
 	case KindRunning:
@@ -54,7 +59,9 @@ func (k Kind) Title() string {
 
 // IsIssueQueue reports whether items in this section accept the
 // approve/reject keys (only label-driven sections do).
-func (k Kind) IsIssueQueue() bool { return k == KindNeedsReview || k == KindBlocked || k == KindBacklog }
+func (k Kind) IsIssueQueue() bool {
+	return k == KindNeedsReview || k == KindBlocked || k == KindReady || k == KindBacklog
+}
 
 // MaxMergedItems caps the "Merged" section to keep the inbox readable.
 const MaxMergedItems = 20
@@ -76,6 +83,9 @@ type Item struct {
 	// StartedAt marks the latest headless launch (elapsed display).
 	// Zero means unknown: elapsed is omitted.
 	StartedAt time.Time
+	// DeferredBy is the first open blocked-by issue number (issue #212);
+	// the row shows "deferred: blocked by #N". 0 means dispatchable.
+	DeferredBy int
 }
 
 // Section is one heading plus its rows.
@@ -93,6 +103,11 @@ type BuildOptions struct {
 	Repo        string               // "owner/repo" slug; if set, wfs from other repositories are excluded
 	OpenNumbers map[int]bool         // set of open issue numbers; if non-nil, issues not in this set are excluded from Running
 	OpenIssues  []ports.IssueSummary // open issues in repository for the Backlog section
+	// Ready holds ready-labelled issues already sorted by
+	// dispatch.OrderReady (issue #212). Build keeps dispatchable items in
+	// that order and moves deferred ones (open blocked-by) last with the
+	// blocker number attached.
+	Ready []ports.IssueSummary
 }
 
 // Build sections issues: `needs-review` and `blocked` come from gh label
@@ -137,6 +152,26 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		seenNumbers[s.Number] = true
 		stuck.Items = append(stuck.Items, enrich(Item{Number: s.Number, Title: s.Title, Kind: KindBlocked, UpdatedAt: s.UpdatedAt}))
 	}
+
+	// bo.Ready arrives in dispatch order (dispatch.OrderReady). Deferred
+	// issues are parked at the end with the open blocker annotated so the
+	// section reads as the actual dispatch queue (issue #212).
+	readySection := Section{Kind: KindReady}
+	var deferred []Item
+	for _, s := range bo.Ready {
+		if seenNumbers[s.Number] {
+			continue
+		}
+		seenNumbers[s.Number] = true
+		it := Item{Number: s.Number, Title: s.Title, Kind: KindReady, UpdatedAt: s.UpdatedAt}
+		if n, ok := dispatch.OpenBlocker(s); ok {
+			it.DeferredBy = n
+			deferred = append(deferred, enrich(it))
+			continue
+		}
+		readySection.Items = append(readySection.Items, enrich(it))
+	}
+	readySection.Items = append(readySection.Items, deferred...)
 
 	confirmed := make(map[int]bool)
 	lastSeen := time.Time{}
@@ -189,7 +224,7 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		}))
 	}
 
-	return []Section{review, stuck, mergedSection, running, backlogSection}
+	return []Section{review, stuck, readySection, mergedSection, running, backlogSection}
 }
 
 func firstPRNumber(prs []state.PRRef) int {

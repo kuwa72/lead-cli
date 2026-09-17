@@ -15,16 +15,16 @@ type IssueSummary struct {
 	Title     string    `json:"title"`
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Parent is the tracking/parent issue number (gh `parent`); 0 = none.
-	Parent int `json:"-"`
+	Parent int `json:"parent,omitempty"`
 	// BlockedBy lists this issue's dependency blockers (gh `blockedBy`);
 	// open entries defer dispatch (issue #207).
-	BlockedBy []IssueDependency `json:"-"`
+	BlockedBy []IssueDependency `json:"blockedBy,omitempty"`
 }
 
 // IssueDependency is one node of gh's blockedBy/blocking JSON.
 type IssueDependency struct {
-	Number int
-	State  string // OPEN / CLOSED
+	Number int    `json:"number"`
+	State  string `json:"state"` // OPEN / CLOSED
 }
 
 // SubIssueList is a parent issue's ordered sub-issues plus its own state

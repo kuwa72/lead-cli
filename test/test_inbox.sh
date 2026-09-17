@@ -274,7 +274,7 @@ grep -q 'issue list --state closed' "$GH_LOG" || fail "ListMergedSince not calle
 cat > "$seen_dir/inbox-seen.json" <<'EOF'
 {"last_seen_at":"2026-09-09T00:00:00Z","confirmed":[],"help_shown":true}
 EOF
-out="$(LEAD_TEST_INBOX_KEYS='z,j,j,j,j,j,c,q' "$tmp/lead" 2>&1)" || fail "headless c on merged failed"
+out="$(LEAD_TEST_INBOX_KEYS='z,j,j,j,j,j,j,c,q' "$tmp/lead" 2>&1)" || fail "headless c on merged failed"
 case "$out" in *"Merged (0)"*) ;; *) fail "merged issue still shown after c: $out";; esac
 case "$out" in *"Marked #42 as seen"*) ;; *) fail "c status missing: $out";; esac
 grep -q '42' "$seen_dir/inbox-seen.json" || fail "inbox-seen not updated: $(cat "$seen_dir/inbox-seen.json")"
