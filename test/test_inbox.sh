@@ -31,8 +31,8 @@ git -C "$repo" remote add origin git@github.com:acme/widgets.git
 echo "# rules" > "$repo/AGENTS.md"
 git -C "$repo" add . && git -C "$repo" commit -qm init
 
-export GH_LOG="$tmp/gh.log" GH_STDIN="$tmp/gh-stdin.txt" EDITOR_LOG="$tmp/editor.log"
-: > "$GH_LOG"; : > "$EDITOR_LOG"
+export GH_LOG="$tmp/gh.log" GH_STDIN="$tmp/gh-stdin.txt" EDITOR_LOG="$tmp/editor.log" BROWSER_LOG="$tmp/browser.log"
+: > "$GH_LOG"; : > "$EDITOR_LOG"; : > "$BROWSER_LOG"
 
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/gh" <<'EOF'
@@ -48,9 +48,10 @@ case "$1 $2" in
     esac ;;
   "issue view")
     case "$*" in
-      *"--web"*) : ;;
+      *"--json url"*) printf '{"url":"https://github.com/acme/widgets/issues/%s"}' "$3" ;;
       *) printf '{"number":%s,"title":"spec: warn on zero stock","body":"## Acceptance\\n- warns","state":"OPEN"}' "$3" ;;
     esac ;;
+  "config get") echo 'could not find key' >&2; exit 1 ;;
   "issue edit")
     case "$*" in *"--body-file -"*) cat > "$GH_STDIN" ;; esac ;;
   "issue comment"|"issue close") : ;;
@@ -107,11 +108,18 @@ cat > "$tmp/bin/less" <<'EOF'
 #!/bin/sh
 for a in "$@"; do printf '<%s>\n' "$a" >> "$PAGER_LOG"; done
 EOF
-chmod +x "$tmp/bin/herdr" "$tmp/bin/less"
+# Dummy browser for the o key: log argv so the test can assert the URL
+# the self-implemented opener received (issue #217).
+cat > "$tmp/bin/fakebrowser" <<'EOF'
+#!/bin/sh
+for a in "$@"; do printf '<%s>\n' "$a" >> "$BROWSER_LOG"; done
+EOF
+chmod +x "$tmp/bin/herdr" "$tmp/bin/less" "$tmp/bin/fakebrowser"
 
 export AGY_LOG="$tmp/agy.log"; : > "$AGY_LOG"
 export PATH="$tmp/bin:$PATH"
 export EDITOR=fake-editor
+export GH_BROWSER=fakebrowser
 
 # Provide a workflow record so the blocked issue has an agent log to peek.
 mkdir -p "$(dirname "$LEAD_STATE_FILE")"
@@ -199,9 +207,12 @@ grep -qxF "<$repo/AGENTS.md>" "$EDITOR_LOG" || fail "editor did not open repo AG
 grep -q 'issue edit\|issue comment\|issue close' "$GH_LOG" && fail "r must not touch gh"
 
 # --- 9. o: browser; enter: detail fetch --------------------------------------------
-: > "$GH_LOG"
+: > "$GH_LOG"; : > "$BROWSER_LOG"
 LEAD_TEST_INBOX_KEYS=o,enter,esc,q "$tmp/lead" >/dev/null 2>&1 || fail "headless o/enter failed"
-grep -qxF 'GH issue view 7 --web' "$GH_LOG" || fail "o did not open browser: $(cat "$GH_LOG")"
+grep -qxF 'GH issue view 7 --json url' "$GH_LOG" || fail "o did not fetch the issue URL: $(cat "$GH_LOG")"
+grep -qxF '<https://github.com/acme/widgets/issues/7>' "$BROWSER_LOG" \
+  || fail "o opener did not receive the URL: $(cat "$BROWSER_LOG")"
+grep -q 'issue view 7 --web' "$GH_LOG" && fail "--web must not be used"
 grep -qxF 'GH issue view 7 --json number,title,body,state' "$GH_LOG" || fail "enter did not fetch detail"
 
 # --- 9.5. enter on blocked issue with linked PR: shows issue body + PR checklist ----
