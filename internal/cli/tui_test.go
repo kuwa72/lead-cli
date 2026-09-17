@@ -106,8 +106,8 @@ func TestParseTestSelection(t *testing.T) {
 		t.Errorf("parse 36:browser = %+v, %v", sel, err)
 	}
 	sel, err = parseTestSelection("36")
-	if err != nil || sel.Agent != "agy" {
-		t.Errorf("parse bare number defaults agent: %+v, %v", sel, err)
+	if err != nil || sel.Agent != "" {
+		t.Errorf("parse bare number leaves agent empty (resolved later): %+v, %v", sel, err)
 	}
 	for _, bad := range []string{"", "abc", "36:", ":agy", "0:agy"} {
 		if _, err := parseTestSelection(bad); err == nil {

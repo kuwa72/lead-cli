@@ -40,7 +40,8 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
 - 起票: `gh issue create --title --body --label needs-review`。複数件は本文末尾に
   相互参照を追記する。`--follow-up` は本文に `#N` がなければ `元 Issue: #N` を補う。
   `--redraft` は `gh issue edit --title --body-file` の後、変更点の要約をコメントする。
-- エージェント選択: `--agent` → `$LEAD_SPEC_AGENT` → 既定（`agy`）。
+- エージェント選択: `--agent` → `$LEAD_SPEC_AGENT` → inbox 設定
+  （`inbox-config.json` の `agent`、設定画面の Active Coding Agent）→ 既定（`agy`）。
   `agent.HeadlessArgv` の対応表にある CLI のみ。出力ログは状態ディレクトリの `logs/say-*.log`。
 - タイムアウト: `--timeout` → `$LEAD_SPEC_TIMEOUT` → 既定 15m（issue #204）。
   agy には `--print-timeout` として渡す（agy 自体の既定は 5m で、超過すると
@@ -71,6 +72,10 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
     - `{{.Mode}}`: 実行モード
     - `{{.AgentMode}}`: エージェント実行モード (`interactive`, `batch`, `dangerous`)
     - `{{.Rules}}`: リポジトリの `AGENTS.md` の内容（未設定時は空）
+- エージェント選択 (issue #214): `run`/`work`/`dispatch` は
+  `--agent` → inbox 設定（`inbox-config.json` の `agent`）→ 既定（`agy`）。
+  `resume` は `--agent` → state 記録の前回エージェント → inbox 設定 → 既定（`agy`）。
+  ピッカー経路（番号なし `run`/`work`）でエージェント未指定の場合も同じ解決順。
 
 ## 2.3 ラベル運用とピッカー分岐 (issue #89)
 
