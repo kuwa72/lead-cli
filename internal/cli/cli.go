@@ -137,6 +137,29 @@ func (d Deps) stateFile() string {
 	return state.ResolvePath()
 }
 
+// inboxConfigPath locates the persisted inbox settings beside the state file.
+func (d Deps) inboxConfigPath() string {
+	return filepath.Join(filepath.Dir(d.stateFile()), "inbox-config.json")
+}
+
+// loadInboxConfig reads the inbox settings written by the settings view
+// (issue #214). Missing or corrupt files are not errors: a zero Config is
+// returned so every caller falls back to built-in defaults.
+func (d Deps) loadInboxConfig() inbox.Config {
+	var cfg inbox.Config
+	if data, err := os.ReadFile(d.inboxConfigPath()); err == nil {
+		_ = json.Unmarshal(data, &cfg)
+	}
+	return cfg
+}
+
+// configuredAgent is the inbox settings' active coding agent ("" = unset).
+// Subcommands layer it between an explicit --agent / $LEAD_SPEC_AGENT and
+// agent.Resolve's agy fallback.
+func (d Deps) configuredAgent() string {
+	return d.loadInboxConfig().Agent
+}
+
 func (d Deps) workDir() (string, error) {
 	if d.WorkDir != "" {
 		return d.WorkDir, nil
@@ -229,11 +252,12 @@ func (d Deps) selector() tui.Selector {
 		}
 		return &tui.FakeSelector{Selection: sel}
 	}
-	return tui.NewBubbleteaSelector()
+	return &tui.BubbleteaSelector{DefaultAgent: d.configuredAgent()}
 }
 
 // parseTestSelection parses the LEAD_TEST_SELECTION hook:
-// "36" (default agent), "36:devin", or "36:browser".
+// "36" (no explicit agent — the default resolution chain applies),
+// "36:devin", or "36:browser".
 func parseTestSelection(raw string) (tui.Selection, error) {
 	parts := strings.SplitN(raw, ":", 2)
 	number, err := strconv.Atoi(parts[0])
@@ -241,7 +265,7 @@ func parseTestSelection(raw string) (tui.Selection, error) {
 		return tui.Selection{}, fmt.Errorf("invalid LEAD_TEST_SELECTION %q: want <number>[:<agent|browser>]", raw)
 	}
 	if len(parts) == 1 {
-		return tui.Selection{IssueNumber: number, Agent: agent.DefaultAgent, Action: tui.ActionWork}, nil
+		return tui.Selection{IssueNumber: number, Action: tui.ActionWork}, nil
 	}
 	if parts[1] == "" {
 		return tui.Selection{}, fmt.Errorf("invalid LEAD_TEST_SELECTION %q: empty action", raw)
@@ -323,7 +347,7 @@ issue. Normal operation is ` + "`lead dispatch`" + `, which needs no human step.
 		c.Flags().String("worktree", "", "create isolated worktree: bare flag = auto path, or --worktree=<path>")
 		c.Flags().String("part", "", "work unit within a multi-PR issue")
 		c.Flags().Bool("draft", false, "create PR as draft")
-		c.Flags().String("agent", "", "coding agent (default: agy)")
+		c.Flags().String("agent", "", "coding agent (default: inbox settings agent, then agy)")
 		c.Flags().String("agent-mode", "interactive", "agent execution mode (interactive|batch|dangerous)")
 		c.Flags().String("prompt-template", "", "prompt template name (resolves from prompts/<name>.md or built-in)")
 		// Bare `--worktree` means "auto path under <repo>/.worktrees".
@@ -347,7 +371,7 @@ Git and GitHub.`,
 	}
 	resumeCmd.Flags().String("worktree", "", "use or create isolated worktree: bare flag = auto path, or --worktree=<path>")
 	resumeCmd.Flags().Lookup("worktree").NoOptDefVal = "auto"
-	resumeCmd.Flags().String("agent", "", "coding agent (default: agy or previous agent)")
+	resumeCmd.Flags().String("agent", "", "coding agent (default: previous agent, then inbox settings, then agy)")
 	resumeCmd.Flags().String("agent-mode", "", "agent execution mode (interactive|batch|dangerous)")
 	resumeCmd.Flags().Bool("repair", false, "reconstruct state file from Git/GitHub if corrupt or missing")
 	resumeCmd.Flags().String("prompt-template", "", "prompt template name (resolves from prompts/<name>.md or built-in)")
@@ -372,7 +396,7 @@ agents are not killed on exit.`,
 	dispatchCmd.Flags().Int("parallel", dispatch.DefaultParallel, "max agents running at once")
 	dispatchCmd.Flags().Bool("once", false, "run a single pass and exit")
 	dispatchCmd.Flags().Duration("interval", 30*time.Second, "pause between passes")
-	dispatchCmd.Flags().String("agent", "", "headless implementation agent (default: agy)")
+	dispatchCmd.Flags().String("agent", "", "headless implementation agent (default: inbox settings agent, then agy)")
 
 	sayCmd := &cobra.Command{
 		Use:   "say <one-liner>",
@@ -385,14 +409,17 @@ cross-reference each other). --redraft <n> rewrites issue n's body instead
 and posts a comment describing the change. --dry-run prints the would-be
 issues and touches nothing on GitHub. The agent's output is logged under
 the state directory (logs/say-*.log). Agent: --agent, else $LEAD_SPEC_AGENT,
-else agy. The run ends when the log goes silent for stall_timeout
-(inbox-config.json, default 30m); a stalled run is reported and notified.`,
+else the inbox settings agent, else agy. The run ends when the log goes
+silent for stall_timeout (inbox-config.json, default 30m); a stalled run is
+reported and notified. While the agent runs, a status line reports elapsed
+time and time since the last output (every 10s, or
+$LEAD_SPEC_PROGRESS_INTERVAL; negative disables).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSay(cmd, deps, args[0])
 		},
 	}
-	sayCmd.Flags().String("agent", "", "headless spec agent (default: $LEAD_SPEC_AGENT, then agy)")
+	sayCmd.Flags().String("agent", "", "headless spec agent (default: $LEAD_SPEC_AGENT, then inbox settings, then agy)")
 	sayCmd.Flags().Bool("dry-run", false, "print the would-be issues; no gh mutation")
 	sayCmd.Flags().Int("follow-up", 0, "file follow-up issue(s) for issue <n> (実機 NG); body references #<n>")
 	sayCmd.Flags().Int("redraft", 0, "rewrite issue <n>'s title/body from the one-liner and comment the change")
@@ -681,17 +708,25 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		return fmt.Sprintf("Stopped #%d", number), nil
 	}
 	opts.Say = func(ctx context.Context, oneLiner string, followUp int) (string, error) {
+		// Under the TUI stdout is a terminal owned by bubbletea: progress
+		// lines would corrupt the screen, and the status bar already shows
+		// "Generating issue with spec AI...". Headless runs get the lines.
+		progressInterval, _ := sayProgressInterval()
+		if isTerminal(os.Stdout) {
+			progressInterval = -1
+		}
 		r := &spec.Runner{
 			Gh:     deps.gh(),
 			Agent:  deps.specAgent(stallTimeout, sayMaxRuntime),
 			Out:    cmd.OutOrStdout(),
 			Notify: notifier,
 			Opts: spec.Options{
-				Agent:      os.Getenv("LEAD_SPEC_AGENT"),
-				LogDir:     filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
-				WorkDir:    root,
-				Repository: deps.gitRunner().OriginURL(root),
-				FollowUp:   followUp,
+				Agent:            os.Getenv("LEAD_SPEC_AGENT"),
+				LogDir:           filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
+				WorkDir:          root,
+				Repository:       deps.gitRunner().OriginURL(root),
+				FollowUp:         followUp,
+				ProgressInterval: progressInterval,
 			},
 		}
 		res, err := r.Say(ctx, oneLiner)
@@ -809,6 +844,20 @@ func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
+// sayProgressInterval reads LEAD_SPEC_PROGRESS_INTERVAL (issue #216); unset
+// means spec.DefaultProgressInterval. An invalid value is an error.
+func sayProgressInterval() (time.Duration, error) {
+	env := os.Getenv("LEAD_SPEC_PROGRESS_INTERVAL")
+	if env == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(env)
+	if err != nil {
+		return 0, fmt.Errorf("say: LEAD_SPEC_PROGRESS_INTERVAL: %w", err)
+	}
+	return d, nil
+}
+
 // runSay implements `lead say` (RFC inbox §8, issue #94). The headless run
 // is bounded by the shared stall watchdog (issue #215): stall_timeout in
 // inbox-config.json, with no wall-clock cap unless max_runtime is set.
@@ -818,13 +867,20 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 	if agentName == "" {
 		agentName = os.Getenv("LEAD_SPEC_AGENT")
 	}
+	if agentName == "" {
+		agentName = deps.configuredAgent()
+	}
 	dryRun, _ := flags.GetBool("dry-run")
 	followUp, _ := flags.GetInt("follow-up")
 	redraft, _ := flags.GetInt("redraft")
 
+	// An unreadable config is not fatal (issue #214 semantics): warn and
+	// fall back to the built-in defaults. A readable config with a malformed
+	// duration value is still an error below.
 	cfg, err := deps.headlessConfig()
 	if err != nil {
-		return fmt.Errorf("say: %w", err)
+		fmt.Fprintf(cmd.ErrOrStderr(), "say: %v (using defaults)\n", err)
+		cfg = inbox.Config{}
 	}
 	stall, err := cfg.StallTimeoutOr(watchdog.DefaultStallTimeout)
 	if err != nil {
@@ -833,6 +889,10 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 	maxRun, err := cfg.MaxRuntimeOr(0)
 	if err != nil {
 		return fmt.Errorf("say: %w", err)
+	}
+	progressInterval, err := sayProgressInterval()
+	if err != nil {
+		return err
 	}
 
 	cwd, err := deps.workDir()
@@ -846,13 +906,14 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 		Out:    cmd.OutOrStdout(),
 		Notify: notify.New(notify.Options{Disabled: cfg.NotifyDisabled}),
 		Opts: spec.Options{
-			Agent:      agentName,
-			LogDir:     filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
-			WorkDir:    cwd,
-			Repository: repo,
-			DryRun:     dryRun,
-			FollowUp:   followUp,
-			Redraft:    redraft,
+			Agent:            agentName,
+			LogDir:           filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
+			WorkDir:          cwd,
+			Repository:       repo,
+			DryRun:           dryRun,
+			FollowUp:         followUp,
+			Redraft:          redraft,
+			ProgressInterval: progressInterval,
 		},
 	}
 	_, err = r.Say(cmd.Context(), oneLiner)
@@ -928,6 +989,9 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 	once, _ := flags.GetBool("once")
 	interval, _ := flags.GetDuration("interval")
 	agentName, _ := flags.GetString("agent")
+	if agentName == "" {
+		agentName = deps.configuredAgent()
+	}
 
 	cwd, err := deps.workDir()
 	if err != nil {
@@ -937,7 +1001,8 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 	// max_runtime in inbox-config.json; unset keys keep the #186 defaults.
 	cfg, err := deps.headlessConfig()
 	if err != nil {
-		return fmt.Errorf("dispatch: %w", err)
+		fmt.Fprintf(cmd.ErrOrStderr(), "dispatch: %v (using defaults)\n", err)
+		cfg = inbox.Config{}
 	}
 	stuckAfter, err := cfg.StallTimeoutOr(dispatch.DefaultStuckAfter)
 	if err != nil {
@@ -1027,6 +1092,9 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 
 	out := cmd.OutOrStdout()
 	agentName, _ := flags.GetString("agent")
+	if agentName == "" {
+		agentName = deps.configuredAgent()
+	}
 	resolvedAgent := agent.Resolve(agentName)
 	launchDir := res.RepoRoot
 	if res.Worktree != "" {
@@ -1098,6 +1166,9 @@ func runResume(cmd *cobra.Command, deps Deps, target string) error {
 	out := cmd.OutOrStdout()
 	if agentName == "" {
 		agentName = res.Agent
+	}
+	if agentName == "" {
+		agentName = deps.configuredAgent()
 	}
 	resolvedAgent := agent.Resolve(agentName)
 	launchDir := res.RepoRoot
@@ -1203,10 +1274,11 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 		return err
 	}
 	out := cmd.OutOrStdout()
+	now := time.Now()
 	if asJSON {
 		raw, err := json.MarshalIndent(struct {
-			Workflows []state.Workflow `json:"workflows"`
-		}{Workflows: all}, "", "  ")
+			Workflows []statusWorkflow `json:"workflows"`
+		}{Workflows: statusRows(all, now)}, "", "  ")
 		if err != nil {
 			return err
 		}
@@ -1224,6 +1296,20 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 			fmt.Fprintf(out, "  Worktree: %s", w.Worktree)
 		}
 		fmt.Fprintln(out)
+		if w.Status == state.StatusInProgress {
+			// Same last-activity as the dispatch watchdog (issue #216):
+			// log mtime, else started_at.
+			var parts []string
+			if !w.StartedAt.IsZero() {
+				parts = append(parts, fmt.Sprintf("Elapsed: %s", shortDur(now.Sub(w.StartedAt))))
+			}
+			if last := state.LastActivity(w.LogPath, w.StartedAt); !last.IsZero() {
+				parts = append(parts, fmt.Sprintf("Last activity: %s ago", shortDur(now.Sub(last))))
+			}
+			if len(parts) > 0 {
+				fmt.Fprintf(out, "%s\n", strings.Join(parts, "   "))
+			}
+		}
 		if w.Status != state.StatusClosed && w.Status != state.StatusCompleted {
 			target := strconv.Itoa(w.Issue)
 			if w.Issue <= 0 && w.Branch != "" {
@@ -1235,6 +1321,57 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 		}
 	}
 	return nil
+}
+
+// statusWorkflow is a state.Workflow plus computed liveness fields for
+// `lead status --json` (issue #216). The fields appear only on in_progress
+// records: elapsed is started_at→now, last_activity is the watchdog's
+// definition (log mtime, else started_at).
+type statusWorkflow struct {
+	state.Workflow
+	ElapsedSeconds      *int64     `json:"elapsed_seconds,omitempty"`
+	LastActivityAt      *time.Time `json:"last_activity_at,omitempty"`
+	LastActivitySeconds *int64     `json:"last_activity_seconds,omitempty"`
+}
+
+func statusRows(all []state.Workflow, now time.Time) []statusWorkflow {
+	rows := make([]statusWorkflow, len(all))
+	for i, w := range all {
+		rows[i].Workflow = w
+		if w.Status != state.StatusInProgress {
+			continue
+		}
+		if !w.StartedAt.IsZero() {
+			s := int64(now.Sub(w.StartedAt).Seconds())
+			rows[i].ElapsedSeconds = &s
+		}
+		if last := state.LastActivity(w.LogPath, w.StartedAt); !last.IsZero() {
+			l := last.UTC()
+			s := int64(now.Sub(last).Seconds())
+			if s < 0 {
+				s = 0
+			}
+			rows[i].LastActivityAt = &l
+			rows[i].LastActivitySeconds = &s
+		}
+	}
+	return rows
+}
+
+// shortDur renders a compact duration like the inbox ages ("45s"/"12m"/"3h"/"2d").
+func shortDur(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
 // genCompletion renders the cobra completion script for a setup shell name.

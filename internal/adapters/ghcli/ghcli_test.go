@@ -534,18 +534,77 @@ func TestIssueEditBody_FeedsBodyOnStdin(t *testing.T) {
 	}
 }
 
-func TestBrowseIssue_OpensWebView(t *testing.T) {
-	logPath := testutil.InstallDummy(t, "gh", ":")
-	testutil.ClearLog(t, logPath)
+// browseServeBody serves the issue URL lookup and `config get` like the
+// real `gh` (issue #217).
+const browseServeBody = `if [ "$1 $2" = "issue view" ]; then
+  printf '{"url":"https://github.com/o/r/issues/36"}'
+elif [ "$1 $2" = "config get" ]; then
+  if [ -n "$GH_CONFIG_BROWSER" ]; then printf '%s' "$GH_CONFIG_BROWSER"; else echo 'could not find key' >&2; exit 1; fi
+else
+  echo "unexpected: $@" >&2; exit 3
+fi`
+
+func TestBrowseIssue_FetchesURLAndPassesToOpener(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", browseServeBody)
+
+	var gotURL string
+	c := &Client{OpenURL: func(ctx context.Context, url string) error {
+		gotURL = url
+		return nil
+	}}
+	if err := c.BrowseIssue(context.Background(), 36); err != nil {
+		t.Fatalf("BrowseIssue: %v", err)
+	}
+	if gotURL != "https://github.com/o/r/issues/36" {
+		t.Errorf("opener got url %q", gotURL)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, want := range []string{"<issue>", "<view>", "<36>", "<--json>", "<url>"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("gh args log missing %q, got:\n%s", want, log)
+		}
+	}
+	if strings.Contains(log, "<--web>") {
+		t.Errorf("gh args must not contain --web, got:\n%s", log)
+	}
+}
+
+// TestBrowseIssue_GHBrowserEnvBeatsConfig asserts the default opener path:
+// GH_BROWSER wins, so `gh config get` is never consulted.
+func TestBrowseIssue_GHBrowserEnvBeatsConfig(t *testing.T) {
+	ghLog := testutil.InstallDummy(t, "gh", browseServeBody)
+	browserLog := testutil.InstallDummy(t, "testbrowser", ":")
+	t.Setenv("GH_BROWSER", "testbrowser")
+	t.Setenv("GH_CONFIG_BROWSER", "should-not-be-used")
 
 	if err := New().BrowseIssue(context.Background(), 36); err != nil {
 		t.Fatalf("BrowseIssue: %v", err)
 	}
-	log := testutil.LogText(t, logPath)
-	for _, want := range []string{"<issue>", "<view>", "<36>", "<--web>"} {
-		if !strings.Contains(log, want) {
-			t.Errorf("gh args log missing %q, got:\n%s", want, log)
-		}
+	if got := testutil.LogLines(t, browserLog); !reflect.DeepEqual(got, []string{"<https://github.com/o/r/issues/36>"}) {
+		t.Errorf("testbrowser argv = %q", got)
+	}
+	if log := testutil.LogText(t, ghLog); strings.Contains(log, "<config>") || strings.Contains(log, "<--web>") {
+		t.Errorf("gh must not run `config get` or `--web`, got:\n%s", log)
+	}
+}
+
+// TestBrowseIssue_GhConfigBrowserUsedWhenEnvUnset asserts the default
+// opener consults `gh config get browser` when no env browser is set.
+func TestBrowseIssue_GhConfigBrowserUsedWhenEnvUnset(t *testing.T) {
+	ghLog := testutil.InstallDummy(t, "gh", browseServeBody)
+	browserLog := testutil.InstallDummy(t, "cfgbrowser", ":")
+	t.Setenv("GH_BROWSER", "")
+	t.Setenv("BROWSER", "")
+	t.Setenv("GH_CONFIG_BROWSER", "cfgbrowser")
+
+	if err := New().BrowseIssue(context.Background(), 36); err != nil {
+		t.Fatalf("BrowseIssue: %v", err)
+	}
+	if got := testutil.LogLines(t, browserLog); !reflect.DeepEqual(got, []string{"<https://github.com/o/r/issues/36>"}) {
+		t.Errorf("cfgbrowser argv = %q", got)
+	}
+	if log := testutil.LogText(t, ghLog); !strings.Contains(log, "<config>\n<get>\n<browser>") {
+		t.Errorf("gh must run `config get browser`, got:\n%s", log)
 	}
 }
 
@@ -652,4 +711,3 @@ func TestRepoCreateLabel_PropagatesFailure(t *testing.T) {
 		t.Fatal("RepoCreateLabel on failing gh = nil, want error")
 	}
 }
-

@@ -17,10 +17,13 @@ import (
 	"github.com/kuwa72/lead-cli/internal/watchdog"
 )
 
-// fakeAgent records the launch and prints canned output.
+// fakeAgent records the launch and prints canned output. Hook, when set,
+// runs inside Run before the canned output is returned (tests simulate
+// slow agents that write partial output to the log).
 type fakeAgent struct {
 	Output string
 	Err    error
+	Hook   func(ctx context.Context, logPath string)
 	Calls  []struct {
 		Dir     string
 		Argv    []string
@@ -34,6 +37,9 @@ func (f *fakeAgent) Run(ctx context.Context, dir string, argv []string, logPath 
 		Argv    []string
 		LogPath string
 	}{dir, argv, logPath})
+	if f.Hook != nil {
+		f.Hook(ctx, logPath)
+	}
 	return []byte(f.Output), f.Err
 }
 
@@ -616,5 +622,57 @@ func TestExecRunner_StallBeatsExitError(t *testing.T) {
 	var se *watchdog.StalledError
 	if !errors.As(err, &se) {
 		t.Fatalf("err = %v, want StalledError (not exit status)", err)
+	}
+}
+
+// issue #216: while the spec agent runs, `say` periodically reports the
+// elapsed time and the time since the last log write (watchdog's
+// last-activity: log mtime, else launch time). Non-TTY Out gets one line
+// per tick.
+func TestSay_ReportsProgressWhileAgentRuns(t *testing.T) {
+	gh := &testutil.FakeGhClient{Issues: map[int]ports.Issue{}}
+	logWritten := make(chan struct{})
+	ag := &fakeAgent{
+		Output: `[{"title":"t","body":"b"}]`,
+		Hook: func(ctx context.Context, logPath string) {
+			// Stay silent ~150ms (idle since launch), then emit output and
+			// keep running so a later tick sees a fresh last-activity.
+			time.Sleep(150 * time.Millisecond)
+			_ = os.WriteFile(logPath, []byte("partial output\n"), 0o644)
+			close(logWritten)
+			time.Sleep(150 * time.Millisecond)
+		},
+	}
+	var buf bytes.Buffer
+	r := &Runner{Gh: gh, Agent: ag, Out: &buf, Opts: Options{
+		Agent: "claude", LogDir: t.TempDir(), WorkDir: t.TempDir(), Repository: "o/r", Rules: "x",
+		ProgressInterval: 30 * time.Millisecond,
+	}}
+	if _, err := r.Say(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	<-logWritten
+	out := buf.String()
+	if !strings.Contains(out, "running") || !strings.Contains(out, "last output") {
+		t.Errorf("no elapsed/last-output progress lines in output:\n%s", out)
+	}
+}
+
+func TestSay_NoProgressWhenIntervalNegative(t *testing.T) {
+	gh := &testutil.FakeGhClient{Issues: map[int]ports.Issue{}}
+	ag := &fakeAgent{
+		Output: `[{"title":"t","body":"b"}]`,
+		Hook:   func(ctx context.Context, logPath string) { time.Sleep(80 * time.Millisecond) },
+	}
+	var buf bytes.Buffer
+	r := &Runner{Gh: gh, Agent: ag, Out: &buf, Opts: Options{
+		Agent: "claude", LogDir: t.TempDir(), WorkDir: t.TempDir(), Repository: "o/r", Rules: "x",
+		ProgressInterval: -1,
+	}}
+	if _, err := r.Say(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "last output") {
+		t.Errorf("progress lines emitted despite disabled interval:\n%s", buf.String())
 	}
 }

@@ -12,9 +12,10 @@ package watchdog
 import (
 	"errors"
 	"fmt"
-	"os"
 	"syscall"
 	"time"
+
+	"github.com/kuwa72/lead-cli/internal/state"
 )
 
 // Defaults mirror the dispatch thresholds introduced in issue #186. Silent
@@ -44,12 +45,9 @@ func StuckReason(logPath string, startedAt, now time.Time, stallTimeout, maxRunt
 	if stallTimeout <= 0 {
 		return nil
 	}
-	last := startedAt
-	if logPath != "" {
-		if fi, err := os.Stat(logPath); err == nil && fi.ModTime().After(last) {
-			last = fi.ModTime()
-		}
-	}
+	// Same liveness signal the status/progress views use (issue #216):
+	// log mtime, falling back to the launch time.
+	last := state.LastActivity(logPath, startedAt)
 	if last.IsZero() || now.Sub(last) <= stallTimeout {
 		return nil
 	}

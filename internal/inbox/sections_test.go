@@ -69,8 +69,8 @@ func TestBuild_CapsMergedSection(t *testing.T) {
 		merged = append(merged, ports.MergedIssue{Number: i, Title: "merged", MergedAt: now.Add(-time.Duration(i) * time.Minute)})
 	}
 	got := Build(nil, nil, merged, &SeenState{LastSeenAt: now.Add(-100 * time.Hour)}, nil)
-	if len(got[2].Items) != MaxMergedItems {
-		t.Errorf("merged capped = %d, want %d", len(got[2].Items), MaxMergedItems)
+	if len(got[3].Items) != MaxMergedItems {
+		t.Errorf("merged capped = %d, want %d", len(got[3].Items), MaxMergedItems)
 	}
 }
 
@@ -82,7 +82,7 @@ func TestBuild_FiltersWorkflowsByRepo(t *testing.T) {
 	}
 	// With repo filter "kuwa72/lead-cli", zenn.git must be excluded, local/empty repo is kept.
 	got := Build(nil, nil, nil, nil, wfs, BuildOptions{Repo: "kuwa72/lead-cli"})
-	runningItems := got[3].Items
+	runningItems := got[4].Items
 	if len(runningItems) != 2 {
 		t.Fatalf("running count = %d, want 2 (zenn.git excluded)", len(runningItems))
 	}
@@ -98,7 +98,7 @@ func TestBuild_FiltersClosedIssueWorkflows(t *testing.T) {
 	}
 	openSet := map[int]bool{89: true} // 36 is closed on GitHub
 	got := Build(nil, nil, nil, nil, wfs, BuildOptions{OpenNumbers: openSet})
-	runningItems := got[3].Items
+	runningItems := got[4].Items
 	if len(runningItems) != 1 {
 		t.Fatalf("running count = %d, want 1 (issue 36 excluded because closed)", len(runningItems))
 	}
@@ -119,10 +119,10 @@ func TestBuild_IncludesBacklogSection(t *testing.T) {
 	sections := Build(review, blocked, nil, nil, nil, BuildOptions{
 		OpenIssues: open,
 	})
-	if len(sections) != 5 {
-		t.Fatalf("expected 5 sections, got %d", len(sections))
+	if len(sections) != 6 {
+		t.Fatalf("expected 6 sections, got %d", len(sections))
 	}
-	backlog := sections[4]
+	backlog := sections[5]
 	if backlog.Kind != KindBacklog {
 		t.Errorf("section[4] kind = %v, want KindBacklog", backlog.Kind)
 	}
@@ -134,6 +134,66 @@ func TestBuild_IncludesBacklogSection(t *testing.T) {
 	}
 	if backlog.Items[0].Number != 3 || backlog.Items[1].Number != 4 {
 		t.Errorf("backlog items = %+v, want [3, 4]", backlog.Items)
+	}
+}
+
+// Issue #212: the Ready section mirrors the dispatch queue. Build receives
+// the ready list already sorted by dispatch.OrderReady; dispatchable items
+// keep that order and deferred ones (open blocked-by) move last with the
+// blocker number attached.
+func TestBuild_ReadySectionDispatchOrderAndDeferred(t *testing.T) {
+	ready := []ports.IssueSummary{
+		{Number: 1, Title: "first", Parent: 50},
+		{Number: 2, Title: "gated mid", Parent: 50, BlockedBy: []ports.IssueDependency{{Number: 35, State: "OPEN"}}},
+		{Number: 3, Title: "third", Parent: 50},
+		{Number: 8, Title: "gated last", BlockedBy: []ports.IssueDependency{{Number: 9, State: "OPEN"}}},
+	}
+	sections := Build(nil, nil, nil, nil, nil, BuildOptions{Ready: ready})
+	if len(sections) != 6 {
+		t.Fatalf("expected 6 sections, got %d", len(sections))
+	}
+	sec := sections[2]
+	if sec.Kind != KindReady {
+		t.Fatalf("sections[2].Kind = %v, want KindReady", sec.Kind)
+	}
+	var order []int
+	for _, it := range sec.Items {
+		order = append(order, it.Number)
+	}
+	if want := []int{1, 3, 2, 8}; !reflect.DeepEqual(order, want) {
+		t.Errorf("ready order = %v, want %v (dispatchable first in dispatch order, deferred last)", order, want)
+	}
+	if sec.Items[2].DeferredBy != 35 {
+		t.Errorf("#2 DeferredBy = %d, want 35", sec.Items[2].DeferredBy)
+	}
+	if sec.Items[3].DeferredBy != 9 {
+		t.Errorf("#8 DeferredBy = %d, want 9", sec.Items[3].DeferredBy)
+	}
+	if sec.Items[0].DeferredBy != 0 || sec.Items[1].DeferredBy != 0 {
+		t.Errorf("dispatchable items must not carry DeferredBy: %+v", sec.Items)
+	}
+}
+
+// A closed blocker does not defer the issue.
+func TestBuild_ReadyClosedBlockerNotDeferred(t *testing.T) {
+	ready := []ports.IssueSummary{
+		{Number: 8, Title: "unblocked", BlockedBy: []ports.IssueDependency{{Number: 35, State: "CLOSED"}}},
+	}
+	sections := Build(nil, nil, nil, nil, nil, BuildOptions{Ready: ready})
+	sec := sections[2]
+	if len(sec.Items) != 1 || sec.Items[0].DeferredBy != 0 {
+		t.Errorf("closed blocker must not defer: %+v", sec.Items)
+	}
+}
+
+// Ready-labelled issues must not leak into Backlog too.
+func TestBuild_ReadyExcludedFromBacklog(t *testing.T) {
+	ready := []ports.IssueSummary{{Number: 5, Title: "queued"}}
+	open := []ports.IssueSummary{{Number: 5, Title: "queued"}, {Number: 6, Title: "plain"}}
+	sections := Build(nil, nil, nil, nil, nil, BuildOptions{Ready: ready, OpenIssues: open})
+	backlog := sections[5]
+	if len(backlog.Items) != 1 || backlog.Items[0].Number != 6 {
+		t.Errorf("backlog = %+v, want only #6", backlog.Items)
 	}
 }
 

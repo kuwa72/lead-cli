@@ -41,6 +41,8 @@ cat > "$log_file" <<'EOF'
 [agy] Result: all checks passed!
 EOF
 
+started_144="$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+
 state_dir="$HOME/.local/state/lead"
 mkdir -p "$state_dir"
 cat > "$state_dir/workflows.json" <<EOF
@@ -56,6 +58,17 @@ cat > "$state_dir/workflows.json" <<EOF
       "agent": "agy",
       "pane": "p-143",
       "log_path": "$log_file",
+      "updated_at": "2026-09-11T07:00:00Z"
+    },
+    {
+      "repository": "https://github.com/kuwa72/lead-cli.git",
+      "issue": 144,
+      "mode": "implement",
+      "status": "in_progress",
+      "branch": "issue/144-no-log",
+      "agent": "claude",
+      "log_path": "$tmp/missing-144.log",
+      "started_at": "$started_144",
       "updated_at": "2026-09-11T07:00:00Z"
     }
   ]
@@ -91,6 +104,9 @@ case "$*" in
   *"issue view 143"*)
     printf '{"number":143,"title":"feat: running agent log preview","body":"issue body","state":"OPEN"}'
     ;;
+  *"issue view 144"*)
+    printf '{"number":144,"title":"feat: no log file yet","body":"issue body","state":"OPEN"}'
+    ;;
   *)
     printf '[]'
     ;;
@@ -115,8 +131,8 @@ CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 
 cd "$repo"
 
-# 1. Start inbox headless, expand all (z), move down 4 times to issue 143 in Running, quit
-out="$(LEAD_TEST_INBOX_WIDTH=130 LEAD_TEST_INBOX_HEIGHT=30 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,q "$tmp/lead" 2>&1)" || fail "lead exited non-zero: $out"
+# 1. Start inbox headless, expand all (z), move down 5 times to issue 143 in Running, quit
+out="$(LEAD_TEST_INBOX_WIDTH=130 LEAD_TEST_INBOX_HEIGHT=30 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,q "$tmp/lead" 2>&1)" || fail "lead exited non-zero: $out"
 printf '%s\n' "$out" > "$tmp/screen.log"
 
 case "$out" in
@@ -134,6 +150,20 @@ case "$out" in
   *) fail "preview did not contain 'Agent: agy': $out" ;;
 esac
 
+case "$out" in
+  *"Active:"*" ago"*) ;;
+  *) fail "preview did not contain last-activity (Active: ... ago): $out" ;;
+esac
+
+# 1b. #144 has no log file: last-activity must fall back to started_at
+# (issue #216 — same definition as the dispatch watchdog).
+out="$(LEAD_TEST_INBOX_WIDTH=130 LEAD_TEST_INBOX_HEIGHT=30 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,j,q "$tmp/lead" 2>&1)" || fail "lead exited non-zero: $out"
+printf '%s\n' "$out" > "$tmp/screen-144.log"
+case "$out" in
+  *"Active: 2h ago"*) ;;
+  *) fail "preview for #144 did not fall back to started_at: $out" ;;
+esac
+
 # 2. Test peek action with 'p' key using Herdr
 : > "$herdr_log"
 cat > "$tmp/bin/herdr" <<'EOF'
@@ -149,7 +179,7 @@ case "$1 $2" in
 esac
 EOF
 
-HERDR_LOG="$herdr_log" HERDR_ENV=1 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,p,q "$tmp/lead" >/dev/null 2>&1 || fail "peek keypress failed"
+HERDR_LOG="$herdr_log" HERDR_ENV=1 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,p,q "$tmp/lead" >/dev/null 2>&1 || fail "peek keypress failed"
 grep -qxF '<tab>' "$herdr_log" || fail "p did not call herdr tab create: $(cat "$herdr_log")"
 grep -qxF '<create>' "$herdr_log" || fail "p herdr tab create args wrong: $(cat "$herdr_log")"
 grep -qxF '<--focus>' "$herdr_log" || fail "p herdr tab create missing --focus: $(cat "$herdr_log")"

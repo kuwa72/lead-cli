@@ -40,6 +40,26 @@ func TestSelectorModel_NavigationAndSelection(t *testing.T) {
 	}
 }
 
+// issue #214: the picker reports the configured default agent (e.g. the
+// inbox settings pick) for ActionWork, resolving to agy when unset.
+func TestSelectorModel_DefaultAgent(t *testing.T) {
+	issues := []IssueItem{{Number: 1, Title: "First"}}
+
+	m := selectorModel{issues: issues, ctx: context.Background(), defaultAgent: "claude"}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(selectorModel)
+	if m.selection.Agent != "claude" {
+		t.Errorf("selection.Agent = %q, want configured default claude", m.selection.Agent)
+	}
+
+	m = selectorModel{issues: issues, ctx: context.Background()}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(selectorModel)
+	if m.selection.Agent != "agy" {
+		t.Errorf("selection.Agent = %q, want agy fallback", m.selection.Agent)
+	}
+}
+
 func TestSelectorModel_BrowseKey(t *testing.T) {
 	issues := []IssueItem{
 		{Number: 42, Title: "Answer"},

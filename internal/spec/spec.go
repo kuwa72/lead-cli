@@ -24,10 +24,13 @@ import (
 	"text/template"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/prompter"
+	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/watchdog"
 )
 
@@ -60,6 +63,20 @@ type Options struct {
 	DryRun     bool   // print would-be issues, no gh mutation
 	FollowUp   int    // 実機 NG → 追い Issue: reference this parent issue
 	Redraft    int    // rewrite this issue's body instead of creating
+	// ProgressInterval is the cadence of the running status line while the
+	// agent works (issue #216). 0 = DefaultProgressInterval; <0 disables it.
+	ProgressInterval time.Duration
+}
+
+// DefaultProgressInterval is how often `say` prints the elapsed /
+// last-output status line while the spec agent runs.
+const DefaultProgressInterval = 10 * time.Second
+
+func (o Options) progressInterval() time.Duration {
+	if o.ProgressInterval == 0 {
+		return DefaultProgressInterval
+	}
+	return o.ProgressInterval
 }
 
 func (o Options) withDefaults() (Options, error) {
@@ -257,7 +274,9 @@ func (r *Runner) runAgent(ctx context.Context, opts Options, prompt string) ([]b
 		return nil, "", fmt.Errorf("say: %w", err)
 	}
 	logPath := filepath.Join(opts.LogDir, "say-"+time.Now().UTC().Format("20060102T150405Z")+".log")
+	stop := r.startProgress(logPath, opts.progressInterval())
 	out, err := r.Agent.Run(ctx, opts.WorkDir, argv, logPath)
+	stop()
 	if err != nil {
 		var stalled *watchdog.StalledError
 		if errors.As(err, &stalled) && r.Notify != nil {
@@ -266,6 +285,53 @@ func (r *Runner) runAgent(ctx context.Context, opts Options, prompt string) ([]b
 		return nil, logPath, fmt.Errorf("say: agent %s failed (log: %s): %w", opts.Agent, logPath, err)
 	}
 	return out, logPath, nil
+}
+
+// startProgress reports, once per interval, how long the spec agent has
+// been running and how long since its last output (issue #216; the
+// watchdog's last-activity definition: log mtime, else launch time). On a
+// terminal it rewrites one status line; on a pipe it appends one line per
+// tick. The returned stopper waits for the reporter goroutine to exit.
+func (r *Runner) startProgress(logPath string, interval time.Duration) func() {
+	if r.Out == nil || interval <= 0 {
+		return func() {}
+	}
+	tty := false
+	if f, ok := r.Out.(*os.File); ok {
+		tty = term.IsTerminal(int(f.Fd()))
+	}
+	started := time.Now()
+	stop, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		wrote := false
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				if tty && wrote {
+					fmt.Fprintf(r.Out, "\r%s\r", strings.Repeat(" ", 79))
+				}
+				return
+			case now := <-t.C:
+				last := state.LastActivity(logPath, started)
+				idle := now.Sub(last)
+				if idle < 0 {
+					idle = 0
+				}
+				line := fmt.Sprintf("say: running %s, last output %s ago",
+					now.Sub(started).Round(time.Second), idle.Round(time.Second))
+				if tty {
+					fmt.Fprintf(r.Out, "\r%-79s", line)
+				} else {
+					fmt.Fprintln(r.Out, line)
+				}
+				wrote = true
+			}
+		}
+	}()
+	return func() { close(stop); <-finished }
 }
 
 // outputError wraps a parse failure; empty output suggests the agent died

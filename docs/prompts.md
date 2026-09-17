@@ -40,7 +40,8 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
 - 起票: `gh issue create --title --body --label needs-review`。複数件は本文末尾に
   相互参照を追記する。`--follow-up` は本文に `#N` がなければ `元 Issue: #N` を補う。
   `--redraft` は `gh issue edit --title --body-file` の後、変更点の要約をコメントする。
-- エージェント選択: `--agent` → `$LEAD_SPEC_AGENT` → 既定（`agy`）。
+- エージェント選択: `--agent` → `$LEAD_SPEC_AGENT` → inbox 設定
+  （`inbox-config.json` の `agent`、設定画面の Active Coding Agent）→ 既定（`agy`）。
   `agent.HeadlessArgv` の対応表にある CLI のみ。出力ログは状態ディレクトリの `logs/say-*.log`。
 - 打ち切り条件（issue #215）: 共通設定 `inbox-config.json` の `stall_timeout`
   （Go duration 文字列、既定 30m）を読み、ログ出力がその時間止まったら
@@ -50,6 +51,10 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
   より先に発火しない十分大きな値（24h）をバックストップとして渡す
   （agy 自体の既定は 5m）。`lead dispatch` も同じ設定を使う
   （既定値は issue #186 と同じ 30m / 3h）。
+- 進捗表示: 実行中はステータス行に起動からの経過時間と最終出力からの経過時間を
+  定期表示する（issue #216）。間隔は `$LEAD_SPEC_PROGRESS_INTERVAL`（既定 10s、
+  負値で無効）。最終出力の定義は stall 検知と同じ
+  （ログ mtime → なければ started_at）。
 
 ## 2.2 ワークフロープロンプト (`prompter.RenderWorkflowPromptWithOptions`, issue #84, #89)
 
@@ -71,6 +76,10 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
     - `{{.Mode}}`: 実行モード
     - `{{.AgentMode}}`: エージェント実行モード (`interactive`, `batch`, `dangerous`)
     - `{{.Rules}}`: リポジトリの `AGENTS.md` の内容（未設定時は空）
+- エージェント選択 (issue #214): `run`/`work`/`dispatch` は
+  `--agent` → inbox 設定（`inbox-config.json` の `agent`）→ 既定（`agy`）。
+  `resume` は `--agent` → state 記録の前回エージェント → inbox 設定 → 既定（`agy`）。
+  ピッカー経路（番号なし `run`/`work`）でエージェント未指定の場合も同じ解決順。
 
 ## 2.3 ラベル運用とピッカー分岐 (issue #89)
 

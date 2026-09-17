@@ -62,7 +62,8 @@ EOF
 # Dummy agent: log argv one per line, cwd, then print canned output.
 # AGENT_STALL=<sec> sleeps silently first (watchdog bait, issue #215);
 # AGENT_CHAT=<n> prints a tick every 0.3s before the payload (keeps the
-# log mtime fresh so the stall watchdog must not fire).
+# log mtime fresh so the stall watchdog must not fire);
+# AGENT_SLEEP delays output so progress reporting can be observed (issue #216).
 cat > "$tmp/bin/claude" <<'EOF'
 #!/bin/sh
 printf '<%s>\n' "$@" >> "$AGENT_LOG"
@@ -71,6 +72,7 @@ if [ -n "${AGENT_STALL:-}" ]; then sleep "$AGENT_STALL"; fi
 if [ -n "${AGENT_CHAT:-}" ]; then
   i=0; while [ "$i" -lt "$AGENT_CHAT" ]; do echo tick; sleep 0.3; i=$((i+1)); done
 fi
+sleep "${AGENT_SLEEP:-0}"
 cat "$AGENT_OUT"
 EOF
 # Dummy agy: same argv recorder (issue #204 verifies --print-timeout reaches it).
@@ -178,6 +180,13 @@ out="$(cd "$repo" && AGENT_CHAT=8 timeout 30 "$tmp/lead" say "chatty" --agent cl
 grep -q '^GH issue create --title feat: chatty ' "$GH_LOG" || fail "chatty run did not file the issue: $(cat "$GH_LOG")"
 
 rm -f "$tmp/state/inbox-config.json"
+
+# --- 7c. progress: 遅延出力エージェント実行中に経過時間・最終出力からの経過を表示 ---
+: > "$AGENT_LOG"
+echo '[{"title":"feat: t","body":"b"}]' > "$AGENT_OUT"
+out="$(cd "$repo" && AGENT_SLEEP=3 LEAD_SPEC_PROGRESS_INTERVAL=1s "$tmp/lead" say "x" --agent claude --dry-run 2>&1)" \
+  || fail "slow say exited non-zero: $out"
+case "$out" in *"running"*"last output"*) ;; *) fail "no elapsed/last-output progress lines: $out";; esac
 
 # --- 8. help ---------------------------------------------------------------------
 "$tmp/lead" say --help | grep -q -- '--follow-up' || fail "say --help lacks --follow-up"

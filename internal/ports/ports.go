@@ -15,16 +15,16 @@ type IssueSummary struct {
 	Title     string    `json:"title"`
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Parent is the tracking/parent issue number (gh `parent`); 0 = none.
-	Parent int `json:"-"`
+	Parent int `json:"parent,omitempty"`
 	// BlockedBy lists this issue's dependency blockers (gh `blockedBy`);
 	// open entries defer dispatch (issue #207).
-	BlockedBy []IssueDependency `json:"-"`
+	BlockedBy []IssueDependency `json:"blockedBy,omitempty"`
 }
 
 // IssueDependency is one node of gh's blockedBy/blocking JSON.
 type IssueDependency struct {
-	Number int
-	State  string // OPEN / CLOSED
+	Number int    `json:"number"`
+	State  string `json:"state"` // OPEN / CLOSED
 }
 
 // SubIssueList is a parent issue's ordered sub-issues plus its own state
@@ -80,7 +80,9 @@ type GhClient interface {
 	ApiUser(ctx context.Context) (string, error)
 	// LatestReleaseTag mirrors `gh api repos/<repo>/releases/latest --jq .tag_name`.
 	LatestReleaseTag(ctx context.Context, repo string) (string, error)
-	// BrowseIssue mirrors `gh issue view <n> --web`.
+	// BrowseIssue opens issue <n> in a browser. Implementations fetch
+	// the URL (`gh issue view <n> --json url`) and pick the opener
+	// themselves (issue #217).
 	BrowseIssue(ctx context.Context, number int) error
 	// ListByLabel mirrors `gh issue list --state open --label <l> --json number,title,updatedAt,parent,blockedBy`
 	// (dispatch queue: docs/rfc-inbox-ux.md §7; parent/blockedBy drive ordering, issue #207).
