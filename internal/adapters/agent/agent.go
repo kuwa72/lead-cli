@@ -123,8 +123,8 @@ func HeadlessArgv(agentName, prompt string) ([]string, error) {
 	return nil, fmt.Errorf("%s: %w", name, ErrHeadlessUnsupported)
 }
 
-// CommandString builds the shell command string prepared in a new Herdr
-// pane for human review (legacy bin/hgf behavior; not auto-sent).
+// CommandString builds the shell command string displayed inline for the
+// user to run (not auto-sent).
 func CommandString(agentName, prompt string) string {
 	name := Resolve(agentName)
 	if name == "agy" {

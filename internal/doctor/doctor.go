@@ -64,7 +64,6 @@ func (r Report) JSON() string {
 type Deps struct {
 	Gh       ports.GhClient
 	LookPath func(string) (string, error)
-	Getenv   func(string) string
 	Home     string
 	Shell    string // override; "" = detect from $SHELL
 	Version  string
@@ -85,13 +84,6 @@ func (d Deps) lookPath() func(string) (string, error) {
 		return d.LookPath
 	}
 	return exec.LookPath
-}
-
-func (d Deps) getenv(k string) string {
-	if d.Getenv != nil {
-		return d.Getenv(k)
-	}
-	return os.Getenv(k)
 }
 
 func (d Deps) home() string {
@@ -132,14 +124,6 @@ func Run(d Deps) Report {
 		rep.Checks = append(rep.Checks, Check{Name: "github api", Detail: fmt.Sprintf("unreachable: %v", err)})
 	} else {
 		rep.Checks = append(rep.Checks, Check{Name: "github api", OK: true, Detail: fmt.Sprintf("reachable as %s", login)})
-	}
-
-	if _, err := d.lookPath()("herdr"); err != nil {
-		rep.Checks = append(rep.Checks, Check{Name: "herdr", Detail: "absent: inline fallback (single terminal)"})
-	} else if d.getenv("HERDR_ENV") == "1" {
-		rep.Checks = append(rep.Checks, Check{Name: "herdr", OK: true, Detail: "multipane available (HERDR_ENV=1)"})
-	} else {
-		rep.Checks = append(rep.Checks, Check{Name: "herdr", OK: true, Detail: "installed but HERDR_ENV unset: inline fallback"})
 	}
 
 	var found []string

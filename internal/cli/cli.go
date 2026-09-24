@@ -33,7 +33,6 @@ import (
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/adapters/ghcli"
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
-	"github.com/kuwa72/lead-cli/internal/adapters/herdr"
 	"github.com/kuwa72/lead-cli/internal/dispatch"
 	"github.com/kuwa72/lead-cli/internal/doctor"
 	"github.com/kuwa72/lead-cli/internal/finish"
@@ -85,7 +84,6 @@ type Deps struct {
 	ExePath    string
 	LookPath   func(string) (string, error)
 	BrewPrefix func() (string, error)
-	Herdr      ports.HerdrRunner
 	// Selector picks issues when `run` has no number.
 	// Nil means the embedded go-fzf picker (or LEAD_TEST_SELECTION below).
 	Selector tui.Selector
@@ -231,13 +229,6 @@ func (d Deps) lookPath() func(string) (string, error) {
 	return exec.LookPath
 }
 
-func (d Deps) herdrRunner() ports.HerdrRunner {
-	if d.Herdr != nil {
-		return d.Herdr
-	}
-	return herdr.NewRunner()
-}
-
 // selector resolves the issue picker: explicit Deps first, then the
 // LEAD_TEST_SELECTION hook (<number>[:<agent|browser>] for headless tests),
 // then the interactive embedded picker.
@@ -290,7 +281,7 @@ func NewRootCmdWithDeps(version, commit, date string, deps Deps) *cobra.Command 
 		Use:   "lead",
 		Short: "GitHub Issue–triggered multi-agent orchestrator",
 		Long: `lead drives Issues to completion: select an issue, branch, launch a
-coding agent (Herdr side-pane or inline), then wait CI and merge.
+coding agent (inline command), then wait CI and merge.
 
 Without a subcommand lead opens the inbox (docs/rfc-inbox-ux.md §5): the
 needs-review / blocked issues plus locally derived merged/running sections,
@@ -329,9 +320,9 @@ It needs an interactive terminal; use --help for the subcommand list.`,
 			Hidden: hidden,
 			Long: `Manual override of the dispatch flow. With an issue number: fetch the
 issue, create/check out the working branch, optionally create a worktree,
-record the workflow state, and prepare the agent in a Herdr pane (or print
-the command inline). Without a number, the embedded picker selects the
-issue. Normal operation is ` + "`lead dispatch`" + `, which needs no human step.`,
+record the workflow state, and print the agent command inline. Without a
+number, the embedded picker selects the issue. Normal operation is
+` + "`lead dispatch`" + `, which needs no human step.`,
 			Args: cobra.MaximumNArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				if len(args) == 0 {
@@ -465,7 +456,7 @@ approval. Finishes with a doctor summary.`,
 
 	doctorCmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Diagnose environment (gh auth, herdr, agents, shell integration)",
+		Short: "Diagnose environment (gh auth, agents, shell integration)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDoctor(cmd, deps, info)
 		},
@@ -689,11 +680,6 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		Repo:       repoSlug,
 		Parallel:   parallel,
 		Theme:      os.Getenv("LEAD_THEME"),
-	}
-	if deps.Herdr != nil {
-		opts.Herdr = deps.Herdr
-	} else if herdr.Available() {
-		opts.Herdr = herdr.New()
 	}
 	opts.Stop = func(ctx context.Context, number int) (string, error) {
 		d := &dispatch.Dispatcher{
@@ -1110,17 +1096,8 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 	}
 	fmt.Fprintf(out, "  Agent: %s\n", resolvedAgent)
 
-	if res.Pane != "" {
-		fmt.Fprintf(out, "Agent already prepared in pane %s\n", res.Pane)
-	} else {
-		pane, err := launchAgent(cmd.Context(), out, deps, res, agentName, iss, agentMode, promptTemplate)
-		if err != nil {
-			return err
-		}
-		if w, ok, err := store.Get(iss.Number, part); err == nil && ok {
-			w.Pane = pane
-			_ = store.Upsert(w)
-		}
+	if err := launchAgent(out, res, agentName, iss, agentMode, promptTemplate); err != nil {
+		return err
 	}
 
 	fmt.Fprintln(out, "Next: review the prompt, launch the agent, then `lead status`.")
@@ -1189,9 +1166,7 @@ func runResume(cmd *cobra.Command, deps Deps, target string) error {
 	}
 	fmt.Fprintf(out, "  Agent: %s\n", resolvedAgent)
 
-	if res.Pane != "" {
-		fmt.Fprintf(out, "Agent already prepared in pane %s\n", res.Pane)
-	} else {
+	{
 		effectiveMode := agentMode
 		if effectiveMode == "" {
 			effectiveMode = res.AgentMode
@@ -1199,19 +1174,13 @@ func runResume(cmd *cobra.Command, deps Deps, target string) error {
 		if effectiveMode == "" {
 			effectiveMode = "interactive"
 		}
-		pane, err := launchAgent(cmd.Context(), out, deps, workflow.StartResult{
+		err := launchAgent(out, workflow.StartResult{
 			Branch: res.Branch, Worktree: res.Worktree, Status: res.Status,
 			Repository: res.Repository, Mode: res.Mode, RepoRoot: res.RepoRoot,
-			Pane: res.Pane, AgentMode: effectiveMode,
+			AgentMode: effectiveMode,
 		}, agentName, res.Issue, effectiveMode, promptTemplate)
 		if err != nil {
 			return err
-		}
-		if res.Issue.Number > 0 {
-			if w, ok, err := store.Get(res.Issue.Number, ""); err == nil && ok {
-				w.Pane = pane
-				_ = store.Upsert(w)
-			}
 		}
 	}
 
@@ -1233,7 +1202,9 @@ func buildPrompt(opts prompter.PromptOptions, iss ports.Issue) string {
 	return prompt
 }
 
-func launchAgent(ctx context.Context, out io.Writer, deps Deps, res workflow.StartResult, agentName string, iss ports.Issue, agentMode string, promptTemplate string) (string, error) {
+// launchAgent surfaces `cd <dir> && <agent cmd>` on out for the user to
+// review and run inline (issue #225: the herdr pane path is removed).
+func launchAgent(out io.Writer, res workflow.StartResult, agentName string, iss ports.Issue, agentMode string, promptTemplate string) error {
 	launchDir := res.RepoRoot
 	if res.Worktree != "" {
 		launchDir = res.Worktree
@@ -1247,22 +1218,10 @@ func launchAgent(ctx context.Context, out io.Writer, deps Deps, res workflow.Sta
 	}, iss)
 	command, err := agent.CommandStringForMode(agentName, prompt, agentMode)
 	if err != nil {
-		return "", fmt.Errorf("work #%d: agent command: %w", iss.Number, err)
+		return fmt.Errorf("work #%d: agent command: %w", iss.Number, err)
 	}
-	prepared := "cd " + strconv.Quote(launchDir) + " && " + command
-
-	h := deps.herdrRunner()
-	if ir, ok := h.(*herdr.InlineRunner); ok && ir.Out == nil {
-		ir.Out = out
-	}
-	pane, err := h.Split(ctx, ports.DirectionRight, 0.5)
-	if err != nil {
-		return "", fmt.Errorf("work #%d: split pane: %w", iss.Number, err)
-	}
-	if err := h.SendText(ctx, pane, prepared); err != nil {
-		return "", fmt.Errorf("work #%d: send agent command: %w", iss.Number, err)
-	}
-	return pane, nil
+	_, err = fmt.Fprintln(out, "cd "+strconv.Quote(launchDir)+" && "+command)
+	return err
 }
 
 // runStatus implements `lead status`: local workflow records (RFC §5.3).

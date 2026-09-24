@@ -18,7 +18,7 @@ REAL_GOPATH="$(go env GOPATH)"
 REAL_GOCACHE="$(go env GOCACHE)"
 export HOME="$tmp/home"
 export GOPATH="$REAL_GOPATH" GOCACHE="$REAL_GOCACHE"
-unset XDG_STATE_HOME HERDR_ENV LEAD_TEST_INBOX_KEYS || true
+unset XDG_STATE_HOME LEAD_TEST_INBOX_KEYS || true
 export LEAD_STATE_FILE="$tmp/state/workflows.json"
 export PROTECTED=1
 mkdir -p "$HOME"
@@ -91,18 +91,12 @@ printf -- '- edited by human\n' >> "$1"
 EOF
 chmod +x "$tmp/bin/gh" "$tmp/bin/fake-editor" "$tmp/bin/agy"
 
-# Dummy herdr (tab/pane API) and less ($PAGER fallback) for the p key.
+# Dummy herdr (must never be called — issue #225) and less ($PAGER) for p.
 export HERDR_LOG="$tmp/herdr.log" PAGER_LOG="$tmp/pager.log"
 : > "$HERDR_LOG"; : > "$PAGER_LOG"
 cat > "$tmp/bin/herdr" <<'EOF'
 #!/bin/sh
 for a in "$@"; do printf '<%s>\n' "$a" >> "$HERDR_LOG"; done
-case "$1 $2" in
-  "tab create") printf '{"result":{"root_pane":{"pane_id":"p-new"}}}' ;;
-  "pane run") : ;;
-  "pane move") : ;;
-  *) echo "unexpected herdr: $*" >&2; exit 3 ;;
-esac
 EOF
 cat > "$tmp/bin/less" <<'EOF'
 #!/bin/sh
@@ -247,17 +241,14 @@ grep -q 'issue create' "$GH_LOG" || fail "n did not create a follow-up issue"
 tr '\n' ' ' < "$GH_LOG" | grep -q 'issue create.*#7' \
   || fail "follow-up body lacks the #7 reference: $(cat "$GH_LOG")"
 
-# --- 12. p with herdr: new tab + tail -f on the agent log ----------------------------
-: > "$HERDR_LOG"; unset HERDR_ENV
-HERDR_ENV=1 LEAD_TEST_INBOX_KEYS='j,j,j,p,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless p herdr failed"
-grep -qxF '<tab>' "$HERDR_LOG" || fail "p did not call herdr tab create: $(cat "$HERDR_LOG")"
-grep -qxF '<create>' "$HERDR_LOG" || fail "p herdr tab create args wrong: $(cat "$HERDR_LOG")"
-grep -qxF '<--focus>' "$HERDR_LOG" || fail "p herdr tab create missing --focus: $(cat "$HERDR_LOG")"
-grep -qxF '<pane>' "$HERDR_LOG" || fail "p did not call herdr pane run: $(cat "$HERDR_LOG")"
-grep -qxF '<tail>' "$HERDR_LOG" && grep -qxF '<-f>' "$HERDR_LOG" && grep -qxF '</logs/issue-9.log>' "$HERDR_LOG" || fail "p herdr pane run tail -f log wrong: $(cat "$HERDR_LOG")"
+# --- 12. p under HERDR_ENV=1: pager (less) opens the log, herdr stays silent ---
+: > "$HERDR_LOG"; : > "$PAGER_LOG"
+HERDR_ENV=1 LEAD_TEST_INBOX_KEYS='j,j,j,p,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless p failed"
+[ ! -s "$HERDR_LOG" ] || fail "p must not invoke herdr: $(cat "$HERDR_LOG")"
+grep -qxF '</logs/issue-9.log>' "$PAGER_LOG" || fail "p did not open the log via pager: $(cat "$PAGER_LOG")"
 
-# --- 13. p without herdr: $PAGER (less) fallback -----------------------------------
-: > "$PAGER_LOG"; unset HERDR_ENV
+# --- 13. p without herdr env: same pager path ------------------------------------
+: > "$PAGER_LOG"
 LEAD_TEST_INBOX_KEYS='j,j,j,p,q' PAGER= "$tmp/lead" >/dev/null 2>&1 || fail "headless p pager failed"
 grep -qxF '</logs/issue-9.log>' "$PAGER_LOG" || fail "p did not open the log via $PAGER/less: $(cat "$PAGER_LOG")"
 

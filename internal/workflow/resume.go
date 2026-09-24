@@ -33,7 +33,6 @@ type ResumeResult struct {
 	Repository string
 	Mode       string
 	RepoRoot   string
-	Pane       string
 	Agent      string
 	AgentMode  string
 }
@@ -50,7 +49,6 @@ type ResumeCandidate struct {
 	Status       state.Status
 	Agent        string
 	AgentMode    string
-	Pane         string
 	MergePolicy  string
 	PolicyReason string
 }
@@ -134,7 +132,6 @@ func ResolveTarget(ctx context.Context, g GitRunner, store *state.Store, gh port
 				c.PullRequests = w.PullRequests
 				c.Agent = w.Agent
 				c.AgentMode = w.AgentMode
-				c.Pane = w.Pane
 				c.MergePolicy = w.MergePolicy
 				c.PolicyReason = w.PolicyReason
 			}
@@ -345,7 +342,6 @@ func Resume(ctx context.Context, g GitRunner, store *state.Store, gh ports.GhCli
 	// Status transition: blocked or closed -> in_progress
 	if candidate.Status == "" || candidate.Status == state.StatusBlocked || candidate.Status == state.StatusClosed {
 		candidate.Status = state.StatusInProgress
-		candidate.Pane = ""
 	}
 	if opts.Agent != "" {
 		candidate.Agent = opts.Agent
@@ -369,7 +365,6 @@ func Resume(ctx context.Context, g GitRunner, store *state.Store, gh ports.GhCli
 		Part:         candidate.Part,
 		Branch:       candidate.Branch,
 		Worktree:     candidate.Worktree,
-		Pane:         candidate.Pane,
 		PullRequests: candidate.PullRequests,
 		Status:       candidate.Status,
 		MergePolicy:  candidate.MergePolicy,
@@ -407,7 +402,6 @@ func Resume(ctx context.Context, g GitRunner, store *state.Store, gh ports.GhCli
 		Repository: repoURL,
 		Mode:       candidate.Mode,
 		RepoRoot:   repoRoot,
-		Pane:       candidate.Pane,
 		Agent:      candidate.Agent,
 		AgentMode:  candidate.AgentMode,
 	}, nil

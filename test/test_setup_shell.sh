@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # issue #44: setup・completion・doctor・update の振る舞いテスト。
 # 一時HOME＋実シェル読込で補完・バインド・冪等・除去を検証し、
-# ダミーgh/herdr/agentのPATH注入で doctor/update の3系を検証する (grep検査なし)。
+# ダミーgh/agentのPATH注入で doctor/update の3系を検証する (grep検査なし)。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,7 +20,7 @@ unset XDG_STATE_HOME || true
 unset LEAD_STATE_FILE || true
 mkdir -p "$HOME"
 
-# --- dummy gh/herdr/agent (deterministic via GH_AUTH/GH_LATEST) ---
+# --- dummy gh/agent (deterministic via GH_AUTH/GH_LATEST) ---
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/gh" <<'EOF'
 #!/bin/sh
@@ -40,10 +40,6 @@ case "$1 $2" in
       echo "unexpected gh call: $@" >&2; exit 3
     fi ;;
 esac
-EOF
-cat > "$tmp/bin/herdr" <<'EOF'
-#!/bin/sh
-echo "HERDRLOG $@" >> "$GH_ARGS_LOG"
 EOF
 cat > "$tmp/bin/agy" <<'EOF'
 #!/bin/sh

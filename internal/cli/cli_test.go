@@ -449,8 +449,8 @@ func TestVersionPrintsStampedFields(t *testing.T) {
 // that would list real issues and touch the TTY.
 
 // Flags are parsed without executing the command: running `work 36` with
-// production defaults reached the real gh, git checkout and Herdr session
-// (issue #96). TestMain additionally guards against a regression.
+// production defaults reached the real gh and git checkout (issue #96).
+// TestMain additionally guards against a regression.
 func TestWorkAcceptsDocumentedFlags(t *testing.T) {
 	root := NewRootCmd("v0.0.0-test", "abc1234", "2026-09-07")
 	work, _, err := root.Find([]string{"work"})

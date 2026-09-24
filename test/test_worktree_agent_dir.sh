@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test_worktree_agent_dir.sh: verifies agent launch directory and output details (issue #72).
 # Asserts working directory, issue number, and agent name are displayed on launch,
-# and that herdr receives the correct cd <worktree_dir> command for all agents.
+# and that the printed `cd <dir> && <agent>` command targets the right directory.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,27 +43,12 @@ fi
 EOF
 chmod +x "$tmp/bin/gh"
 
-export HERDR_LOG="$tmp/herdr.log"
-: > "$HERDR_LOG"
-cat > "$tmp/bin/herdr" <<'EOF'
-#!/bin/sh
-echo "HERDR $@" >> "$HERDR_LOG"
-case "$1 $2" in
-  "pane split") printf '{"result":{"pane":{"pane_id":"pane-%s"}}}' "$$" ;;
-  "pane send-text") : ;;
-  *) exit 0 ;;
-esac
-EOF
-chmod +x "$tmp/bin/herdr"
-
 export PATH="$tmp/bin:$PATH"
-export HERDR_ENV=1
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 cd "$repo"
 
 # 1. lead work 72 --worktree --agent codex
-: > "$HERDR_LOG"
 out_codex=$("$tmp/lead" work 72 --worktree --agent codex)
 
 # Verify displayed output includes issue number, worktree dir, and agent name
@@ -74,13 +59,11 @@ echo "$out_codex" | grep -F "Agent: codex" > /dev/null || fail "output missing A
 # Verify worktree directory exists on disk
 [ -d "$repo/.worktrees/issue-72" ] || fail "worktree dir was not created"
 
-# Verify command sent to herdr changes directory to the worktree
-herdr_text=$(cat "$HERDR_LOG")
-echo "$herdr_text" | grep -F "cd \"$repo/.worktrees/issue-72\" && codex" > /dev/null \
-  || fail "herdr did not receive cd to worktree for codex: $herdr_text"
+# Verify the printed command changes directory to the worktree
+echo "$out_codex" | grep -F "cd \"$repo/.worktrees/issue-72\" && codex" > /dev/null \
+  || fail "output lacks cd to worktree for codex: $out_codex"
 
 # 2. lead work 73 without --worktree --agent claude: runs in repo root
-: > "$HERDR_LOG"
 out_claude=$("$tmp/lead" work 73 --agent claude)
 
 # Verify displayed output includes issue number, repo root as Dir, and agent name
@@ -88,25 +71,21 @@ echo "$out_claude" | grep -F "Issue #73" > /dev/null || fail "output missing Iss
 echo "$out_claude" | grep -F "Dir: $repo" > /dev/null || fail "output missing Dir: $repo: $out_claude"
 echo "$out_claude" | grep -F "Agent: claude" > /dev/null || fail "output missing Agent: claude: $out_claude"
 
-# Verify herdr command runs in repo root
-herdr_text_claude=$(cat "$HERDR_LOG")
-echo "$herdr_text_claude" | grep -F "cd \"$repo\" && claude" > /dev/null \
-  || fail "herdr did not receive cd to repo root for claude: $herdr_text_claude"
+# Verify the printed command runs in repo root
+echo "$out_claude" | grep -F "cd \"$repo\" && claude" > /dev/null \
+  || fail "output lacks cd to repo root for claude: $out_claude"
 
 # 3. Verify all other agents in worktree
 for agent_name in agy devin opencode gemini; do
   issue_num=$((100 + RANDOM % 800))
-  : > "$HERDR_LOG"
   out_agent=$("$tmp/lead" work "$issue_num" --worktree --agent "$agent_name")
   echo "$out_agent" | grep -F "Issue #$issue_num" > /dev/null || fail "output missing Issue #$issue_num"
   echo "$out_agent" | grep -F "Worktree: $repo/.worktrees/issue-$issue_num" > /dev/null || fail "output missing worktree for $agent_name"
   echo "$out_agent" | grep -F "Agent: $agent_name" > /dev/null || fail "output missing Agent: $agent_name"
-
-  herdr_log=$(cat "$HERDR_LOG")
-  echo "$herdr_log" | grep -F "cd \"$repo/.worktrees/issue-$issue_num\"" > /dev/null \
-    || fail "herdr did not cd to worktree for $agent_name: $herdr_log"
-  echo "$herdr_log" | grep -F "$agent_name" > /dev/null \
-    || fail "herdr command did not include $agent_name: $herdr_log"
+  echo "$out_agent" | grep -F "cd \"$repo/.worktrees/issue-$issue_num\"" > /dev/null \
+    || fail "output lacks cd to worktree for $agent_name: $out_agent"
+  echo "$out_agent" | grep -F "$agent_name" > /dev/null \
+    || fail "output lacks $agent_name command: $out_agent"
 done
 
 echo "PASS: worktree agent dir behavioral checks passed"

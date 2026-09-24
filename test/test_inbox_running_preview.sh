@@ -21,7 +21,6 @@ if [ -d "/home/linuxbrew/.linuxbrew/bin" ]; then
 fi
 unset XDG_STATE_HOME || true
 unset LEAD_STATE_FILE || true
-unset HERDR_ENV || true
 mkdir -p "$HOME"
 
 repo="$tmp/repo"
@@ -56,7 +55,6 @@ cat > "$state_dir/workflows.json" <<EOF
       "status": "in_progress",
       "branch": "issue/143-preview-test",
       "agent": "agy",
-      "pane": "p-143",
       "log_path": "$log_file",
       "updated_at": "2026-09-11T07:00:00Z"
     },
@@ -115,16 +113,18 @@ EOF
 chmod +x "$tmp/bin/gh"
 
 herdr_log="$tmp/herdr.log"
-: > "$herdr_log"
+pager_log="$tmp/pager.log"
+: > "$herdr_log"; : > "$pager_log"
+# Dummy herdr must never be invoked (issue #225); dummy less acts as $PAGER.
 cat > "$tmp/bin/herdr" <<EOF
 #!/bin/sh
 echo "HERDR \$*" >> "$herdr_log"
-case "\$1 \$2" in
-  "pane peek"|"peek"*) exit 0 ;;
-  *) exit 0 ;;
-esac
 EOF
-chmod +x "$tmp/bin/herdr"
+cat > "$tmp/bin/less" <<EOF
+#!/bin/sh
+for a in "\$@"; do printf '<%s>\n' "\$a" >> "$pager_log"; done
+EOF
+chmod +x "$tmp/bin/herdr" "$tmp/bin/less"
 
 export PATH="$tmp/bin:$PATH"
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
@@ -164,25 +164,10 @@ case "$out" in
   *) fail "preview for #144 did not fall back to started_at: $out" ;;
 esac
 
-# 2. Test peek action with 'p' key using Herdr
-: > "$herdr_log"
-cat > "$tmp/bin/herdr" <<'EOF'
-#!/bin/sh
-for arg in "$@"; do
-  echo "<$arg>" >> "$HERDR_LOG"
-done
-case "$1 $2" in
-  "tab create")
-    printf '{"result":{"root_pane":{"pane_id":"p-new"}}}'
-    ;;
-  *) exit 0 ;;
-esac
-EOF
-
-HERDR_LOG="$herdr_log" HERDR_ENV=1 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,p,q "$tmp/lead" >/dev/null 2>&1 || fail "peek keypress failed"
-grep -qxF '<tab>' "$herdr_log" || fail "p did not call herdr tab create: $(cat "$herdr_log")"
-grep -qxF '<create>' "$herdr_log" || fail "p herdr tab create args wrong: $(cat "$herdr_log")"
-grep -qxF '<--focus>' "$herdr_log" || fail "p herdr tab create missing --focus: $(cat "$herdr_log")"
-grep -qxF '<tail>' "$herdr_log" || fail "p herdr missing tail command: $(cat "$herdr_log")"
+# 2. Peek with 'p' opens the agent log via $PAGER (herdr removed, issue #225)
+: > "$herdr_log"; : > "$pager_log"
+HERDR_ENV=1 PAGER=less LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,p,q "$tmp/lead" >/dev/null 2>&1 || fail "peek keypress failed"
+grep -qxF "<$log_file>" "$pager_log" || fail "p did not open the log via pager: $(cat "$pager_log")"
+[ ! -s "$herdr_log" ] || fail "p must not invoke herdr: $(cat "$herdr_log")"
 
 echo "inbox running log preview and attach checks passed"

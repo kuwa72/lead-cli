@@ -19,7 +19,6 @@ export GOPATH="$REAL_GOPATH" GOCACHE="$REAL_GOCACHE"
 export XDG_CACHE_HOME="$tmp/cache"
 unset LEAD_STATE_FILE || true
 unset LEAD_TEST_SELECTION || true
-unset HERDR_ENV || true
 mkdir -p "$HOME" "$XDG_CACHE_HOME"
 command -v git >/dev/null || fail "git not available"
 
@@ -54,23 +53,11 @@ cat > "$tmp/bin/fakebrowser" <<'EOF'
 for a in "$@"; do printf '<%s>\n' "$a" >> "$BROWSER_LOG"; done
 EOF
 chmod +x "$tmp/bin/gh" "$tmp/bin/fakebrowser"
-cat > "$tmp/bin/herdr" <<'EOF'
-#!/bin/sh
-echo "HERDR $@" >> "$HERDR_LOG"
-case "$1 $2" in
-  "pane split") printf '{"result":{"pane":{"pane_id":"test-pane"}}}' ;;
-  "pane send-text") : ;;
-  *) exit 0 ;;
-esac
-EOF
-chmod +x "$tmp/bin/herdr"
 export PATH="$tmp/bin:$PATH"
 export GH_ARGS_LOG="$tmp/gh-args.log"
-export HERDR_LOG="$tmp/herdr.log"
 export BROWSER_LOG="$tmp/browser.log"
 export GH_BROWSER=fakebrowser
 : > "$GH_ARGS_LOG"
-: > "$HERDR_LOG"
 : > "$BROWSER_LOG"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"

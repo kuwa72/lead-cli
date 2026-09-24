@@ -11,21 +11,21 @@ RFC `docs/rfc-22-language-migration.md` §7 と AGENTS.md テスト品質ルー�
   （シェル断片）が実行される。終了ステータスはそのまま伝播する。
 - `testutil.LogLines(t, logPath)` / `LogText` で受け取った引数を厳密に検証する
   （`" $@ "` の結合ではなく `<arg>` 行単位なので、空白を含む引数の区切りも検証できる）。
-- 不在系テスト（`gh`/`herdr` 未検出時のフォールバック）には `testutil.EmptyBin(t)` を使う。
+- 不在系テスト（`gh` 未検出時のフォールバック）には `testutil.EmptyBin(t)` を使う。
   `PATH` 全体を空の一時ディレクトリに置換するため、実バイナリの混入がない。
   (`TempBin` は prepend のため実バイナリが残る点に注意)。
 
 ```go
-logPath := testutil.InstallDummy(t, "herdr",
-    `if [ "$1 $2" = "pane split" ]; then printf '{"result":{"pane":{"pane_id":"p1"}}}'; fi`)
+logPath := testutil.InstallDummy(t, "gh",
+    `if [ "$1 $2" = "issue view" ]; then printf '{"number":1}'; fi`)
 // ... 実行 ...
-if got := testutil.LogText(t, logPath); !strings.Contains(got, "<pane-123>") { ... }
+if got := testutil.LogText(t, logPath); !strings.Contains(got, "<issue>") { ... }
 ```
 
-## 2. インターフェースモック (`FakeGhClient` / `FakeHerdrRunner` / `FakeAgentLauncher`)
+## 2. インターフェースモック (`FakeGhClient` / `FakeAgentLauncher`)
 
 - `internal/ports` の各インターフェースに対するインメモリ Fake。
-  固定値返却・呼び出し記録・エラー注入 (`ListErr` / `SplitErr` / `LaunchErr` 等) を持つ。
+  固定値返却・呼び出し記録・エラー注入 (`ListErr` / `LaunchErr` 等) を持つ。
 - `core` 系ロジック（後続 Issue）は外部 CLI を直接呼ばず、これら Fake に対して
   ユニットテストする。`var _ ports.GhClient = (*FakeGhClient)(nil)` で充足を保証。
 
@@ -56,15 +56,10 @@ if got := testutil.LogText(t, logPath); !strings.Contains(got, "<pane-123>") { .
 
 ## 6. 開発環境からの隔離（issue #96）
 
-自動テストは開発者の実 Herdr セッション・実リポジトリ・実状態ファイルに触れない。
+自動テストは開発者の実リポジトリ・実状態ファイルに触れない。
 
 - `internal/cli/main_test.go` の `TestMain` が構造ガード:
-  `HERDR_ENV` を解除（`herdr.Available()` を偽に）、cwd を空の一時ディレクトリへ移動、
-  `LEAD_STATE_FILE` を一時パスに固定する。`NewRootCmd`（本番デフォルト）で
-  コマンドを実行するテストが増えても実環境に届かない。
-- シェルテストは `unset HERDR_ENV`・一時 HOME・一時リポジトリ・ダミー `gh`/`herdr` を使う。
+  cwd を空の一時ディレクトリへ移動、`LEAD_STATE_FILE` を一時パスに固定する。
+  `NewRootCmd`（本番デフォルト）でコマンドを実行するテストが増えても実環境に届かない。
+- シェルテストは一時 HOME・一時リポジトリ・ダミー `gh` を使う。
 - コマンドのフラグ定義だけを確認したいときは `cmd.ParseFlags` を使い、`Execute` しない。
-- 実 Herdr での実機確認は `test/smoke_herdr_pane.sh`（opt-in。`test_*.sh` グロブ外なので
-  `run-tests.sh` は実行しない）。`HERDR_ENV=1` の端末で手動実行し、シナリオごとに
-  **1 ペイン開く → 検証 → `herdr pane close`** を直列に行い、終了時に `herdr pane list`
-  が実行前と一致することを確認する。ペインを開いたまま終わらない。

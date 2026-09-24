@@ -23,7 +23,7 @@ Sections:
 | `e` | edit body with `$EDITOR`, then approve |
 | `x` | reject and close the issue |
 | `t` | add a comment; spec or impl agent will re-run |
-| `p` | peek at the agent screen with herdr or `$PAGER` |
+| `p` | peek at the agent log with `$PAGER` |
 | `n` | report real-machine NG and spawn a follow-up issue |
 | `r` | open `AGENTS.md` in `$EDITOR` |
 | `s` | create a new `needs-review` issue (direct, or `!one-liner` for AI spec) |
@@ -54,7 +54,7 @@ Sections:
 | `lead enable` | enable this repository (`AGENTS.md` management block, lead-flow skill) |
 | `lead disable` | disable this repository (remove lead-flow skill) |
 | `lead setup` | set up your user environment (shell completions, keybinding) |
-| `lead doctor` | diagnose `gh`, agents, herdr, and branch protection |
+| `lead doctor` | diagnose `gh`, agents, and branch protection |
 | `lead version` | show version |
 
 ## Install and setup

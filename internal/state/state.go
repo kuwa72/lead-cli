@@ -44,17 +44,16 @@ type PRRef struct {
 
 // Workflow is one row of workflows.json (RFC §5.2 minimal record).
 type Workflow struct {
-	Repository   string   `json:"repository"`
-	Issue        int      `json:"issue"`
-	ParentIssue  *int     `json:"parent_issue,omitempty"`
-	Mode         string   `json:"mode"`
-	Part         string   `json:"part,omitempty"`
-	Branch       string   `json:"branch"`
-	Worktree     string   `json:"worktree,omitempty"`
-	Pane         string   `json:"pane,omitempty"`
-	PullRequests []PRRef  `json:"pull_requests,omitempty"`
-	Status       Status   `json:"status"`
-	MergePolicy  string   `json:"merge_policy,omitempty"`
+	Repository   string  `json:"repository"`
+	Issue        int     `json:"issue"`
+	ParentIssue  *int    `json:"parent_issue,omitempty"`
+	Mode         string  `json:"mode"`
+	Part         string  `json:"part,omitempty"`
+	Branch       string  `json:"branch"`
+	Worktree     string  `json:"worktree,omitempty"`
+	PullRequests []PRRef `json:"pull_requests,omitempty"`
+	Status       Status  `json:"status"`
+	MergePolicy  string  `json:"merge_policy,omitempty"`
 	// PolicyReason explains a MergePolicy that `lead finish` lowered itself
 	// (guardrail: PR touched protected files). Empty when the policy came
 	// from the human or the mode default.
@@ -64,10 +63,10 @@ type Workflow struct {
 	// Dispatch bookkeeping (docs/rfc-inbox-ux.md §7): which headless agent
 	// ran, how many times it failed to close the issue, the last process
 	// and its log. GitHub stays the source of truth for the issue itself.
-	Agent     string    `json:"agent,omitempty"`
-	Attempts  int       `json:"attempts,omitempty"`
-	PID       int       `json:"pid,omitempty"`
-	LogPath   string    `json:"log_path,omitempty"`
+	Agent    string `json:"agent,omitempty"`
+	Attempts int    `json:"attempts,omitempty"`
+	PID      int    `json:"pid,omitempty"`
+	LogPath  string `json:"log_path,omitempty"`
 	// StartedAt marks the latest headless launch (issue #186, stuck
 	// detection). Zero for records predating it: wall-clock checks skip.
 	StartedAt time.Time `json:"started_at,omitempty"`

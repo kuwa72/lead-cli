@@ -180,26 +180,7 @@ type PRInfo struct {
 	HeadRefName      string
 }
 
-// Direction is the herdr pane split direction.
-type Direction string
-
-const (
-	DirectionRight Direction = "right"
-	DirectionDown  Direction = "down"
-)
-
-// HerdrRunner abstracts `herdr pane split/send-text`.
-// The agent command is prepared in the new pane for human review;
-// it is never auto-sent (no `pane run`).
-// Peek opens an agent log or pane from the inbox (issue #103).
-type HerdrRunner interface {
-	Split(ctx context.Context, dir Direction, ratio float64) (paneID string, err error)
-	SendText(ctx context.Context, paneID string, text string) error
-	Peek(ctx context.Context, logPath, pane string) error
-}
-
-// AgentLauncher runs a coding agent directly in the current terminal
-// (inline fallback when Herdr is unavailable).
+// AgentLauncher runs a coding agent directly in the current terminal.
 type AgentLauncher interface {
 	Launch(ctx context.Context, agent string, prompt string) error
 }
@@ -217,20 +198,5 @@ func (e *BinaryNotFoundError) Error() string {
 // IsBinaryNotFound reports whether err wraps a *BinaryNotFoundError.
 func IsBinaryNotFound(err error) bool {
 	var target *BinaryNotFoundError
-	return errors.As(err, &target)
-}
-
-// PaneNotFoundError reports that the referenced Herdr pane no longer exists.
-type PaneNotFoundError struct {
-	Pane string
-}
-
-func (e *PaneNotFoundError) Error() string {
-	return fmt.Sprintf("herdr pane %s not found", e.Pane)
-}
-
-// IsPaneNotFound reports whether err wraps a *PaneNotFoundError.
-func IsPaneNotFound(err error) bool {
-	var target *PaneNotFoundError
 	return errors.As(err, &target)
 }

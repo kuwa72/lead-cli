@@ -21,7 +21,7 @@ REAL_GOPATH="$(go env GOPATH)"
 REAL_GOCACHE="$(go env GOCACHE)"
 export HOME="$tmp/home"
 export GOPATH="$REAL_GOPATH" GOCACHE="$REAL_GOCACHE"
-unset XDG_STATE_HOME HERDR_ENV LEAD_TEST_INBOX_KEYS || true
+unset XDG_STATE_HOME LEAD_TEST_INBOX_KEYS || true
 export LEAD_STATE_FILE="$tmp/state/workflows.json"
 export LEAD_NOTIFY=0
 mkdir -p "$HOME"

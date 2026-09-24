@@ -164,8 +164,6 @@ func TestWork_InboxConfigAgentIsDefault(t *testing.T) {
 	repo := initRepo(t)
 	deps, _, stateFile := workflowDeps(t, repo)
 	writeInboxConfig(t, stateFile, `{"agent":"claude"}`)
-	h := &testutil.FakeHerdrRunner{}
-	deps.Herdr = h
 
 	out, err := executeWith(t, deps, "work", "36")
 	if err != nil {
@@ -174,8 +172,8 @@ func TestWork_InboxConfigAgentIsDefault(t *testing.T) {
 	if !strings.Contains(out, "Agent: claude") {
 		t.Errorf("output missing 'Agent: claude':\n%s", out)
 	}
-	if len(h.Sends) != 1 || !strings.Contains(h.Sends[0].Text, `claude "`) {
-		t.Errorf("send-text = %+v, want `claude \"<prompt>\"`", h.Sends)
+	if !strings.Contains(out, `claude "`) {
+		t.Errorf("output missing `claude \"<prompt>\"`:\n%s", out)
 	}
 }
 
@@ -183,8 +181,6 @@ func TestWork_AgentFlagBeatsInboxConfig(t *testing.T) {
 	repo := initRepo(t)
 	deps, _, stateFile := workflowDeps(t, repo)
 	writeInboxConfig(t, stateFile, `{"agent":"claude"}`)
-	h := &testutil.FakeHerdrRunner{}
-	deps.Herdr = h
 
 	out, err := executeWith(t, deps, "run", "36", "--agent", "devin")
 	if err != nil {
@@ -193,8 +189,8 @@ func TestWork_AgentFlagBeatsInboxConfig(t *testing.T) {
 	if !strings.Contains(out, "Agent: devin") {
 		t.Errorf("output missing 'Agent: devin':\n%s", out)
 	}
-	if len(h.Sends) != 1 || !strings.Contains(h.Sends[0].Text, `devin "`) {
-		t.Errorf("send-text = %+v, want `devin \"<prompt>\"`", h.Sends)
+	if !strings.Contains(out, `devin "`) {
+		t.Errorf("output missing `devin \"<prompt>\"`:\n%s", out)
 	}
 }
 
@@ -206,8 +202,6 @@ func TestWork_PickerWithoutAgentUsesInboxConfig(t *testing.T) {
 	deps, fake, stateFile := workflowDeps(t, repo)
 	fake.Summaries = []ports.IssueSummary{{Number: 36, Title: "ports adapter"}}
 	writeInboxConfig(t, stateFile, `{"agent":"claude"}`)
-	h := &testutil.FakeHerdrRunner{}
-	deps.Herdr = h
 	t.Setenv("LEAD_TEST_SELECTION", "36")
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
@@ -225,7 +219,6 @@ func TestWork_PickerExplicitAgentBeatsInboxConfig(t *testing.T) {
 	deps, fake, stateFile := workflowDeps(t, repo)
 	fake.Summaries = []ports.IssueSummary{{Number: 36, Title: "ports adapter"}}
 	writeInboxConfig(t, stateFile, `{"agent":"claude"}`)
-	deps.Herdr = &testutil.FakeHerdrRunner{}
 	t.Setenv("LEAD_TEST_SELECTION", "36:devin")
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
@@ -260,8 +253,6 @@ func TestResume_InboxConfigAgentIsDefault(t *testing.T) {
 	deps, _, stateFile := workflowDeps(t, repo)
 	writeInboxConfig(t, stateFile, `{"agent":"claude"}`)
 	seedResumeRecord(t, repo, stateFile, "")
-	h := &testutil.FakeHerdrRunner{}
-	deps.Herdr = h
 
 	out, err := executeWith(t, deps, "resume", "36")
 	if err != nil {
@@ -270,8 +261,8 @@ func TestResume_InboxConfigAgentIsDefault(t *testing.T) {
 	if !strings.Contains(out, "Agent: claude") {
 		t.Errorf("resume without recorded agent should use config, got:\n%s", out)
 	}
-	if len(h.Sends) != 1 || !strings.Contains(h.Sends[0].Text, `claude "`) {
-		t.Errorf("send-text = %+v, want `claude \"<prompt>\"`", h.Sends)
+	if !strings.Contains(out, `claude "`) {
+		t.Errorf("output missing `claude \"<prompt>\"`:\n%s", out)
 	}
 }
 
@@ -280,8 +271,6 @@ func TestResume_PreviousAgentBeatsInboxConfig(t *testing.T) {
 	deps, _, stateFile := workflowDeps(t, repo)
 	writeInboxConfig(t, stateFile, `{"agent":"claude"}`)
 	seedResumeRecord(t, repo, stateFile, "devin")
-	h := &testutil.FakeHerdrRunner{}
-	deps.Herdr = h
 
 	out, err := executeWith(t, deps, "resume", "36")
 	if err != nil {
