@@ -52,6 +52,9 @@ func TestGuardedFiles_ProtectedConventionPaths(t *testing.T) {
 		".github/workflows/ci.yml",
 		".claude/settings.json",
 		".devin/rules.md",
+		".agents/skills/lead-flow/SKILL.md",
+		".gemini/skills/lead-flow/SKILL.md",
+		".opencode/skills/lead-flow/SKILL.md",
 		".goreleaser.yaml",
 		"install.sh",
 		"docs/AGENTS.md",
@@ -62,6 +65,8 @@ func TestGuardedFiles_ProtectedConventionPaths(t *testing.T) {
 	}
 	want := []string{
 		"AGENTS.md", ".github/workflows/ci.yml", ".claude/settings.json", ".devin/rules.md",
+		".agents/skills/lead-flow/SKILL.md", ".gemini/skills/lead-flow/SKILL.md",
+		".opencode/skills/lead-flow/SKILL.md",
 		".goreleaser.yaml", "install.sh", "docs/AGENTS.md", "./.github/CODEOWNERS",
 	}
 	if got := GuardedFiles(files); !reflect.DeepEqual(got, want) {

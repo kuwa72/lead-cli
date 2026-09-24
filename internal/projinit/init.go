@@ -15,9 +15,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/ports"
 )
 
@@ -28,9 +30,9 @@ var defaultSkill []byte
 var defaultAgentsBlock []byte
 
 const (
-	skillName  = "lead-flow"
-	claudeDir  = ".claude/skills/" + skillName
-	devinDir   = ".devin/skills/" + skillName
+	skillName = "lead-flow"
+	// agentsDir is the agent-neutral skills location; always a target.
+	agentsDir  = ".agents/skills/" + skillName
 	agentsFile = "AGENTS.md"
 )
 
@@ -77,9 +79,24 @@ type ProtectionClient interface {
 	RepoAllowsAutoMerge(ctx context.Context, repo string) (bool, error)
 }
 
-var targets = []Target{
-	{Name: "claude", Dir: claudeDir},
-	{Name: "devin", Dir: devinDir},
+// agentSkillDirs maps each known agent to the project-level directory it
+// loads skills from (issue #224). Verified against each CLI's own
+// --help/docs on 2026-09-24; do not add entries from memory (AGENTS.md):
+//
+//	agy      .agents/skills    (native workspace skills dir)
+//	claude   .claude/skills
+//	codex    .agents/skills    (repo scope: Codex scans CWD up to the repo
+//	                          root; there is no .codex/skills repo dir)
+//	devin    .devin/skills     (`devin skills paths`; .agents/skills too)
+//	gemini   .gemini/skills    (workspace skills; .agents/skills alias)
+//	opencode .opencode/skills  (project config; .agents/skills compat)
+var agentSkillDirs = map[string]string{
+	"agy":      ".agents/skills",
+	"claude":   ".claude/skills",
+	"codex":    ".agents/skills",
+	"devin":    ".devin/skills",
+	"gemini":   ".gemini/skills",
+	"opencode": ".opencode/skills",
 }
 
 // Options controls one install run.
@@ -111,6 +128,13 @@ type Options struct {
 	// Repo is "owner/repo" for the label check. Empty skips it
 	// (no remote: local checks only).
 	Repo string
+	// Agent is the configured active agent (inbox-config.json). Its
+	// skills dir is a distribution target even when the binary is not
+	// on PATH (issue #224: targets = detection ∪ configuration).
+	Agent string
+	// LookPath resolves agent binaries for detection; nil defaults to
+	// exec.LookPath. Tests inject fakes.
+	LookPath func(string) (string, error)
 }
 
 // Report describes what happened (Lines are user-facing).
@@ -226,9 +250,70 @@ func wantBlock(wantAgents []byte) string {
 	return BlockStart + "\n" + string(wantAgents) + "\n" + BlockEnd + "\n"
 }
 
+func (o Options) lookPath() func(string) (string, error) {
+	if o.LookPath != nil {
+		return o.LookPath
+	}
+	return exec.LookPath
+}
+
+// skillTargets resolves the install set (issue #224): the agent-neutral
+// .agents dir plus the skills dir of every agent detected on PATH
+// (LookPath over agent.KnownAgents) or configured via Options.Agent.
+// Directories are deduped; order is stable: .agents first, then
+// KnownAgents order.
+func skillTargets(opts Options) []Target {
+	var out []Target
+	seen := map[string]bool{}
+	add := func(name, dir string) {
+		if seen[dir] {
+			return
+		}
+		seen[dir] = true
+		out = append(out, Target{Name: name, Dir: dir})
+	}
+	add("agents", agentsDir)
+	lookPath := opts.lookPath()
+	for _, name := range agent.KnownAgents {
+		dir, ok := agentSkillDirs[name]
+		if !ok {
+			continue
+		}
+		if _, err := lookPath(name); err != nil && name != opts.Agent {
+			continue
+		}
+		add(name, filepath.Join(dir, skillName))
+	}
+	return out
+}
+
+// allTargets lists every directory a lead-flow SKILL.md may occupy:
+// .agents plus each agentSkillDirs entry (deduped, stable order).
+// Uninstall scans all of them regardless of detection, so `lead disable`
+// also cleans placements written for agents no longer on PATH or written
+// unconditionally by earlier lead versions (.claude, .devin).
+func allTargets() []Target {
+	var out []Target
+	seen := map[string]bool{}
+	add := func(name, dir string) {
+		if seen[dir] {
+			return
+		}
+		seen[dir] = true
+		out = append(out, Target{Name: name, Dir: dir})
+	}
+	add("agents", agentsDir)
+	for _, name := range agent.KnownAgents {
+		if dir, ok := agentSkillDirs[name]; ok {
+			add(name, filepath.Join(dir, skillName))
+		}
+	}
+	return out
+}
+
 // previewLines appends the skill and AGENTS.md status lines and reports
 // whether applying would change anything.
-func previewLines(rep *Report, root string, wantSkill []byte, block string) bool {
+func previewLines(rep *Report, root string, targets []Target, wantSkill []byte, block string) bool {
 	needChange := false
 	for _, t := range targets {
 		path := filepath.Join(root, t.Dir, "SKILL.md")
@@ -254,7 +339,7 @@ func previewLines(rep *Report, root string, wantSkill []byte, block string) bool
 // anything locally or remotely (`--dry-run`).
 func runPreview(root string, opts Options, wantSkill, wantAgents []byte) (Report, error) {
 	var rep Report
-	needChange := previewLines(&rep, root, wantSkill, wantBlock(wantAgents))
+	needChange := previewLines(&rep, root, skillTargets(opts), wantSkill, wantBlock(wantAgents))
 	labelLines, _ := labelReport(opts.Gh, opts.Repo)
 	rep.Lines = append(rep.Lines, labelLines...)
 	protLines, _ := protectionReport(opts.Protection, opts.Repo)
@@ -272,7 +357,8 @@ func runPreview(root string, opts Options, wantSkill, wantAgents []byte) (Report
 func runApply(root string, opts Options, wantSkill, wantAgents []byte) (Report, error) {
 	var rep Report
 	block := wantBlock(wantAgents)
-	needChange := previewLines(&rep, root, wantSkill, block)
+	targets := skillTargets(opts)
+	needChange := previewLines(&rep, root, targets, wantSkill, block)
 
 	if !opts.Yes {
 		// The approval gates both local writes and remote label
@@ -333,7 +419,7 @@ func runCheck(root string, opts Options, wantSkill, wantAgents []byte) (Report, 
 	rep.Complete = true
 	block := BlockStart + "\n" + string(wantAgents) + "\n" + BlockEnd + "\n"
 
-	for _, t := range targets {
+	for _, t := range skillTargets(opts) {
 		path := filepath.Join(root, t.Dir, "SKILL.md")
 		cur, _ := os.ReadFile(path)
 		if string(cur) != string(wantSkill) {
@@ -520,7 +606,7 @@ func ensureLabels(gh LabelClient, repo string) (lines []string, created bool) {
 func runUninstall(root string) (Report, error) {
 	var rep Report
 
-	for _, t := range targets {
+	for _, t := range allTargets() {
 		path := filepath.Join(root, t.Dir, "SKILL.md")
 		cur, err := os.ReadFile(path)
 		if err != nil {

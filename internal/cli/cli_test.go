@@ -529,14 +529,16 @@ func TestCompletionGeneratesScripts(t *testing.T) {
 }
 
 // enableFixture builds Deps whose repository root is a temp dir and whose
-// origin resolves to origin ("" = no remote).
+// origin resolves to origin ("" = no remote). LookPath reports no agent
+// binaries so skill-target resolution stays deterministic (issue #224).
 func enableFixture(t *testing.T, gh *testutil.FakeGhClient, origin string) Deps {
 	t.Helper()
 	root := t.TempDir()
 	return Deps{
-		Gh:      gh,
-		Git:     &fakeGitRunner{root: root, origin: origin},
-		WorkDir: root,
+		Gh:       gh,
+		Git:      &fakeGitRunner{root: root, origin: origin},
+		WorkDir:  root,
+		LookPath: func(string) (string, error) { return "", exec.ErrNotFound },
 	}
 }
 
@@ -684,6 +686,55 @@ func TestEnableDryRunDoesNotCreateLabels(t *testing.T) {
 	}
 }
 
+func TestEnableDistributesToDetectedAgent(t *testing.T) {
+	// Issue #224: agents found on PATH get their skills dir in addition
+	// to the always-on .agents/skills target.
+	gh := &testutil.FakeGhClient{}
+	deps := enableFixture(t, gh, "")
+	deps.LookPath = func(name string) (string, error) {
+		if name == "opencode" {
+			return "/fake/opencode", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	if out, err := runEnableCmd(t, deps, "--yes"); err != nil {
+		t.Fatalf("enable --yes: %v\n%s", err, out)
+	}
+	root := deps.Git.(*fakeGitRunner).root
+	for _, want := range []string{".agents/skills/lead-flow/SKILL.md", ".opencode/skills/lead-flow/SKILL.md"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(want))); err != nil {
+			t.Errorf("skill file missing: %s", want)
+		}
+	}
+	for _, absent := range []string{".claude", ".devin", ".gemini"} {
+		if _, err := os.Stat(filepath.Join(root, absent)); !os.IsNotExist(err) {
+			t.Errorf("undetected agent dir %s was created", absent)
+		}
+	}
+}
+
+func TestEnableDistributesToConfiguredAgent(t *testing.T) {
+	// Issue #224: the inbox-config.json agent is a target even when its
+	// binary is absent from PATH.
+	gh := &testutil.FakeGhClient{}
+	deps := enableFixture(t, gh, "")
+	configDir := t.TempDir()
+	deps.StateFile = filepath.Join(configDir, "workflows.json")
+	if err := os.WriteFile(filepath.Join(configDir, "inbox-config.json"), []byte(`{"agent":"gemini"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runEnableCmd(t, deps, "--yes"); err != nil {
+		t.Fatalf("enable --yes: %v\n%s", err, out)
+	}
+	root := deps.Git.(*fakeGitRunner).root
+	if _, err := os.Stat(filepath.Join(root, ".gemini", "skills", "lead-flow", "SKILL.md")); err != nil {
+		t.Errorf("configured agent skill file missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".claude")); !os.IsNotExist(err) {
+		t.Error(".claude dir created without detection or configuration")
+	}
+}
+
 func TestDisableRemovesManagedFiles(t *testing.T) {
 	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review", "ready", "blocked"}}
 	deps := enableFixture(t, gh, "https://github.com/o/r.git")
@@ -695,7 +746,7 @@ func TestDisableRemovesManagedFiles(t *testing.T) {
 		t.Fatalf("disable: %v\n%s", err, out)
 	}
 	root := deps.Git.(*fakeGitRunner).root
-	if _, statErr := os.Stat(filepath.Join(root, ".claude", "skills", "lead-flow", "SKILL.md")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(root, ".agents", "skills", "lead-flow", "SKILL.md")); !os.IsNotExist(statErr) {
 		t.Error("disable did not remove the managed skill file")
 	}
 	if !strings.Contains(out, "removed") {

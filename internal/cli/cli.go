@@ -484,9 +484,12 @@ atomic swap). Brew-managed installs print ` + "`brew upgrade` guidance instead."
 		Use:   "enable",
 		Short: "Enable this repository for the lead workflow (lead-flow skill)",
 		Long: `Install the /lead-flow skill and update AGENTS.md so a coding agent
-in this repository can run the lead issue-driven TDD workflow. Operates
-only on this repository and never touches $HOME; for user-environment
-setup (shell completions, keybinding) see ` + "`lead setup`" + `.
+in this repository can run the lead issue-driven TDD workflow. The skill
+is written to .agents/skills/lead-flow and, for each agent detected on
+PATH or configured in inbox-config.json, to that agent's skills
+directory (.claude/skills, .devin/skills, .gemini/skills, .opencode/skills).
+Operates only on this repository and never touches $HOME; for
+user-environment setup (shell completions, keybinding) see ` + "`lead setup`" + `.
 Applies changes after approval (use --yes non-interactively); --dry-run
 previews without changing anything, --check verifies only.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -501,8 +504,9 @@ previews without changing anything, --check verifies only.`,
 		Use:   "disable",
 		Short: "Disable this repository for the lead workflow (remove lead-flow skill)",
 		Long: `Remove the /lead-flow skill files and the AGENTS.md managed block
-installed by ` + "`lead enable`" + `. Operates only on this repository
-and never touches $HOME. Repository issue labels are kept.`,
+installed by ` + "`lead enable`" + ` from every known skills directory
+(.agents, .claude, .devin, .gemini, .opencode). Operates only on this
+repository and never touches $HOME. Repository issue labels are kept.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDisable(cmd, deps)
 		},
@@ -1705,6 +1709,8 @@ func runEnable(cmd *cobra.Command, deps Deps) error {
 		Gh:         deps.gh(),
 		Protection: deps.gh(),
 		Repo:       deps.repoSlug(),
+		Agent:      deps.configuredAgent(),
+		LookPath:   deps.LookPath,
 	})
 	if err != nil {
 		return err

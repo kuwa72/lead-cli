@@ -25,8 +25,11 @@ import (
 var ProtectedPaths = []string{
 	"AGENTS.md",
 	".github/",
+	".agents/",
 	".claude/",
 	".devin/",
+	".gemini/",
+	".opencode/",
 	".goreleaser*",
 	"install.sh",
 }
