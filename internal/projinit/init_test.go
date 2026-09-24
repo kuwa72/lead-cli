@@ -17,6 +17,33 @@ var (
 	testAgents = []byte("test agents block\n")
 )
 
+// missingLookPath simulates a PATH with no agent binaries.
+func missingLookPath(string) (string, error) { return "", errors.New("not found") }
+
+// onlyLookPath reports binaries present in names, missing otherwise.
+func onlyLookPath(names ...string) func(string) (string, error) {
+	return func(name string) (string, error) {
+		for _, n := range names {
+			if n == name {
+				return "/fake/bin/" + name, nil
+			}
+		}
+		return "", errors.New("not found")
+	}
+}
+
+func assertSkillFile(t *testing.T, root, dir string) {
+	t.Helper()
+	path := filepath.Join(root, dir, skillName, "SKILL.md")
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("skill file missing: %s", path)
+	}
+	if string(got) != string(testSkill) {
+		t.Errorf("%s = %q, want %q", path, got, testSkill)
+	}
+}
+
 // fakeProtection is a narrow ProtectionClient for report tests.
 type fakeProtection struct {
 	branch    string
@@ -144,6 +171,7 @@ func TestRunApplyCreatesManagedFiles(t *testing.T) {
 		Yes:          true,
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
 	})
 	if err != nil {
 		t.Fatalf("Run --write: %v", err)
@@ -152,16 +180,7 @@ func TestRunApplyCreatesManagedFiles(t *testing.T) {
 		t.Error("Changed = false, want true after writes")
 	}
 
-	for _, d := range []string{claudeDir, devinDir} {
-		path := filepath.Join(root, d, "SKILL.md")
-		got, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("skill file missing: %s", path)
-		}
-		if string(got) != string(testSkill) {
-			t.Errorf("%s = %q, want %q", path, got, testSkill)
-		}
-	}
+	assertSkillFile(t, root, ".agents/skills")
 
 	agentsPath := filepath.Join(root, agentsFile)
 	got, err := os.ReadFile(agentsPath)
@@ -173,6 +192,104 @@ func TestRunApplyCreatesManagedFiles(t *testing.T) {
 	}
 	if !strings.Contains(string(got), string(testAgents)) {
 		t.Errorf("AGENTS.md missing block content: %s", got)
+	}
+}
+
+// Issue #224: .agents/skills is the always target; detected (PATH) and
+// configured (Options.Agent) agents add their own skills dirs.
+func TestRunApplyDistributesToDetectedAgents(t *testing.T) {
+	root := t.TempDir()
+	rep, err := Run(Options{
+		Root:         root,
+		Yes:          true,
+		SkillContent: testSkill,
+		AgentsBlock:  testAgents,
+		LookPath:     onlyLookPath("codex", "opencode"),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !rep.Changed {
+		t.Error("Changed = false, want true after writes")
+	}
+
+	// .agents is always a target; codex reads it natively, so no
+	// .codex dir is created (verified against Codex docs, issue #224).
+	assertSkillFile(t, root, ".agents/skills")
+	assertSkillFile(t, root, ".opencode/skills")
+
+	for _, d := range []string{".claude", ".devin", ".codex", ".gemini"} {
+		if _, err := os.Stat(filepath.Join(root, d)); !os.IsNotExist(err) {
+			t.Errorf("undetected agent dir %s was created", d)
+		}
+	}
+}
+
+func TestRunApplyDistributesToConfiguredAgent(t *testing.T) {
+	root := t.TempDir()
+	// The configured active agent gets its skills dir even when its
+	// binary is not on PATH (detection ∪ configuration).
+	_, err := Run(Options{
+		Root:         root,
+		Yes:          true,
+		SkillContent: testSkill,
+		AgentsBlock:  testAgents,
+		Agent:        "gemini",
+		LookPath:     missingLookPath,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertSkillFile(t, root, ".agents/skills")
+	assertSkillFile(t, root, ".gemini/skills")
+	if _, err := os.Stat(filepath.Join(root, ".claude")); !os.IsNotExist(err) {
+		t.Error(".claude dir created without detection or configuration")
+	}
+}
+
+func TestRunCheckReflectsDynamicTargets(t *testing.T) {
+	root := t.TempDir()
+	opts := Options{
+		Root:         root,
+		SkillContent: testSkill,
+		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
+	}
+
+	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, LookPath: missingLookPath})
+	if err != nil {
+		t.Fatalf("check on empty: %v", err)
+	}
+	joined := joinLines(rep)
+	if !strings.Contains(joined, "skill/agents: missing") {
+		t.Errorf("check missing skill/agents line:\n%s", joined)
+	}
+	if strings.Contains(joined, "skill/claude") {
+		t.Errorf("check reported undetected agent:\n%s", joined)
+	}
+
+	opts.Yes = true
+	if _, err := Run(opts); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	rep, err = Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, LookPath: missingLookPath})
+	if err != nil {
+		t.Fatalf("check after install: %v", err)
+	}
+	if !rep.Complete {
+		t.Errorf("check after install = incomplete:\n%s", joinLines(rep))
+	}
+
+	// A configured agent adds its dir to the required set.
+	rep, err = Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, Agent: "gemini", LookPath: missingLookPath})
+	if err != nil {
+		t.Fatalf("check with configured agent: %v", err)
+	}
+	if rep.Complete {
+		t.Errorf("check with undistributed configured agent = complete, want incomplete:\n%s", joinLines(rep))
+	}
+	if !strings.Contains(joinLines(rep), "skill/gemini: missing") {
+		t.Errorf("check missing skill/gemini line:\n%s", joinLines(rep))
 	}
 }
 
@@ -225,6 +342,7 @@ func TestRunIsIdempotent(t *testing.T) {
 		Yes:          true,
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
 	}
 	if _, err := Run(opts); err != nil {
 		t.Fatalf("first install: %v", err)
@@ -246,6 +364,7 @@ func TestRunCheckReportsCompleteness(t *testing.T) {
 		Check:        true,
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
 	})
 	if err != nil {
 		t.Fatalf("check on empty: %v", err)
@@ -259,6 +378,7 @@ func TestRunCheckReportsCompleteness(t *testing.T) {
 		Yes:          true,
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
 	}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -267,6 +387,7 @@ func TestRunCheckReportsCompleteness(t *testing.T) {
 		Check:        true,
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
 	})
 	if err != nil {
 		t.Fatalf("check after install: %v", err)
@@ -283,8 +404,22 @@ func TestRunUninstallRemovesManagedFiles(t *testing.T) {
 		Yes:          true,
 		SkillContent: testSkill,
 		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
 	}); err != nil {
 		t.Fatalf("install: %v", err)
+	}
+
+	// Seed managed files in agent dirs the current run did not target
+	// (a previous lead version wrote .claude/.devin unconditionally):
+	// uninstall scans every known dir, not just detected agents.
+	for _, dir := range []string{".claude/skills", ".gemini/skills"} {
+		p := filepath.Join(root, dir, skillName, "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, testSkill, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	rep, err := Run(Options{
@@ -300,8 +435,8 @@ func TestRunUninstallRemovesManagedFiles(t *testing.T) {
 		t.Error("uninstall Changed = false, want removals reported")
 	}
 
-	for _, d := range []string{claudeDir, devinDir} {
-		path := filepath.Join(root, d, "SKILL.md")
+	for _, d := range []string{".agents/skills", ".claude/skills", ".gemini/skills"} {
+		path := filepath.Join(root, d, skillName, "SKILL.md")
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("skill file remains: %s", path)
 		}
@@ -329,7 +464,7 @@ func TestRunUninstallRemovesManagedFiles(t *testing.T) {
 
 func TestRunUninstallKeepsForeignSkill(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, claudeDir, "SKILL.md")
+	path := filepath.Join(root, ".claude/skills", skillName, "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +571,7 @@ func TestLegacyInitBlockMigratesToEnable(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root2, "AGENTS.md"), []byte(legacy), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, tgt := range []string{".claude/skills/lead-flow/SKILL.md", ".devin/skills/lead-flow/SKILL.md"} {
+	for _, tgt := range []string{".agents/skills/lead-flow/SKILL.md", ".claude/skills/lead-flow/SKILL.md", ".devin/skills/lead-flow/SKILL.md"} {
 		p := filepath.Join(root2, tgt)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
@@ -445,7 +580,9 @@ func TestLegacyInitBlockMigratesToEnable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rep2, err := Run(Options{Root: root2, Check: true, SkillContent: testSkill, AgentsBlock: testAgents})
+	// Leftover .claude/.devin files from a previous lead version do not
+	// break --check: only the resolved target set is required.
+	rep2, err := Run(Options{Root: root2, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, LookPath: missingLookPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +620,7 @@ func (s *stubLabelClient) RepoCreateLabel(_ context.Context, repo string, label 
 // label check can make --check incomplete.
 func installLocal(t *testing.T, root string) {
 	t.Helper()
-	if _, err := Run(Options{Root: root, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents}); err != nil {
+	if _, err := Run(Options{Root: root, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, LookPath: missingLookPath}); err != nil {
 		t.Fatalf("install local: %v", err)
 	}
 }
@@ -494,7 +631,7 @@ func TestRunCheckFailsWhenLabelsMissing(t *testing.T) {
 	root := t.TempDir()
 	installLocal(t, root)
 	gh := &stubLabelClient{labels: []string{"needs-review", "ready"}}
-	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, LookPath: missingLookPath, Gh: gh, Repo: "o/r"})
 	if err != nil {
 		t.Fatalf("check: %v", err)
 	}
@@ -513,7 +650,7 @@ func TestRunCheckPassesWhenLabelsPresent(t *testing.T) {
 	root := t.TempDir()
 	installLocal(t, root)
 	gh := &stubLabelClient{labels: []string{"needs-review", "ready", "blocked", "extra"}}
-	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, LookPath: missingLookPath, Gh: gh, Repo: "o/r"})
 	if err != nil {
 		t.Fatalf("check: %v", err)
 	}
@@ -534,7 +671,7 @@ func TestRunCheckSkipsLabelsWithoutRepo(t *testing.T) {
 	root := t.TempDir()
 	installLocal(t, root)
 	gh := &stubLabelClient{labels: []string{}}
-	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: ""})
+	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, LookPath: missingLookPath, Gh: gh, Repo: ""})
 	if err != nil {
 		t.Fatalf("check: %v", err)
 	}
@@ -553,7 +690,7 @@ func TestRunCheckSkipsLabelsOnGhError(t *testing.T) {
 	root := t.TempDir()
 	installLocal(t, root)
 	gh := &stubLabelClient{err: errors.New("401 Unauthorized")}
-	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, LookPath: missingLookPath, Gh: gh, Repo: "o/r"})
 	if err != nil {
 		t.Fatalf("check: %v", err)
 	}
@@ -568,7 +705,7 @@ func TestRunCheckSkipsLabelsOnGhError(t *testing.T) {
 func TestRunDryRunReportsLabels(t *testing.T) {
 	root := t.TempDir()
 	gh := &stubLabelClient{labels: []string{"ready"}}
-	rep, err := Run(Options{Root: root, DryRun: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
+	rep, err := Run(Options{Root: root, DryRun: true, SkillContent: testSkill, AgentsBlock: testAgents, LookPath: missingLookPath, Gh: gh, Repo: "o/r"})
 	if err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
@@ -629,7 +766,7 @@ func TestRunDefaultNeedsApproval(t *testing.T) {
 func TestRunDryRunDoesNotCreateLabels(t *testing.T) {
 	root := t.TempDir()
 	gh := &stubLabelClient{labels: []string{}}
-	if _, err := Run(Options{Root: root, DryRun: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"}); err != nil {
+	if _, err := Run(Options{Root: root, DryRun: true, SkillContent: testSkill, AgentsBlock: testAgents, LookPath: missingLookPath, Gh: gh, Repo: "o/r"}); err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
 	if len(gh.created) != 0 {

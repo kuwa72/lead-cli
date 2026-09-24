@@ -14,4 +14,4 @@
 ルール：
 - `main` には直接 push しない。`issue/<number>-<slug>` ブランチで作業する。
 - 1 Issue に原則 1 ブランチ/PR とし、Issue 側で明示がない限り分割しない。
-- `AGENTS.md`、`.claude/`、`.devin/` などのプロジェクト規約ファイルは、当該 Issue で変更が明示されていない限り編集しない。
+- `AGENTS.md`、`.agents/`、`.claude/`、`.devin/` などのプロジェクト規約ファイルは、当該 Issue で変更が明示されていない限り編集しない。

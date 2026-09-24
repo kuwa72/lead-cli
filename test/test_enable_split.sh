@@ -40,33 +40,38 @@ git init >/dev/null || fail "git init failed"
 git config user.email "test@example.com"
 git config user.name "Test"
 
-out="$("$tmp/lead" enable --dry-run)" || fail "enable --dry-run failed"
+# Isolate PATH so enable's agent detection (issue #224) sees no real
+# agent binaries: only git is resolvable.
+mkdir -p "$tmp/bin"
+ln -s "$(command -v git)" "$tmp/bin/git"
+lead() { env PATH="$tmp/bin" "$tmp/lead" "$@"; }
+
+out="$(lead enable --dry-run)" || fail "enable --dry-run failed"
 case "$out" in *"dry run"*) ;; *) fail "enable --dry-run missing dry-run notice";; esac
-[ ! -e .claude ] && [ ! -e .devin ] && [ ! -e AGENTS.md ] || fail "enable --dry-run wrote files"
+[ ! -e .agents ] && [ ! -e .claude ] && [ ! -e .devin ] && [ ! -e AGENTS.md ] || fail "enable --dry-run wrote files"
 
 # --- 5. `enable --yes` installs repo files and never touches $HOME ---
-"$tmp/lead" enable --yes >/dev/null || fail "enable --yes failed"
-[ -f .claude/skills/lead-flow/SKILL.md ] || fail "claude skill file missing"
-[ -f .devin/skills/lead-flow/SKILL.md ] || fail "devin skill file missing"
+lead enable --yes >/dev/null || fail "enable --yes failed"
+[ -f .agents/skills/lead-flow/SKILL.md ] || fail ".agents skill file missing"
+[ ! -e .claude ] && [ ! -e .devin ] || fail "agent dirs created without detected binaries"
 [ -f AGENTS.md ] || fail "AGENTS.md missing"
 case "$(cat AGENTS.md)" in *"lead-flow"*) ;; *) fail "AGENTS.md missing lead-flow block";; esac
 [ -z "$(ls -A "$HOME")" ] || fail "enable touched \$HOME: $(ls -A "$HOME")"
 
 # --- 6. idempotency and --check (`--write` stays accepted for compatibility) ---
-out="$("$tmp/lead" enable --yes)" || fail "re-enable failed"
+out="$(lead enable --yes)" || fail "re-enable failed"
 case "$out" in *"no changes"*) ;; *) fail "re-enable not idempotent";; esac
-"$tmp/lead" enable --check >/dev/null || fail "enable --check failed after enable"
+lead enable --check >/dev/null || fail "enable --check failed after enable"
 
 # --- 7. doctor reports the project as enabled ---
-doc_out="$("$tmp/lead" doctor --offline 2>&1 || true)"
+doc_out="$(lead doctor --offline 2>&1 || true)"
 case "$doc_out" in *"project"*) ;; *) fail "doctor output missing project check";; esac
 
 # --- 8. `disable` removes managed files and block; --check then fails ---
-"$tmp/lead" disable >/dev/null || fail "disable failed"
-[ ! -e .claude/skills/lead-flow/SKILL.md ] || fail "claude skill remains after disable"
-[ ! -e .devin/skills/lead-flow/SKILL.md ] || fail "devin skill remains after disable"
+lead disable >/dev/null || fail "disable failed"
+[ ! -e .agents/skills/lead-flow/SKILL.md ] || fail ".agents skill remains after disable"
 case "$(cat AGENTS.md)" in *"lead-flow"*) fail "AGENTS.md block remains after disable";; esac
-"$tmp/lead" enable --check >/dev/null 2>&1 && fail "enable --check after disable succeeded"
+lead enable --check >/dev/null 2>&1 && fail "enable --check after disable succeeded"
 
 
 # --- 9. doctor guides toward `lead enable` when the repo is not enabled ---

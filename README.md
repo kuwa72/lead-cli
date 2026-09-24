@@ -51,8 +51,8 @@ Sections:
 | `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
 | `lead clean <n>` | remove the workflow worktree and state |
 | `lead stop <n>` | stop a running agent (kill, clean up, record interruption) |
-| `lead enable` | enable this repository (`AGENTS.md` management block, lead-flow skill) |
-| `lead disable` | disable this repository (remove lead-flow skill) |
+| `lead enable` | enable this repository (`AGENTS.md` management block, lead-flow skill to `.agents/skills` + detected agents' skills dirs) |
+| `lead disable` | disable this repository (remove lead-flow skill from all known skills dirs) |
 | `lead setup` | set up your user environment (shell completions, keybinding) |
 | `lead doctor` | diagnose `gh`, agents, herdr, and branch protection |
 | `lead version` | show version |
@@ -68,7 +68,7 @@ lead setup --write          # user environment ($HOME only)
 lead enable                 # this repository (skill + AGENTS.md block)
 ```
 
-`lead setup --write` sets up your user environment (shell completion and a keybinding, `$HOME` only); `lead enable` enables this repository (the `AGENTS.md` rule block and lead-flow skill).
+`lead setup --write` sets up your user environment (shell completion and a keybinding, `$HOME` only); `lead enable` enables this repository (the `AGENTS.md` rule block and the lead-flow skill, written to `.agents/skills/lead-flow` plus the skills directory of each agent detected on `PATH` or configured in `inbox-config.json`).
 
 ## Conventions
 

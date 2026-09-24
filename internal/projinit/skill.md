@@ -71,6 +71,6 @@ If the issue number is omitted, ask the user for one or run `lead work` to open 
 ## Rules
 
 - Work on the `issue/<number>-<slug>` branch. Do not push to `main`.
-- Do not edit `AGENTS.md`, `.claude/`, `.devin/`, or other project rule files unless the current issue explicitly requires it.
+- Do not edit `AGENTS.md`, `.agents/`, `.claude/`, `.devin/`, or other project rule files unless the current issue explicitly requires it.
 - One issue per branch/PR unless the issue says otherwise.
 - If a command asks for a password or TTY, stop and ask the user.
