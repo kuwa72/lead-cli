@@ -69,15 +69,6 @@ esac
 GHEOF
 chmod +x "$tmp/bin/gh"
 
-cat > "$tmp/bin/herdr" <<'HEOF'
-#!/bin/sh
-case "$1 $2" in
-  "pane split") printf '{"result":{"pane":{"pane_id":"p-test"}}}' ;;
-  *) exit 0 ;;
-esac
-HEOF
-chmod +x "$tmp/bin/herdr"
-
 export PATH="$tmp/bin:$PATH"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"

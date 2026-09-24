@@ -27,7 +27,6 @@ if [ -d "/home/linuxbrew/.linuxbrew/bin" ]; then
 fi
 unset XDG_STATE_HOME || true
 unset LEAD_STATE_FILE || true
-unset HERDR_ENV || true
 mkdir -p "$HOME"
 
 repo="$tmp/repo"

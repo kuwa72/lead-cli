@@ -16,7 +16,7 @@ REAL_GOPATH="$(go env GOPATH)"
 REAL_GOCACHE="$(go env GOCACHE)"
 export HOME="$tmp/home"
 export GOPATH="$REAL_GOPATH" GOCACHE="$REAL_GOCACHE"
-unset XDG_STATE_HOME HERDR_ENV || true
+unset XDG_STATE_HOME || true
 mkdir -p "$HOME"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"

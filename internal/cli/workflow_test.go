@@ -400,47 +400,58 @@ func TestWork_PropagatesMissingGit(t *testing.T) {
 	_ = context.Background
 }
 
-func TestWork_HerdrPreparesAgentCommand(t *testing.T) {
-	repo := initRepo(t)
-	deps, fake, _ := workflowDeps(t, repo)
-	fake.Issues[36] = ports.Issue{Number: 36, Title: "ports adapter", Body: "body", State: "OPEN"}
+// issue #225: the agent command is always surfaced inline. Even with
+// HERDR_ENV=1 and a herdr binary on PATH, work must not invoke herdr —
+// it prints `cd <dir> && <agent cmd>` on stdout.
+func TestWork_AlwaysInlineNeverHerdr(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "herdr", "")
+	for _, env := range []string{"", "1"} {
+		repo := initRepo(t)
+		deps, fake, _ := workflowDeps(t, repo)
+		fake.Issues[36] = ports.Issue{Number: 36, Title: "ports adapter", Body: "body", State: "OPEN"}
+		t.Setenv("HERDR_ENV", env)
 
-	t.Setenv("HERDR_ENV", "1")
-	logPath := testutil.InstallDummy(t, "herdr",
-		`if [ "$1 $2" = "pane split" ]; then printf '%s' '{"result":{"pane":{"pane_id":"pane-123"}}}'; elif [ "$1 $2" = "pane send-text" ]; then :; else echo "unexpected: $@" >&2; exit 3; fi`)
-
-	out, err := executeWith(t, deps, "work", "36")
-	if err != nil {
-		t.Fatalf("work 36: %v\n%s", err, out)
-	}
-
-	log := testutil.LogText(t, logPath)
-	for _, want := range []string{
-		"<pane>", "<split>", "<--direction>", "<right>", "<--ratio>", "<0.5>",
-		"<send-text>", "<pane-123>",
-	} {
-		if !strings.Contains(log, want) {
-			t.Errorf("herdr log missing %q, got:\n%s", want, log)
+		out, err := executeWith(t, deps, "work", "36")
+		if err != nil {
+			t.Fatalf("HERDR_ENV=%q work 36: %v\n%s", env, err, out)
+		}
+		if !strings.Contains(out, `cd "`) || !strings.Contains(out, `&& agy -i "`) {
+			t.Errorf("HERDR_ENV=%q: output missing inline agent command, got:\n%s", env, out)
+		}
+		if !strings.Contains(out, "ports adapter") || !strings.Contains(out, "body") {
+			t.Errorf("HERDR_ENV=%q: output missing issue title/body, got:\n%s", env, out)
 		}
 	}
-	if !strings.Contains(log, `cd "`) || !strings.Contains(log, `&& agy -i "`) {
-		t.Errorf("herdr log missing prepared agent command, got:\n%s", log)
+	if log := testutil.LogText(t, logPath); log != "" {
+		t.Errorf("herdr must never be invoked; log:\n%s", log)
 	}
-	if !strings.Contains(log, "ports adapter") {
-		t.Errorf("herdr log missing issue title, got:\n%s", log)
+}
+
+// issue #225: resume prints the same inline command and never calls herdr.
+func TestResume_AlwaysInlineNeverHerdr(t *testing.T) {
+	repo := initRepo(t)
+	deps, fake, stateFile := workflowDeps(t, repo)
+	fake.Issues[36] = ports.Issue{Number: 36, Title: "ports adapter", Body: "body", State: "OPEN"}
+	seedResumeRecord(t, repo, stateFile, "")
+
+	t.Setenv("HERDR_ENV", "1")
+	logPath := testutil.InstallDummy(t, "herdr", "")
+
+	out, err := executeWith(t, deps, "resume", "36")
+	if err != nil {
+		t.Fatalf("resume 36: %v\n%s", err, out)
 	}
-	if !strings.Contains(log, "body") {
-		t.Errorf("herdr log missing issue body, got:\n%s", log)
+	if !strings.Contains(out, `cd "`) || !strings.Contains(out, `&& agy -i "`) {
+		t.Errorf("resume output missing inline agent command, got:\n%s", out)
 	}
-	if strings.Contains(log, "<run>") {
-		t.Errorf("must not call herdr pane run; got:\n%s", log)
+	if log := testutil.LogText(t, logPath); log != "" {
+		t.Errorf("resume must not invoke herdr; log:\n%s", log)
 	}
 }
 
 func TestWork_InlineFallbackSurfacesCommand(t *testing.T) {
 	repo := initRepo(t)
 	deps, _, _ := workflowDeps(t, repo)
-	t.Setenv("HERDR_ENV", "")
 
 	out, err := executeWith(t, deps, "work", "36")
 	if err != nil {
@@ -454,43 +465,21 @@ func TestWork_InlineFallbackSurfacesCommand(t *testing.T) {
 	}
 }
 
-func TestWork_DoesNotReSplitPane(t *testing.T) {
-	repo := initRepo(t)
-	deps, _, _ := workflowDeps(t, repo)
-	fakeHerdr := &testutil.FakeHerdrRunner{PaneID: "pane-1"}
-	deps.Herdr = fakeHerdr
-
-	if _, err := executeWith(t, deps, "work", "36"); err != nil {
-		t.Fatalf("work 36: %v", err)
-	}
-	if _, err := executeWith(t, deps, "work", "36"); err != nil {
-		t.Fatalf("re-work 36: %v", err)
-	}
-	if len(fakeHerdr.Splits) != 1 || len(fakeHerdr.Sends) != 1 {
-		t.Errorf("splits=%d sends=%d, want 1 each (pane reuse)", len(fakeHerdr.Splits), len(fakeHerdr.Sends))
-	}
-}
-
 func TestWork_AgentCommandRespectsAgentFlag(t *testing.T) {
 	repo := initRepo(t)
 	deps, fake, _ := workflowDeps(t, repo)
 	fake.Issues[36] = ports.Issue{Number: 36, Title: "ports adapter", Body: "body", State: "OPEN"}
-
-	t.Setenv("HERDR_ENV", "1")
-	logPath := testutil.InstallDummy(t, "herdr",
-		`if [ "$1 $2" = "pane split" ]; then printf '%s' '{"result":{"pane":{"pane_id":"pane-123"}}}'; elif [ "$1 $2" = "pane send-text" ]; then :; else echo "unexpected: $@" >&2; exit 3; fi`)
 
 	out, err := executeWith(t, deps, "work", "36", "--agent", "devin")
 	if err != nil {
 		t.Fatalf("work 36 --agent devin: %v\n%s", err, out)
 	}
 
-	log := testutil.LogText(t, logPath)
-	if !strings.Contains(log, `&& devin "`) {
-		t.Errorf("herdr log missing devin positional prompt command, got:\n%s", log)
+	if !strings.Contains(out, `&& devin "`) {
+		t.Errorf("output missing devin positional prompt command, got:\n%s", out)
 	}
-	if strings.Contains(log, "-i") {
-		t.Errorf("devin command must not use agy -i flag; got:\n%s", log)
+	if strings.Contains(out, "devin -i") {
+		t.Errorf("devin command must not use agy -i flag; got:\n%s", out)
 	}
 }
 
@@ -539,4 +528,3 @@ func TestStatus_ShowsResumeInstruction(t *testing.T) {
 		t.Errorf("status output missing %q, got:\n%s", want, out)
 	}
 }
-

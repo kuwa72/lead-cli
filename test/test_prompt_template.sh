@@ -57,52 +57,31 @@ fi
 EOF
 chmod +x "$tmp/bin/gh"
 
-export HERDR_LOG="$tmp/herdr.log"
-: > "$HERDR_LOG"
-cat > "$tmp/bin/herdr" <<'EOF'
-#!/bin/sh
-echo "HERDR $@" >> "$HERDR_LOG"
-case "$1 $2" in
-  "pane split") printf '{"result":{"pane":{"pane_id":"pane-%s"}}}' "$$" ;;
-  "pane send-text") : ;;
-  *) exit 0 ;;
-esac
-EOF
-chmod +x "$tmp/bin/herdr"
-
 export PATH="$tmp/bin:$PATH"
-export HERDR_ENV=1
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 cd "$repo"
 
+# The agent command (with the rendered prompt) is printed inline on stdout.
 # 1. Test custom template selection via --prompt-template on `lead work`
-: > "$HERDR_LOG"
-"$tmp/lead" work 84 --prompt-template custom > /dev/null || fail "lead work 84 with --prompt-template failed"
-herdr_log="$(cat "$HERDR_LOG")"
-echo "$herdr_log" | grep -F "CUSTOM_PROMPT_HEADER" > /dev/null || fail "herdr missing CUSTOM_PROMPT_HEADER: $herdr_log"
-echo "$herdr_log" | grep -F "Issue: #84" > /dev/null || fail "herdr missing Issue: #84: $herdr_log"
-echo "$herdr_log" | grep -F "TDD required: Red -> Green -> Refactor" > /dev/null || fail "herdr missing AGENTS.md content: $herdr_log"
-echo "$herdr_log" | grep -F "Branch: issue/84-" > /dev/null || fail "herdr missing branch: $herdr_log"
+out="$("$tmp/lead" work 84 --prompt-template custom)" || fail "lead work 84 with --prompt-template failed"
+echo "$out" | grep -F "CUSTOM_PROMPT_HEADER" > /dev/null || fail "output missing CUSTOM_PROMPT_HEADER: $out"
+echo "$out" | grep -F "Issue: #84" > /dev/null || fail "output missing Issue: #84: $out"
+echo "$out" | grep -F 'TDD required: Red -> Green -> Refactor' > /dev/null || fail "output missing AGENTS.md content: $out"
+echo "$out" | grep -F "Branch: issue/84-" > /dev/null || fail "output missing branch: $out"
 
 # 2. Test default implement template automatically includes AGENTS.md in ## プロジェクト規約
-: > "$HERDR_LOG"
-"$tmp/lead" work 85 > /dev/null || fail "lead work 85 default template failed"
-herdr_log="$(cat "$HERDR_LOG")"
-echo "$herdr_log" | grep -F "## プロジェクト規約" > /dev/null || fail "herdr missing ## プロジェクト規約: $herdr_log"
-echo "$herdr_log" | grep -F "TDD required: Red -> Green -> Refactor" > /dev/null || fail "herdr missing AGENTS.md rules in default template: $herdr_log"
+out="$("$tmp/lead" work 85)" || fail "lead work 85 default template failed"
+echo "$out" | grep -F '## プロジェクト規約' > /dev/null || fail "output missing ## プロジェクト規約: $out"
+echo "$out" | grep -F 'TDD required: Red -> Green -> Refactor' > /dev/null || fail "output missing AGENTS.md rules in default template: $out"
 
 # 3. Test built-in review template selection via --prompt-template review
-: > "$HERDR_LOG"
-"$tmp/lead" work 86 --prompt-template review > /dev/null || fail "lead work 86 --prompt-template review failed"
-herdr_log="$(cat "$HERDR_LOG")"
-echo "$herdr_log" | grep -F "lead lgtm 86" > /dev/null || fail "herdr missing lead lgtm 86: $herdr_log"
+out="$("$tmp/lead" work 86 --prompt-template review)" || fail "lead work 86 --prompt-template review failed"
+echo "$out" | grep -F "lead lgtm 86" > /dev/null || fail "output missing lead lgtm 86: $out"
 
 # 4. Test `lead run` with --prompt-template
-: > "$HERDR_LOG"
-"$tmp/lead" run 87 --prompt-template custom > /dev/null || fail "lead run 87 with --prompt-template failed"
-herdr_log="$(cat "$HERDR_LOG")"
-echo "$herdr_log" | grep -F "CUSTOM_PROMPT_HEADER" > /dev/null || fail "lead run missing CUSTOM_PROMPT_HEADER: $herdr_log"
-echo "$herdr_log" | grep -F "Issue: #87" > /dev/null || fail "lead run missing Issue: #87: $herdr_log"
+out="$("$tmp/lead" run 87 --prompt-template custom)" || fail "lead run 87 with --prompt-template failed"
+echo "$out" | grep -F "CUSTOM_PROMPT_HEADER" > /dev/null || fail "lead run missing CUSTOM_PROMPT_HEADER: $out"
+echo "$out" | grep -F "Issue: #87" > /dev/null || fail "lead run missing Issue: #87: $out"
 
 echo "PASS: prompt template behavioral tests passed"

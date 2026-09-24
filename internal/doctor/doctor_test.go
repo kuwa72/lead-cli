@@ -19,7 +19,6 @@ func baseDeps() Deps {
 	return Deps{
 		Gh:            &testutil.FakeGhClient{},
 		LookPath:      func(string) (string, error) { return "", errMissing },
-		Getenv:        func(string) string { return "" },
 		Home:          "/nonexistent-home",
 		Version:       "v0.0.0-test",
 		GenCompletion: func(string) (string, error) { return "gen", nil },
@@ -53,13 +52,13 @@ func TestRun_AuthFailureFailsRequired(t *testing.T) {
 }
 
 func TestRun_OptionalShortagesDoNotFail(t *testing.T) {
-	// No herdr, no agents, no completion: all optional → still OK
+	// No agents, no completion: all optional → still OK
 	// as long as gh auth passes.
 	rep := Run(baseDeps())
 	if !rep.OK() {
 		t.Errorf("doctor with only optional gaps = fail; checks: %+v", rep.Checks)
 	}
-	for _, name := range []string{"herdr", "agents", "completion", "keybinding"} {
+	for _, name := range []string{"agents", "completion", "keybinding"} {
 		c := findCheck(rep, name)
 		if c.Required {
 			t.Errorf("%s marked required, want optional", name)
@@ -70,25 +69,16 @@ func TestRun_OptionalShortagesDoNotFail(t *testing.T) {
 	}
 }
 
-func TestRun_HerdrAndAgentsDetected(t *testing.T) {
+func TestRun_AgentsDetected(t *testing.T) {
 	d := baseDeps()
 	d.LookPath = func(name string) (string, error) {
-		if name == "herdr" || name == "agy" {
+		if name == "agy" {
 			return "/bin/" + name, nil
 		}
 		return "", errMissing
 	}
-	d.Getenv = func(k string) string {
-		if k == "HERDR_ENV" {
-			return "1"
-		}
-		return ""
-	}
 
 	rep := Run(d)
-	if c := findCheck(rep, "herdr"); !c.OK || !strings.Contains(c.Detail, "multipane") {
-		t.Errorf("herdr check = %+v, want multipane available", c)
-	}
 	if c := findCheck(rep, "agents"); !c.OK || !strings.Contains(c.Detail, "agy") {
 		t.Errorf("agents check = %+v, want agy listed", c)
 	}

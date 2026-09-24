@@ -46,7 +46,6 @@ type StartResult struct {
 	Repository string
 	Mode       string
 	RepoRoot   string
-	Pane       string
 	AgentMode  string
 }
 
@@ -123,7 +122,6 @@ func Start(ctx context.Context, g GitRunner, store *state.Store, opts StartOptio
 		if worktree == "" {
 			w.Worktree = existing.Worktree
 		}
-		w.Pane = existing.Pane
 		w.PullRequests = existing.PullRequests
 		w.MergePolicy = existing.MergePolicy
 		w.PolicyReason = existing.PolicyReason
@@ -141,7 +139,7 @@ func Start(ctx context.Context, g GitRunner, store *state.Store, opts StartOptio
 	}
 	return StartResult{
 		Branch: branch, Worktree: w.Worktree, Status: w.Status,
-		Repository: repo, Mode: mode, RepoRoot: repoRoot, Pane: w.Pane,
+		Repository: repo, Mode: mode, RepoRoot: repoRoot,
 		AgentMode: w.AgentMode,
 	}, nil
 }

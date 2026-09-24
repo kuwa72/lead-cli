@@ -25,8 +25,6 @@ type Options struct {
 	Store *state.Store // nil = no local sections
 	Seen  *SeenStore   // nil = no read-state tracking
 	Shell Shell        // nil = TeaShell
-	// Herdr opens agent logs/panes in a new tab. Nil falls back to $PAGER.
-	Herdr ports.HerdrRunner
 	// Editor is $EDITOR (may carry flags: "code --wait"). Empty disables e/r.
 	Editor string
 	// AgentsPath is the repository's AGENTS.md for the r key.
@@ -156,12 +154,12 @@ type Model struct {
 	knownBlocked      map[int]bool // tracked blocked issues for completion notify
 	// subIssuesCache memoizes parent sub-issue lists for the session so
 	// reloads do not repeat SubIssues calls (issue #212).
-	subIssuesCache    map[int]ports.SubIssueList
-	hasInitialLoad    bool         // suppresses notifications on initial load
-	repoOpenCount     int          // total open issues in repository on GitHub
-	logs              []string     // event log / status history entries
-	logOffset         int          // scroll offset for log view
-	caret             *caretSync   // hardware-cursor target while modeInput renders (issue #160)
+	subIssuesCache map[int]ports.SubIssueList
+	hasInitialLoad bool       // suppresses notifications on initial load
+	repoOpenCount  int        // total open issues in repository on GitHub
+	logs           []string   // event log / status history entries
+	logOffset      int        // scroll offset for log view
+	caret          *caretSync // hardware-cursor target while modeInput renders (issue #160)
 }
 
 // Messages.
@@ -258,13 +256,13 @@ func New(opts Options) Model {
 		opts.Notifier = notify.New(notify.Options{})
 	}
 	m := Model{
-		opts:                opts,
-		sections:            initialSections,
-		status:              initialStatus,
-		loading:             true,
+		opts:             opts,
+		sections:         initialSections,
+		status:           initialStatus,
+		loading:          true,
 		needsEnable:      projectUnconfigured(opts),
-		previewCache:        make(map[int]previewSnapshot),
-		pendingOps:          make(map[int]bool),
+		previewCache:     make(map[int]previewSnapshot),
+		pendingOps:       make(map[int]bool),
 		knownNeedsReview: make(map[int]bool),
 		knownBlocked:     make(map[int]bool),
 		subIssuesCache:   make(map[int]ports.SubIssueList),
@@ -355,7 +353,6 @@ func nextAgent(cur string) string {
 	}
 	return availableAgents[0]
 }
-
 
 func (m Model) loadCmd() tea.Cmd {
 	opts := m.opts
@@ -1209,52 +1206,16 @@ func (m Model) openAgentsMd() (tea.Model, tea.Cmd) {
 	})
 }
 
+// peekItem opens the agent log in $PAGER (issue #225: the herdr tab path
+// is removed; the built-in pager is the only log viewer).
 func (m Model) peekItem(it Item) (tea.Model, tea.Cmd) {
 	if it.Kind != KindRunning && it.Kind != KindBlocked {
 		return m, m.setStatus(fmt.Sprintf("#%d is not a running or blocked agent (p only peeks running or blocked agents)", it.Number))
 	}
-	if it.LogPath == "" && it.Pane == "" {
-		return m, m.setStatus(fmt.Sprintf("#%d has no agent log or pane", it.Number))
+	if it.LogPath == "" {
+		return m, m.setStatus(fmt.Sprintf("#%d has no agent log", it.Number))
 	}
-	if it.LogPath != "" {
-		return m, m.peekWithHerdrOrPager(it.Number, it.LogPath, it.Pane)
-	}
-	if m.opts.Herdr != nil {
-		return m, m.peekHerdrCmd(it.Number, "", it.Pane)
-	}
-	return m, m.setStatus(fmt.Sprintf("#%d needs herdr to open a pane", it.Number))
-}
-
-func (m Model) peekWithHerdrOrPager(number int, logPath, pane string) tea.Cmd {
-	return func() tea.Msg {
-		if m.opts.Herdr == nil {
-			return m.peekPagerCmd(number, logPath)()
-		}
-		err := m.opts.Herdr.Peek(context.Background(), logPath, pane)
-		if err != nil && ports.IsBinaryNotFound(err) {
-			return m.peekPagerCmd(number, logPath)()
-		}
-		if err != nil {
-			return doneMsg{err: err}
-		}
-		return doneMsg{status: fmt.Sprintf("Opened #%d agent log in herdr tab", number)}
-	}
-}
-
-func (m Model) peekHerdrCmd(number int, logPath, pane string) tea.Cmd {
-	return func() tea.Msg {
-		err := m.opts.Herdr.Peek(context.Background(), logPath, pane)
-		if ports.IsPaneNotFound(err) {
-			return doneMsg{status: fmt.Sprintf("#%d agent pane not found (session may have changed)", number)}
-		}
-		if err != nil {
-			return doneMsg{err: err}
-		}
-		if logPath != "" {
-			return doneMsg{status: fmt.Sprintf("Opened #%d agent log in herdr tab", number)}
-		}
-		return doneMsg{status: fmt.Sprintf("Opened #%d agent pane in herdr tab", number)}
-	}
+	return m, m.peekPagerCmd(it.Number, it.LogPath)
 }
 
 func (m Model) peekPagerCmd(number int, logPath string) tea.Cmd {
@@ -1989,4 +1950,3 @@ func (m Model) notifyItem(kind string, it Item) {
 	}
 	_ = m.opts.Notifier.Notify(title, msg)
 }
-

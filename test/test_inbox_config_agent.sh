@@ -4,7 +4,7 @@
 # 一時HOME・一時リポジトリ・ダミー gh/herdr/各エージェントの下で
 #   - dispatch --once が config agent の headless argv で起動する
 #   - say --dry-run が config agent を起動する
-#   - work / picker 経路 run / resume が send-text に config agent のコマンドを送る
+#   - work / picker 経路 run / resume が標準出力に config agent のコマンドを表示する
 #   - --agent / $LEAD_SPEC_AGENT(say) / ピッカー明示 agent / resume の前回記録が優先
 #   - config 非存在・JSON 不正・agent 空のとき agy にフォールバック
 # をアサートする（ソースgrep検査なし・実HOME/実リポジトリに触れない）。
@@ -87,14 +87,10 @@ EOF
   chmod +x "$tmp/bin/$a"
 done
 chmod +x "$tmp/bin/gh"
+# Dummy herdr must never be invoked (issue #225); HERDR_ENV=1 must be a no-op.
 cat > "$tmp/bin/herdr" <<'EOF'
 #!/bin/sh
 for x in "$@"; do printf '<%s>\n' "$x" >> "$HERDR_LOG"; done
-case "$1 $2" in
-  "pane split") printf '{"result":{"pane":{"pane_id":"pane-1"}}}' ;;
-  "pane send-text") : ;;
-  *) exit 0 ;;
-esac
 EOF
 chmod +x "$tmp/bin/herdr"
 export PATH="$tmp/bin:$PATH"
@@ -140,41 +136,39 @@ grep -q 'Issue #7: dispatch me' "$tmp/claude.log" || fail "dispatch prompt missi
 grep -qxF '<exec>' "$tmp/codex.log" || fail "dispatch did not run codex exec: $(cat "$tmp/codex.log")"
 [ -s "$tmp/claude.log" ] && fail "dispatch ran claude despite --agent codex"
 
-# work 36 prepares `claude "<prompt>"` via herdr send-text.
+# work 36 prints `cd <dir> && claude "<prompt>"` inline; herdr stays silent.
 : > "$HERDR_LOG"
 out="$(cd "$repo" && "$tmp/lead" work 36 2>&1)" || fail "work 36 exited non-zero: $out"
 case "$out" in *"Agent: claude"*) ;; *) fail "work output lacks 'Agent: claude': $out";; esac
-grep -q 'claude "' "$HERDR_LOG" || fail "work send-text lacks claude command: $(cat "$HERDR_LOG")"
+case "$out" in *'claude "'*) ;; *) fail "work output lacks claude command: $out";; esac
+[ ! -s "$HERDR_LOG" ] || fail "work must not invoke herdr: $(cat "$HERDR_LOG")"
 
 # picker path (no number): LEAD_TEST_SELECTION=36 (no agent) uses config too.
 rm -f "$LEAD_STATE_FILE"
-: > "$HERDR_LOG"
 out="$(cd "$repo" && LEAD_TEST_SELECTION=36 "$tmp/lead" run 2>&1)" || fail "run (picker) exited non-zero: $out"
 case "$out" in *"Agent: claude"*) ;; *) fail "picker run lacks 'Agent: claude': $out";; esac
-grep -q 'claude "' "$HERDR_LOG" || fail "picker send-text lacks claude command: $(cat "$HERDR_LOG")"
+case "$out" in *'claude "'*) ;; *) fail "picker run output lacks claude command: $out";; esac
 
 # picker explicit agent is kept: LEAD_TEST_SELECTION=36:devin beats config.
 rm -f "$LEAD_STATE_FILE"
-: > "$HERDR_LOG"
 out="$(cd "$repo" && LEAD_TEST_SELECTION=36:devin "$tmp/lead" run 2>&1)" || fail "run (picker devin) failed: $out"
 case "$out" in *"Agent: devin"*) ;; *) fail "picker run lacks 'Agent: devin': $out";; esac
-grep -q 'devin "' "$HERDR_LOG" || fail "picker send-text lacks devin command: $(cat "$HERDR_LOG")"
+case "$out" in *'devin "'*) ;; *) fail "picker run output lacks devin command: $out";; esac
 
 # resume without a recorded agent uses config.
 rm -f "$LEAD_STATE_FILE"
-: > "$HERDR_LOG"
 out="$(cd "$repo" && "$tmp/lead" resume 36 2>&1)" || fail "resume 36 exited non-zero: $out"
 case "$out" in *"Agent: claude"*) ;; *) fail "resume output lacks 'Agent: claude': $out";; esac
-grep -q 'claude "' "$HERDR_LOG" || fail "resume send-text lacks claude command: $(cat "$HERDR_LOG")"
+case "$out" in *'claude "'*) ;; *) fail "resume output lacks claude command: $out";; esac
 
 # resume keeps the recorded previous agent over config.
 cat > "$LEAD_STATE_FILE" <<'EOF'
 {"version":1,"workflows":[{"repository":"o/r","issue":36,"mode":"implement","branch":"issue/36-ports-adapter","status":"in_progress","agent":"devin","updated_at":"2026-09-18T00:00:00Z"}]}
 EOF
-: > "$HERDR_LOG"
 out="$(cd "$repo" && "$tmp/lead" resume 36 2>&1)" || fail "resume 36 (recorded devin) failed: $out"
 case "$out" in *"Agent: devin"*) ;; *) fail "resume should keep recorded devin over config: $out";; esac
-grep -q 'devin "' "$HERDR_LOG" || fail "resume send-text lacks devin command: $(cat "$HERDR_LOG")"
+case "$out" in *'devin "'*) ;; *) fail "resume output lacks devin command: $out";; esac
+[ ! -s "$HERDR_LOG" ] || fail "resume must not invoke herdr: $(cat "$HERDR_LOG")"
 
 # --- 2. fallbacks --------------------------------------------------------------
 # corrupt JSON config → agy.
@@ -197,12 +191,11 @@ rm -f "$tmp/state/inbox-config.json"
 grep -qxF '<--print-timeout>' "$tmp/agy.log" || fail "no config: dispatch did not fall back to agy: $(cat "$tmp/agy.log")"
 [ -s "$tmp/claude.log" ] && fail "no config: dispatch ran claude"
 
-# no config file → work send-text uses agy -i.
+# no config file → work prints agy -i inline.
 rm -f "$LEAD_STATE_FILE"
-: > "$HERDR_LOG"
 out="$(cd "$repo" && "$tmp/lead" work 36 2>&1)" || fail "work without config failed: $out"
 case "$out" in *"Agent: agy"*) ;; *) fail "work without config lacks 'Agent: agy': $out";; esac
-grep -q 'agy -i "' "$HERDR_LOG" || fail "work send-text lacks agy -i command: $(cat "$HERDR_LOG")"
+case "$out" in *'agy -i "'*) ;; *) fail "work output lacks agy -i command: $out";; esac
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"
 

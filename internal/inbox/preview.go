@@ -584,9 +584,6 @@ func runningMetaLine(it *Item, prNum int, prErr bool, now time.Time) string {
 	if it.Agent != "" {
 		parts = append(parts, fmt.Sprintf("Agent: %s", Sanitize(it.Agent)))
 	}
-	if it.Pane != "" {
-		parts = append(parts, fmt.Sprintf("Pane: %s", Sanitize(it.Pane)))
-	}
 	if it.Attempts > 0 {
 		parts = append(parts, fmt.Sprintf("×%d", it.Attempts))
 	}

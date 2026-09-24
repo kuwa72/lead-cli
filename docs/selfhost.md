@@ -10,13 +10,12 @@
 # ローカルビルド & インストール
 bin/install-local
 
-# 環境診断（gh 認証、herdr、エージェント等の確認）
+# 環境診断（gh 認証、エージェント等の確認）
 lead doctor
 ```
 
 `doctor` で以下が揃っていることを確認してください：
 - `gh auth`: GitHub CLI が認証済みであること
-- `herdr`: マルチペイン環境 (`HERDR_ENV=1`) が利用可能であること
 - `agents`: いずれかのコーディングエージェント（`agy`, `claude`, `codex`, `devin`, `opencode`, `gemini` 等）が検出されること
 
 ## 2. 開発フローの全体像
@@ -24,7 +23,7 @@ lead doctor
 ```mermaid
 flowchart TD
     A["GitHub Issue 起票 / 確認"] --> B["lead work / lead run で着手"]
-    B --> C["Herdr ペインでエージェント起動・プロンプト投入"]
+    B --> C["エージェント起動コマンドを標準出力に表示"]
     C --> D["TDD 実装 (Red → Green → Refactor)"]
     D --> E["ローカル全テスト実行 (./test/run-tests.sh)"]
     E --> F["PR 作成 (gh pr create --fill)"]
@@ -49,8 +48,7 @@ lead run <Issue番号> --worktree
 lead run <Issue番号> --mode review
 ```
 
-- **Herdr 連携**: Herdr 環境下では、新しいサイドペインが分割され、エージェント起動コマンドと Issue から生成された TDD プロンプトが自動で準備されます。
-- **インライン起動**: Herdr がない場合は、プロンプトと実行コマンドが標準出力に表示されます。
+- **インライン起動**: `cd <dir> && <agent cmd>` と Issue から生成されたプロンプトが標準出力に表示されます。herdr ペイン連携は issue #225 で削除されました。
 
 ### Step 2: TDD 実装とローカルテスト
 
@@ -98,6 +96,6 @@ lead clean <Issue番号>
 日常的な開発では、サブコマンドなしで `lead` を起動する Inbox TUI（`docs/rfc-inbox-ux.md`）を活用できます。
 
 - `a`: Issue を承認（`needs-review` → `ready`）
-- `p`: 稼働中のエージェント画面を Herdr で覗き見（peek）
+- `p`: 稼働中のエージェントログを `$PAGER` で覗き見（peek）
 - `s`: 一言のアイデアから `lead say` で仕様エージェントに Issue を起票させる
 - `lead dispatch`: `ready` ラベルの付いた Issue をヘッドレスエージェントに自動分散

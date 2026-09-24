@@ -17,7 +17,6 @@ REAL_GOCACHE="$(go env GOCACHE)"
 export HOME="$tmp/home"
 export GOPATH="$REAL_GOPATH" GOCACHE="$REAL_GOCACHE"
 unset XDG_STATE_HOME || true
-unset HERDR_ENV || true
 mkdir -p "$HOME"
 command -v git >/dev/null || fail "git not available"
 
@@ -59,20 +58,8 @@ case "$1 $2" in
 esac
 EOF
 chmod +x "$tmp/bin/gh"
-cat > "$tmp/bin/herdr" <<'EOF'
-#!/bin/sh
-echo "HERDR $@" >> "$HERDR_LOG"
-case "$1 $2" in
-  "pane split") printf '{"result":{"pane":{"pane_id":"test-pane"}}}' ;;
-  "pane send-text") : ;;
-  *) exit 0 ;;
-esac
-EOF
-chmod +x "$tmp/bin/herdr"
 export PATH="$tmp/bin:$PATH"
 export GH_ARGS_LOG="$tmp/gh-args.log"
-export HERDR_LOG="$tmp/herdr.log"
-: > "$HERDR_LOG"
 export GH_COUNT="$tmp/checks.count"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"

@@ -221,7 +221,6 @@ func TestPreview_KindRunningLoadsAndDisplaysAgentLog(t *testing.T) {
 		Issue:    70,
 		Status:   state.StatusInProgress,
 		Agent:    "agy",
-		Pane:     "w1:p70",
 		LogPath:  logPath,
 		Branch:   "issue/70-log-preview",
 		Attempts: 1,

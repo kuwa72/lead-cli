@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # issue #89: lead lgtm / unlgtm および lead work --mode review の振る舞いテスト。
-# ソースコードのgrepではなく、ダミーgh/herdrへの引数ログと終了ステータスをアサートする。
+# ソースコードのgrepではなく、ダミーghへの引数ログと標準出力・終了ステータスをアサートする。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -39,18 +39,6 @@ esac
 GHEOF
 chmod +x "$tmp/bin/gh"
 
-export HERDR_LOG="$tmp/herdr.log"
-: > "$HERDR_LOG"
-cat > "$tmp/bin/herdr" <<'HEOF'
-#!/bin/sh
-echo "HERDR $*" >> "$HERDR_LOG"
-case "$1 $2" in
-  "pane split") printf '{"result":{"pane":{"pane_id":"p-review"}}}' ;;
-  "pane send-text") exit 0 ;;
-  *) exit 0 ;;
-esac
-HEOF
-chmod +x "$tmp/bin/herdr"
 export PATH="$tmp/bin:$PATH"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
@@ -81,9 +69,8 @@ echo "# rules" > "$repo/AGENTS.md"
 git -C "$repo" add . && git -C "$repo" commit -qm init
 cd "$repo"
 
-: > "$HERDR_LOG"
-HERDR_ENV=1 "$tmp/lead" work --mode review 42 || fail "lead work --mode review 42 failed"
-grep -q "lead lgtm 42" "$HERDR_LOG" || fail "review prompt with lgtm instruction not sent: $(cat "$HERDR_LOG")"
-grep -q "review body text" "$HERDR_LOG" || fail "review body not sent: $(cat "$HERDR_LOG")"
+out="$("$tmp/lead" work --mode review 42)" || fail "lead work --mode review 42 failed"
+echo "$out" | grep -qF "lead lgtm 42" || fail "review prompt with lgtm instruction not printed: $out"
+echo "$out" | grep -qF "review body text" || fail "review body not printed: $out"
 
 echo "lgtm and review workflow behavioral checks passed"

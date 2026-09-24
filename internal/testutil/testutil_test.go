@@ -107,30 +107,6 @@ func TestFakeGhClient_ServesCannedIssuesAndRecordsCalls(t *testing.T) {
 	}
 }
 
-func TestFakeHerdrRunner_RecordsSplitAndSend(t *testing.T) {
-	f := &FakeHerdrRunner{}
-	ctx := context.Background()
-
-	id, err := f.Split(ctx, ports.DirectionRight, 0.5)
-	if err != nil || id != "fake-pane" {
-		t.Fatalf("Split = %q, %v; want fake-pane, nil", id, err)
-	}
-	if err := f.SendText(ctx, id, `agy -i "hi"`); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
-	if len(f.Splits) != 1 || f.Splits[0].Dir != ports.DirectionRight || f.Splits[0].Ratio != 0.5 {
-		t.Errorf("splits = %+v, want one right/0.5 call", f.Splits)
-	}
-	if len(f.Sends) != 1 || f.Sends[0].Text != `agy -i "hi"` {
-		t.Errorf("sends = %+v, want prepared command recorded", f.Sends)
-	}
-
-	f.SplitErr = errBoom
-	if _, err := f.Split(ctx, ports.DirectionRight, 0.5); err != errBoom {
-		t.Errorf("Split error = %v, want injected %v", err, errBoom)
-	}
-}
-
 func TestFakeAgentLauncher_RecordsLaunches(t *testing.T) {
 	f := &FakeAgentLauncher{}
 	ctx := context.Background()

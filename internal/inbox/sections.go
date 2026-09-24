@@ -76,7 +76,6 @@ type Item struct {
 	Attempts  int
 	PID       int
 	LogPath   string
-	Pane      string
 	Branch    string
 	PRNumber  int
 	MergedAt  time.Time
@@ -130,7 +129,7 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 	}
 	enrich := func(it Item) Item {
 		if w, ok := byIssue[it.Number]; ok {
-			it.Agent, it.Attempts, it.PID, it.LogPath, it.Pane, it.Branch, it.PRNumber = w.Agent, w.Attempts, w.PID, w.LogPath, w.Pane, w.Branch, firstPRNumber(w.PullRequests)
+			it.Agent, it.Attempts, it.PID, it.LogPath, it.Branch, it.PRNumber = w.Agent, w.Attempts, w.PID, w.LogPath, w.Branch, firstPRNumber(w.PullRequests)
 		}
 		return it
 	}
@@ -206,7 +205,7 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		if bo.OpenNumbers != nil && !bo.OpenNumbers[w.Issue] {
 			continue
 		}
-		it := Item{Number: w.Issue, Title: strings.TrimSpace(w.Branch), Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Pane: w.Pane, Branch: w.Branch, PRNumber: firstPRNumber(w.PullRequests), StartedAt: w.StartedAt, Kind: KindRunning}
+		it := Item{Number: w.Issue, Title: strings.TrimSpace(w.Branch), Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Branch: w.Branch, PRNumber: firstPRNumber(w.PullRequests), StartedAt: w.StartedAt, Kind: KindRunning}
 		running.Items = append(running.Items, it)
 	}
 
