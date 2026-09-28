@@ -111,7 +111,7 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return Result{}, err
 	}
 	if !ok {
-		return Result{}, fmt.Errorf("no workflow for #%d; run `lead work %d` first", issue, issue)
+		return Result{}, fmt.Errorf("no workflow for #%d; run `lead run %d` first", issue, issue)
 	}
 
 	prNumber := opts.PR

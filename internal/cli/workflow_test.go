@@ -78,7 +78,7 @@ func TestWork_CreatesBranchAndRecordsState(t *testing.T) {
 	repo := initRepo(t)
 	deps, _, stateFile := workflowDeps(t, repo)
 
-	out, err := executeWith(t, deps, "work", "36")
+	out, err := executeWith(t, deps, "run", "36")
 	if err != nil {
 		t.Fatalf("work 36: %v\n%s", err, out)
 	}
@@ -102,10 +102,10 @@ func TestWork_IsIdempotent(t *testing.T) {
 	repo := initRepo(t)
 	deps, _, stateFile := workflowDeps(t, repo)
 
-	if _, err := executeWith(t, deps, "work", "36"); err != nil {
+	if _, err := executeWith(t, deps, "run", "36"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := executeWith(t, deps, "work", "36"); err != nil {
+	if _, err := executeWith(t, deps, "run", "36"); err != nil {
 		t.Fatalf("re-work 36: %v, want idempotent success", err)
 	}
 	if all := loadState(t, stateFile); len(all) != 1 {
@@ -117,7 +117,7 @@ func TestWork_WithAutoWorktree(t *testing.T) {
 	repo := initRepo(t)
 	deps, _, stateFile := workflowDeps(t, repo)
 
-	if _, err := executeWith(t, deps, "work", "36", "--worktree"); err != nil {
+	if _, err := executeWith(t, deps, "run", "36", "--worktree"); err != nil {
 		t.Fatalf("work --worktree: %v", err)
 	}
 	all := loadState(t, stateFile)
@@ -134,7 +134,7 @@ func TestWork_WithExplicitWorktree(t *testing.T) {
 	deps, _, stateFile := workflowDeps(t, repo)
 	custom := filepath.Join(t.TempDir(), "custom-wt")
 
-	if _, err := executeWith(t, deps, "work", "36", "--worktree="+custom); err != nil {
+	if _, err := executeWith(t, deps, "run", "36", "--worktree="+custom); err != nil {
 		t.Fatalf("work --worktree custom: %v", err)
 	}
 	if all := loadState(t, stateFile); len(all) != 1 || all[0].Worktree != custom {
@@ -149,7 +149,7 @@ func TestWork_WithoutNumberEmptyList(t *testing.T) {
 	// not the non-TTY failure (covered by test_cli_skeleton.sh §5).
 	deps.Selector = &tui.FakeSelector{}
 
-	out, err := executeWith(t, deps, "work")
+	out, err := executeWith(t, deps, "run")
 	if err != nil {
 		t.Fatalf("work with empty list: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestWork_InvalidNumberFails(t *testing.T) {
 	repo := initRepo(t)
 	deps, _, _ := workflowDeps(t, repo)
 
-	if _, err := executeWith(t, deps, "work", "abc"); err == nil {
+	if _, err := executeWith(t, deps, "run", "abc"); err == nil {
 		t.Error("work abc = nil, want number parse failure")
 	}
 }
@@ -172,7 +172,7 @@ func TestWork_UnknownIssuePropagates(t *testing.T) {
 	deps, fake, _ := workflowDeps(t, repo)
 	fake.Issues = map[int]ports.Issue{}
 
-	if _, err := executeWith(t, deps, "work", "999"); err == nil {
+	if _, err := executeWith(t, deps, "run", "999"); err == nil {
 		t.Error("work 999 (unknown) = nil, want propagation")
 	}
 }
@@ -188,7 +188,7 @@ func TestStatus_ListsWorkflows(t *testing.T) {
 	if !strings.Contains(out, "no workflows") {
 		t.Errorf("empty status = %q, want 'no workflows' message", out)
 	}
-	if _, err := executeWith(t, deps, "work", "36"); err != nil {
+	if _, err := executeWith(t, deps, "run", "36"); err != nil {
 		t.Fatal(err)
 	}
 	out, err = executeWith(t, deps, "status")
@@ -205,7 +205,7 @@ func TestStatus_ListsWorkflows(t *testing.T) {
 func TestStatus_JSON(t *testing.T) {
 	repo := initRepo(t)
 	deps, _, _ := workflowDeps(t, repo)
-	if _, err := executeWith(t, deps, "work", "36"); err != nil {
+	if _, err := executeWith(t, deps, "run", "36"); err != nil {
 		t.Fatal(err)
 	}
 	out, err := executeWith(t, deps, "status", "--json")
@@ -362,7 +362,7 @@ func TestStatus_CorruptFileSurfacesError(t *testing.T) {
 func TestClean_RemovesWorktreeAndRecord(t *testing.T) {
 	repo := initRepo(t)
 	deps, _, stateFile := workflowDeps(t, repo)
-	if _, err := executeWith(t, deps, "work", "36", "--worktree"); err != nil {
+	if _, err := executeWith(t, deps, "run", "36", "--worktree"); err != nil {
 		t.Fatal(err)
 	}
 	wt := loadState(t, stateFile)[0].Worktree
@@ -398,7 +398,7 @@ func TestWork_PropagatesMissingGit(t *testing.T) {
 	testutil.EmptyBin(t) // hides git (gh fake is in-memory, unaffected)
 
 	// RepoRoot runs `git`, so work must surface the missing binary.
-	if _, err := executeWith(t, deps, "work", "36"); err == nil {
+	if _, err := executeWith(t, deps, "run", "36"); err == nil {
 		t.Error("work with no git = nil, want failure")
 	}
 	_ = context.Background
@@ -415,7 +415,7 @@ func TestWork_AlwaysInlineNeverHerdr(t *testing.T) {
 		fake.Issues[36] = ports.Issue{Number: 36, Title: "ports adapter", Body: "body", State: "OPEN"}
 		t.Setenv("HERDR_ENV", env)
 
-		out, err := executeWith(t, deps, "work", "36")
+		out, err := executeWith(t, deps, "run", "36")
 		if err != nil {
 			t.Fatalf("HERDR_ENV=%q work 36: %v\n%s", env, err, out)
 		}
@@ -457,7 +457,7 @@ func TestWork_InlineFallbackSurfacesCommand(t *testing.T) {
 	repo := initRepo(t)
 	deps, _, _ := workflowDeps(t, repo)
 
-	out, err := executeWith(t, deps, "work", "36")
+	out, err := executeWith(t, deps, "run", "36")
 	if err != nil {
 		t.Fatalf("work 36: %v\n%s", err, out)
 	}
@@ -474,7 +474,7 @@ func TestWork_AgentCommandRespectsAgentFlag(t *testing.T) {
 	deps, fake, _ := workflowDeps(t, repo)
 	fake.Issues[36] = ports.Issue{Number: 36, Title: "ports adapter", Body: "body", State: "OPEN"}
 
-	out, err := executeWith(t, deps, "work", "36", "--agent", "devin")
+	out, err := executeWith(t, deps, "run", "36", "--agent", "devin")
 	if err != nil {
 		t.Fatalf("work 36 --agent devin: %v\n%s", err, out)
 	}
@@ -493,7 +493,7 @@ func TestResume_CLI(t *testing.T) {
 	fake.Issues[36] = ports.Issue{Number: 36, Title: "ports adapter", Body: "body", State: "OPEN"}
 
 	// Start work initially
-	if _, err := executeWith(t, deps, "work", "36"); err != nil {
+	if _, err := executeWith(t, deps, "run", "36"); err != nil {
 		t.Fatalf("work 36: %v", err)
 	}
 
@@ -519,7 +519,7 @@ func TestResume_CLI(t *testing.T) {
 func TestStatus_ShowsResumeInstruction(t *testing.T) {
 	repo := initRepo(t)
 	deps, _, _ := workflowDeps(t, repo)
-	if _, err := executeWith(t, deps, "work", "36"); err != nil {
+	if _, err := executeWith(t, deps, "run", "36"); err != nil {
 		t.Fatal(err)
 	}
 

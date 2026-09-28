@@ -22,7 +22,7 @@ lead doctor
 
 ```mermaid
 flowchart TD
-    A["GitHub Issue 起票 / 確認"] --> B["lead work / lead run で着手"]
+    A["GitHub Issue 起票 / 確認"] --> B["lead run で着手"]
     B --> C["エージェント起動コマンドを標準出力に表示"]
     C --> D["TDD 実装 (Red → Green → Refactor)"]
     D --> E["ローカル全テスト実行 (./test/run-tests.sh)"]
@@ -35,7 +35,7 @@ flowchart TD
 
 ### Step 1: Issue 着手とワークフローの開始
 
-対象の Issue 番号を指定して `lead run`（または互換コマンド `lead work`）を実行します。
+対象の Issue 番号を指定して `lead run` を実行します。
 
 ```sh
 # 通常の実装モード

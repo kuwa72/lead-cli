@@ -58,7 +58,7 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
 
 ## 2.2 ワークフロープロンプト (`prompter.RenderWorkflowPromptWithOptions`, issue #84, #89)
 
-- 用途: `lead work` / `lead run` でエージェントを対話起動する際のプロンプト。
+- 用途: `lead run` でエージェントを対話起動する際のプロンプト。
 - モード:
   - `implement`: TDD での実装（Red/Green/Refactor、テスト全パス、PR 作成）。リポジトリに `AGENTS.md` があれば自動でプロジェクト規約ブロックが注入される。
   - `review`: Issue 本文・受入条件の精緻化、レビュー、OK 時の `lgtm` ラベル付与と LGTM コメント。
@@ -76,16 +76,16 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
     - `{{.Mode}}`: 実行モード
     - `{{.AgentMode}}`: エージェント実行モード (`interactive`, `batch`, `dangerous`)
     - `{{.Rules}}`: リポジトリの `AGENTS.md` の内容（未設定時は空）
-- エージェント選択 (issue #214): `run`/`work`/`dispatch` は
+- エージェント選択 (issue #214): `run`/`dispatch` は
   `--agent` → inbox 設定（`inbox-config.json` の `agent`）→ 既定（`agy`）。
   `resume` は `--agent` → state 記録の前回エージェント → inbox 設定 → 既定（`agy`）。
-  ピッカー経路（番号なし `run`/`work`）でエージェント未指定の場合も同じ解決順。
+  ピッカー経路（番号なし `run`）でエージェント未指定の場合も同じ解決順。
 
 ## 2.3 ラベル運用とピッカー分岐 (issue #89)
 
 - ラベル状態:
-  - `lgtm`: 着手可能な Issue。`lead work` の通常ピッカーに表示される。
-  - `needs-review` / ラベルなし: レビュー待ち・未レビュー Issue。`lead work --mode review` のピッカーに表示される。
+  - `lgtm`: 着手可能な Issue。`lead run` の通常ピッカーに表示される。
+  - `needs-review` / ラベルなし: レビュー待ち・未レビュー Issue。`lead run --mode review` のピッカーに表示される。
 - 手動ラベル操作:
   - `lead lgtm <number>`: `lgtm` ラベルを付与し、`LGTM` コメントを投稿する。
   - `lead unlgtm <number>`: `lgtm` ラベルを削除する。

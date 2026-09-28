@@ -29,6 +29,7 @@ done
 # 2. 未知サブコマンドは非ゼロ終了すること
 "$tmp/lead" no-such-command >/dev/null 2>&1 && fail "unknown subcommand exited 0"
 "$tmp/lead" init >/dev/null 2>&1 && fail "removed init alias exited 0"
+"$tmp/lead" work --help >/dev/null 2>&1 && fail "removed work alias exited 0"
 "$tmp/lead" run --bogus-flag >/dev/null 2>&1 && fail "unknown flag exited 0"
 
 # 3. version は注入された版数情報を表示すること

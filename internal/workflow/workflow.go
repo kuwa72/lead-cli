@@ -1,4 +1,4 @@
-// Package workflow implements the branch/worktree/state half of `lead work`
+// Package workflow implements the branch/worktree/state half of `lead run`
 // (issue #40 core, shared by the CLI and the #48 socket server so both
 // entry points produce identical records).
 package workflow

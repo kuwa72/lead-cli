@@ -346,7 +346,6 @@ number, the embedded picker selects the issue. Normal operation is
 		return c
 	}
 	runCmd := newRunCmd("run", false)
-	workCmd := newRunCmd("work", true)
 
 	resumeCmd := &cobra.Command{
 		Use:   "resume <issue|branch|pr>",
@@ -631,7 +630,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, workCmd, resumeCmd, statusCmd, cleanCmd, stopCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, cleanCmd, stopCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	return root
 }
@@ -910,7 +909,7 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 	return err
 }
 
-// runWorkTUI implements `lead work` without a number: embedded picker
+// runWorkTUI implements `lead run` without a number: embedded picker
 // (issue list + cached preview, then agent/browser action).
 func runWorkTUI(cmd *cobra.Command, deps Deps) error {
 	ctx := cmd.Context()

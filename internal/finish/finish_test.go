@@ -299,7 +299,7 @@ func TestRun_NoRecordFails(t *testing.T) {
 	if _, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
 		Merge: true, Timeout: time.Minute, Sleep: noSleep,
 	}); err == nil {
-		t.Error("Run without record = nil, want guidance to `lead work` first")
+		t.Error("Run without record = nil, want guidance to `lead run` first")
 	}
 }
 

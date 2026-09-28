@@ -426,7 +426,7 @@ func (m Model) previewLines(w, h int) []string {
 			lines = append(lines, "")
 			lines = append(lines, "Getting started:")
 			lines = append(lines, "  • Press 's' to create a new issue (AI / manual)")
-			lines = append(lines, "  • Run 'lead work' in terminal to pick any open issue")
+			lines = append(lines, "  • Run 'lead run' in terminal to pick any open issue")
 			if m.repoOpenCount > 0 {
 				lines = append(lines, "  • Label existing issue to show here:")
 				lines = append(lines, "    gh issue edit <n> --add-label needs-review")

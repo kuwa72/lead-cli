@@ -50,14 +50,14 @@ cd "$repo"
 STATE="$HOME/.local/state/lead/workflows.json"
 
 # 1. work 36 --worktree: worktree作成・状態記録
-"$tmp/lead" work 36 --worktree || fail "lead work 36 --worktree failed"
+"$tmp/lead" run 36 --worktree || fail "lead run 36 --worktree failed"
 [ -f "$repo/.worktrees/issue-36/f.txt" ] || fail "auto worktree not checked out"
 [ -f "$STATE" ] || fail "state file not created under temp HOME"
 python3 -c "import json;d=json.load(open('$STATE'));assert len(d['workflows'])==1 and d['workflows'][0]['issue']==36, d" \
   || fail "state record missing for #36"
 
 # 2. 再実行は冪等 (レコード単一・終了0)
-"$tmp/lead" work 36 --worktree || fail "re-work failed"
+"$tmp/lead" run 36 --worktree || fail "re-work failed"
 python3 -c "import json;d=json.load(open('$STATE'));assert len(d['workflows'])==1, d" \
   || fail "re-work duplicated records"
 
@@ -78,7 +78,7 @@ case "$clean_status" in *"no workflows"*) ;; *) fail "records remain after clean
 "$tmp/lead" clean 36 >/dev/null || fail "re-clean failed"
 
 # 6. 番号なし work は #37 TUI待ちで非ゼロ
-"$tmp/lead" work >/dev/null 2>&1 && fail "bare 'lead work' exited 0"
+"$tmp/lead" run >/dev/null 2>&1 && fail "bare 'lead run' exited 0"
 
 # 7. 壊れた状態ファイルは警告付きエラー (上書きしない)
 echo '{broken' > "$STATE"

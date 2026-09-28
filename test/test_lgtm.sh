@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# issue #89: lead lgtm / unlgtm および lead work --mode review の振る舞いテスト。
+# issue #89: lead lgtm / unlgtm および lead run --mode review の振る舞いテスト。
 # ソースコードのgrepではなく、ダミーghへの引数ログと標準出力・終了ステータスをアサートする。
 set -euo pipefail
 
@@ -60,7 +60,7 @@ grep -q "issue edit 42 --remove-label lgtm" "$GH_LOG" || fail "lgtm label not re
 "$tmp/lead" unlgtm >/dev/null 2>&1 && fail "lead unlgtm without args should fail"
 "$tmp/lead" unlgtm abc >/dev/null 2>&1 && fail "lead unlgtm with invalid number should fail"
 
-# 4. lead work --mode review 42: review prompt passed to agent
+# 4. lead run --mode review 42: review prompt passed to agent
 repo="$tmp/repo"
 git init -q -b main "$repo"
 git -C "$repo" config user.email "t@t"
@@ -69,7 +69,7 @@ echo "# rules" > "$repo/AGENTS.md"
 git -C "$repo" add . && git -C "$repo" commit -qm init
 cd "$repo"
 
-out="$("$tmp/lead" work --mode review 42)" || fail "lead work --mode review 42 failed"
+out="$("$tmp/lead" run --mode review 42)" || fail "lead run --mode review 42 failed"
 echo "$out" | grep -qF "lead lgtm 42" || fail "review prompt with lgtm instruction not printed: $out"
 echo "$out" | grep -qF "review body text" || fail "review body not printed: $out"
 

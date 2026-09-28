@@ -54,7 +54,7 @@ func execute(t *testing.T, args ...string) (stdout, stderr string, err error) {
 }
 
 func TestEachCommandHelpRenders(t *testing.T) {
-	for _, cmd := range []string{"version", "work", "status", "clean", "finish", "server", "api", "setup", "completion", "doctor", "update", "enable", "disable"} {
+	for _, cmd := range []string{"version", "run", "status", "clean", "finish", "server", "api", "setup", "completion", "doctor", "update", "enable", "disable"} {
 		stdout, _, err := execute(t, cmd, "--help")
 		if err != nil {
 			t.Errorf("lead %s --help: %v, want exit 0", cmd, err)
@@ -71,7 +71,7 @@ func TestRootHelpListsCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lead --help: %v, want exit 0", err)
 	}
-	for _, cmd := range []string{"work", "status", "clean", "finish", "server", "api", "setup", "completion", "doctor", "update", "enable", "version"} {
+	for _, cmd := range []string{"run", "status", "clean", "finish", "server", "api", "setup", "completion", "doctor", "update", "enable", "version"} {
 		if !strings.Contains(stdout, cmd) {
 			t.Errorf("lead --help missing %q, got:\n%s", cmd, stdout)
 		}
@@ -409,9 +409,9 @@ func TestBareLeadHeadlessKeysReachGh(t *testing.T) {
 }
 
 func TestUnknownFlagFails(t *testing.T) {
-	_, _, err := execute(t, "work", "--bogus-flag")
+	_, _, err := execute(t, "run", "--bogus-flag")
 	if err == nil {
-		t.Fatal("lead work --bogus-flag = nil error, want flag parse failure")
+		t.Fatal("lead run --bogus-flag = nil error, want flag parse failure")
 	}
 }
 
@@ -443,17 +443,17 @@ func TestVersionPrintsStampedFields(t *testing.T) {
 	}
 }
 
-// NOTE: bare `lead work` (picker path) is covered by tui_test.go with
+// NOTE: bare `lead run` (picker path) is covered by tui_test.go with
 // FakeSelector plus test/test_tui_picker.sh via LEAD_TEST_SELECTION.
 // It is intentionally not exercised here with production defaults:
 // that would list real issues and touch the TTY.
 
-// Flags are parsed without executing the command: running `work 36` with
+// Flags are parsed without executing the command: running `run 36` with
 // production defaults reached the real gh and git checkout (issue #96).
 // TestMain additionally guards against a regression.
 func TestWorkAcceptsDocumentedFlags(t *testing.T) {
 	root := NewRootCmd("v0.0.0-test", "abc1234", "2026-09-07")
-	work, _, err := root.Find([]string{"work"})
+	work, _, err := root.Find([]string{"run"})
 	if err != nil || work == nil {
 		t.Fatalf("work command not found: %v", err)
 	}

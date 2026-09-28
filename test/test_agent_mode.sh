@@ -49,7 +49,7 @@ cd "$repo"
 STATE="$HOME/.local/state/lead/workflows.json"
 
 # 1. Test default agent (agy) with --agent-mode batch
-out_batch=$("$tmp/lead" work 83 --agent-mode batch)
+out_batch=$("$tmp/lead" run 83 --agent-mode batch)
 echo "$out_batch" | grep -F -- "--dangerously-skip-permissions" > /dev/null || fail "missing --dangerously-skip-permissions in batch output"
 echo "$out_batch" | grep -F -- " -p " > /dev/null || fail "missing -p in batch output"
 
@@ -58,13 +58,13 @@ python3 -c "import json; d=json.load(open('$STATE')); assert d['workflows'][0]['
 
 # 2. Test claude with --agent-mode dangerous
 "$tmp/lead" clean 83 > /dev/null 2>&1 || true
-out_claude=$("$tmp/lead" work 83 --agent claude --agent-mode dangerous)
+out_claude=$("$tmp/lead" run 83 --agent claude --agent-mode dangerous)
 echo "$out_claude" | grep -F -- "claude -p --dangerously-skip-permissions" > /dev/null || fail "missing claude batch flags"
 python3 -c "import json; d=json.load(open('$STATE')); assert d['workflows'][0]['agent_mode'] == 'dangerous', d['workflows'][0]" || fail "state agent_mode != dangerous"
 
 # 3. Test default (interactive) mode
 "$tmp/lead" clean 83 > /dev/null 2>&1 || true
-out_interactive=$("$tmp/lead" work 83 --agent agy --agent-mode interactive)
+out_interactive=$("$tmp/lead" run 83 --agent agy --agent-mode interactive)
 echo "$out_interactive" | grep -F -- "agy -i " > /dev/null || fail "missing agy -i in interactive output"
 python3 -c "import json; d=json.load(open('$STATE')); assert d['workflows'][0].get('agent_mode', 'interactive') == 'interactive', d['workflows'][0]" || fail "state agent_mode != interactive"
 
