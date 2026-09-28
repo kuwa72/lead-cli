@@ -79,7 +79,7 @@ repo_a="$tmp/repo-a"; mk_repo "$repo_a"
 export LEAD_STATE_FILE="$tmp/state-a.json" GH_MODE=pass
 : > "$GH_ARGS_LOG"; rm -f "$GH_COUNT"
 cd "$repo_a"
-"$tmp/lead" work 36 >/dev/null || fail "scenario A: work failed"
+"$tmp/lead" run 36 >/dev/null || fail "scenario A: work failed"
 finish_out="$("$tmp/lead" finish 36 --pr 7 --merge --close --comment done \
   --timeout 60s --poll-interval 1s)" || fail "scenario A: finish failed: $finish_out"
 case "$finish_out" in *"merged"*closed*) ;; *) fail "scenario A: missing merge+close report: $finish_out";; esac
@@ -95,7 +95,7 @@ repo_b="$tmp/repo-b"; mk_repo "$repo_b"
 export LEAD_STATE_FILE="$tmp/state-b.json" GH_MODE=fail
 : > "$GH_ARGS_LOG"; rm -f "$GH_COUNT"
 cd "$repo_b"
-"$tmp/lead" work 36 >/dev/null || fail "scenario B: work failed"
+"$tmp/lead" run 36 >/dev/null || fail "scenario B: work failed"
 "$tmp/lead" finish 36 --pr 7 --merge --close --timeout 30s --poll-interval 1s >/dev/null 2>&1 \
   && fail "scenario B: finish on failing CI exited 0"
 grep -q "GHLOG pr merge" "$GH_ARGS_LOG" && fail "scenario B: merge attempted despite failing CI"
@@ -109,7 +109,7 @@ git -C "$repo_c" remote add origin https://github.com/o/r.git
 export LEAD_STATE_FILE="$tmp/state-c.json" GH_MODE=noauto
 : > "$GH_ARGS_LOG"; rm -f "$GH_COUNT"
 cd "$repo_c"
-"$tmp/lead" work 36 >/dev/null || fail "scenario C: work failed"
+"$tmp/lead" run 36 >/dev/null || fail "scenario C: work failed"
 fallback_out="$("$tmp/lead" finish 36 --pr 7 --timeout 60s --poll-interval 1s)" \
   || fail "scenario C: fallback pause exited non-zero"
 case "$fallback_out" in *"auto-merge"*) ;; *) fail "scenario C: missing auto-merge fallback display: $fallback_out";; esac
@@ -122,7 +122,7 @@ export LEAD_STATE_FILE="$tmp/state-d.json" GH_MODE=pass
 export GH_FILES="$(printf 'internal/x.go\nAGENTS.md\n.github/workflows/ci.yml')"
 : > "$GH_ARGS_LOG"; rm -f "$GH_COUNT"
 cd "$repo_d"
-"$tmp/lead" work 36 >/dev/null || fail "scenario D: work failed"
+"$tmp/lead" run 36 >/dev/null || fail "scenario D: work failed"
 guard_out="$("$tmp/lead" finish 36 --pr 7 --timeout 60s --poll-interval 1s)" \
   || fail "scenario D: guardrail pause exited non-zero: $guard_out"
 case "$guard_out" in *AGENTS.md*".github/workflows/ci.yml"*confirm*"--merge"*) ;; *) fail "scenario D: message must name files and point to --merge: $guard_out";; esac

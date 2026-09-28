@@ -31,7 +31,7 @@ func TestWorkTUI_SelectsIssueAndStartsWork(t *testing.T) {
 	deps, _, stateFile := tuiDeps(t, repo,
 		tui.Selection{IssueNumber: 36, Agent: "devin", Action: tui.ActionWork}, nil)
 
-	out, err := executeWith(t, deps, "work")
+	out, err := executeWith(t, deps, "run")
 	if err != nil {
 		t.Fatalf("TUI work: %v\n%s", err, out)
 	}
@@ -50,7 +50,7 @@ func TestWorkTUI_BrowserOpensWithoutWork(t *testing.T) {
 	deps, fake, stateFile := tuiDeps(t, repo,
 		tui.Selection{IssueNumber: 36, Action: tui.ActionBrowse}, nil)
 
-	out, err := executeWith(t, deps, "work")
+	out, err := executeWith(t, deps, "run")
 	if err != nil {
 		t.Fatalf("TUI browse: %v\n%s", err, out)
 	}
@@ -69,7 +69,7 @@ func TestWorkTUI_AbortCancelsCleanly(t *testing.T) {
 	repo := initRepo(t)
 	deps, fake, stateFile := tuiDeps(t, repo, tui.Selection{}, tui.ErrAborted)
 
-	_, err := executeWith(t, deps, "work")
+	_, err := executeWith(t, deps, "run")
 	if err == nil {
 		t.Fatal("aborted TUI work = nil, want abort error")
 	}
@@ -87,7 +87,7 @@ func TestWorkTUI_EmptyListReportsCleanly(t *testing.T) {
 	deps := Deps{Gh: fake, StateFile: t.TempDir() + "/wf.json", WorkDir: repo,
 		Selector: &tui.FakeSelector{}}
 
-	out, err := executeWith(t, deps, "work")
+	out, err := executeWith(t, deps, "run")
 	if err != nil {
 		t.Fatalf("empty-list work: %v", err)
 	}

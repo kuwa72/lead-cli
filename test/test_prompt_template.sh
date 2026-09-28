@@ -63,20 +63,20 @@ CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 cd "$repo"
 
 # The agent command (with the rendered prompt) is printed inline on stdout.
-# 1. Test custom template selection via --prompt-template on `lead work`
-out="$("$tmp/lead" work 84 --prompt-template custom)" || fail "lead work 84 with --prompt-template failed"
+# 1. Test custom template selection via --prompt-template on `lead run`
+out="$("$tmp/lead" run 84 --prompt-template custom)" || fail "lead run 84 with --prompt-template failed"
 echo "$out" | grep -F "CUSTOM_PROMPT_HEADER" > /dev/null || fail "output missing CUSTOM_PROMPT_HEADER: $out"
 echo "$out" | grep -F "Issue: #84" > /dev/null || fail "output missing Issue: #84: $out"
 echo "$out" | grep -F 'TDD required: Red -> Green -> Refactor' > /dev/null || fail "output missing AGENTS.md content: $out"
 echo "$out" | grep -F "Branch: issue/84-" > /dev/null || fail "output missing branch: $out"
 
 # 2. Test default implement template automatically includes AGENTS.md in ## プロジェクト規約
-out="$("$tmp/lead" work 85)" || fail "lead work 85 default template failed"
+out="$("$tmp/lead" run 85)" || fail "lead run 85 default template failed"
 echo "$out" | grep -F '## プロジェクト規約' > /dev/null || fail "output missing ## プロジェクト規約: $out"
 echo "$out" | grep -F 'TDD required: Red -> Green -> Refactor' > /dev/null || fail "output missing AGENTS.md rules in default template: $out"
 
 # 3. Test built-in review template selection via --prompt-template review
-out="$("$tmp/lead" work 86 --prompt-template review)" || fail "lead work 86 --prompt-template review failed"
+out="$("$tmp/lead" run 86 --prompt-template review)" || fail "lead run 86 --prompt-template review failed"
 echo "$out" | grep -F "lead lgtm 86" > /dev/null || fail "output missing lead lgtm 86: $out"
 
 # 4. Test `lead run` with --prompt-template

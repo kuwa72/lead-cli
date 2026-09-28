@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # issue #225: herdr pane/tab integration removed. With HERDR_ENV=1 and a
-# logging dummy herdr on PATH, `lead work`/`lead resume` must print
+# logging dummy herdr on PATH, `lead run`/`lead resume` must print
 # `cd <dir> && <agent cmd>` on stdout without invoking herdr, and inbox `p`
 # must open the agent log via $PAGER (lead built-in log display).
 set -euo pipefail
@@ -63,13 +63,13 @@ CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 cd "$repo"
 
 # --- 1. work under HERDR_ENV=1: inline command on stdout, herdr silent ------
-out="$(HERDR_ENV=1 "$tmp/lead" work 36 2>&1)" || fail "lead work 36 failed: $out"
+out="$(HERDR_ENV=1 "$tmp/lead" run 36 2>&1)" || fail "lead run 36 failed: $out"
 echo "$out" | grep -F "cd \"$repo\" && agy -i \"" >/dev/null \
   || fail "work stdout missing inline agent command: $out"
 [ ! -s "$HERDR_LOG" ] || fail "work invoked herdr: $(cat "$HERDR_LOG")"
 
 # --- 2. HERDR_ENV unset: identical inline behavior ----------------------------
-out2="$(env -u HERDR_ENV "$tmp/lead" work 36 2>&1)" || fail "re-work failed: $out2"
+out2="$(env -u HERDR_ENV "$tmp/lead" run 36 2>&1)" || fail "re-work failed: $out2"
 echo "$out2" | grep -F "cd \"$repo\" && agy -i \"" >/dev/null \
   || fail "work without HERDR_ENV differs: $out2"
 [ ! -s "$HERDR_LOG" ] || fail "herdr invoked: $(cat "$HERDR_LOG")"

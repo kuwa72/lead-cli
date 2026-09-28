@@ -48,8 +48,8 @@ export PATH="$tmp/bin:$PATH"
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 cd "$repo"
 
-# 1. lead work 72 --worktree --agent codex
-out_codex=$("$tmp/lead" work 72 --worktree --agent codex)
+# 1. lead run 72 --worktree --agent codex
+out_codex=$("$tmp/lead" run 72 --worktree --agent codex)
 
 # Verify displayed output includes issue number, worktree dir, and agent name
 echo "$out_codex" | grep -F "Issue #72" > /dev/null || fail "output missing Issue #72: $out_codex"
@@ -63,8 +63,8 @@ echo "$out_codex" | grep -F "Agent: codex" > /dev/null || fail "output missing A
 echo "$out_codex" | grep -F "cd \"$repo/.worktrees/issue-72\" && codex" > /dev/null \
   || fail "output lacks cd to worktree for codex: $out_codex"
 
-# 2. lead work 73 without --worktree --agent claude: runs in repo root
-out_claude=$("$tmp/lead" work 73 --agent claude)
+# 2. lead run 73 without --worktree --agent claude: runs in repo root
+out_claude=$("$tmp/lead" run 73 --agent claude)
 
 # Verify displayed output includes issue number, repo root as Dir, and agent name
 echo "$out_claude" | grep -F "Issue #73" > /dev/null || fail "output missing Issue #73: $out_claude"
@@ -78,7 +78,7 @@ echo "$out_claude" | grep -F "cd \"$repo\" && claude" > /dev/null \
 # 3. Verify all other agents in worktree
 for agent_name in agy devin opencode gemini; do
   issue_num=$((100 + RANDOM % 800))
-  out_agent=$("$tmp/lead" work "$issue_num" --worktree --agent "$agent_name")
+  out_agent=$("$tmp/lead" run "$issue_num" --worktree --agent "$agent_name")
   echo "$out_agent" | grep -F "Issue #$issue_num" > /dev/null || fail "output missing Issue #$issue_num"
   echo "$out_agent" | grep -F "Worktree: $repo/.worktrees/issue-$issue_num" > /dev/null || fail "output missing worktree for $agent_name"
   echo "$out_agent" | grep -F "Agent: $agent_name" > /dev/null || fail "output missing Agent: $agent_name"

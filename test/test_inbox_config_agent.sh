@@ -138,7 +138,7 @@ grep -qxF '<exec>' "$tmp/codex.log" || fail "dispatch did not run codex exec: $(
 
 # work 36 prints `cd <dir> && claude "<prompt>"` inline; herdr stays silent.
 : > "$HERDR_LOG"
-out="$(cd "$repo" && "$tmp/lead" work 36 2>&1)" || fail "work 36 exited non-zero: $out"
+out="$(cd "$repo" && "$tmp/lead" run 36 2>&1)" || fail "work 36 exited non-zero: $out"
 case "$out" in *"Agent: claude"*) ;; *) fail "work output lacks 'Agent: claude': $out";; esac
 case "$out" in *'claude "'*) ;; *) fail "work output lacks claude command: $out";; esac
 [ ! -s "$HERDR_LOG" ] || fail "work must not invoke herdr: $(cat "$HERDR_LOG")"
@@ -193,7 +193,7 @@ grep -qxF '<--print-timeout>' "$tmp/agy.log" || fail "no config: dispatch did no
 
 # no config file → work prints agy -i inline.
 rm -f "$LEAD_STATE_FILE"
-out="$(cd "$repo" && "$tmp/lead" work 36 2>&1)" || fail "work without config failed: $out"
+out="$(cd "$repo" && "$tmp/lead" run 36 2>&1)" || fail "work without config failed: $out"
 case "$out" in *"Agent: agy"*) ;; *) fail "work without config lacks 'Agent: agy': $out";; esac
 case "$out" in *'agy -i "'*) ;; *) fail "work output lacks agy -i command: $out";; esac
 

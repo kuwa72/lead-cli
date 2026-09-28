@@ -165,7 +165,7 @@ func TestWork_InboxConfigAgentIsDefault(t *testing.T) {
 	deps, _, stateFile := workflowDeps(t, repo)
 	writeInboxConfig(t, stateFile, `{"agent":"claude"}`)
 
-	out, err := executeWith(t, deps, "work", "36")
+	out, err := executeWith(t, deps, "run", "36")
 	if err != nil {
 		t.Fatalf("work 36: %v\n%s", err, out)
 	}

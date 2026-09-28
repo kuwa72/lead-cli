@@ -165,9 +165,9 @@ kill -0 "$sleeper" 2>/dev/null && fail "stalled agent pid $sleeper still alive"
 grep -q '"attempts": 1' "$LEAD_STATE_FILE" || fail "attempt not counted: $(cat "$LEAD_STATE_FILE")"
 rm -f "$tmp/state/inbox-config.json" "$LEAD_STATE_FILE"
 
-# --- 3. run keeps work as hidden alias ----------------------------------------
+# --- 3. work alias is removed (backward-compat policy: no hidden aliases) -----
 "$tmp/lead" run --help | grep -q "lead run" || fail "lead run --help missing usage"
-"$tmp/lead" work --help >/dev/null 2>&1 || fail "lead work alias broken"
+"$tmp/lead" work --help >/dev/null 2>&1 && fail "lead work alias still works"
 "$tmp/lead" --help | grep -qE '^[[:space:]]+work[[:space:]]' && fail "work alias should be hidden from root help"
 "$tmp/lead" --help | grep -qE '^[[:space:]]+(run|dispatch)[[:space:]]' || fail "root help missing run/dispatch"
 

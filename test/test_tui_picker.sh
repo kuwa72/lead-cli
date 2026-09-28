@@ -64,7 +64,7 @@ CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 cd "$repo"
 
 # --- 1. work (no number) with work selection: branch + state + cached preview ---
-LEAD_TEST_SELECTION=36:agy "$tmp/lead" work || fail "TUI work selection failed"
+LEAD_TEST_SELECTION=36:agy "$tmp/lead" run || fail "TUI work selection failed"
 git -C "$repo" rev-parse --verify --quiet refs/heads/issue/36-ports-adapter >/dev/null \
   || fail "work branch not created via picker"
 [ -f "$XDG_CACHE_HOME/lead/issues/36.json" ] || fail "preview cache not written"
@@ -72,7 +72,7 @@ grep -q "GHLOG issue view 36 --json" "$GH_ARGS_LOG" || fail "preview did not fet
 
 # --- 2. second run: preview served from cache (no new gh view call) ---
 views_before=$(grep -c "GHLOG issue view 36 --json" "$GH_ARGS_LOG")
-LEAD_TEST_SELECTION=36:agy "$tmp/lead" work >/dev/null || fail "re-work via picker failed"
+LEAD_TEST_SELECTION=36:agy "$tmp/lead" run >/dev/null || fail "re-work via picker failed"
 views_after=$(grep -c "GHLOG issue view 36 --json" "$GH_ARGS_LOG")
 [ "$views_after" = "$views_before" ] || fail "cache miss: gh view calls $views_before -> $views_after"
 
@@ -80,7 +80,7 @@ views_after=$(grep -c "GHLOG issue view 36 --json" "$GH_ARGS_LOG")
 git -C "$repo" checkout -q main
 git -C "$repo" branch -D issue/36-ports-adapter >/dev/null 2>&1 || true
 rm -f "$HOME/.local/state/lead/workflows.json"
-LEAD_TEST_SELECTION=36:browser "$tmp/lead" work | grep -q "browser" \
+LEAD_TEST_SELECTION=36:browser "$tmp/lead" run | grep -q "browser" \
   || fail "browser selection missing notice"
 grep -q "GHLOG issue view 36 --json url" "$GH_ARGS_LOG" || fail "browser URL not fetched"
 grep -q "GHLOG issue view 36 --web" "$GH_ARGS_LOG" && fail "--web must not be used"
@@ -91,7 +91,7 @@ git -C "$repo" rev-parse --verify --quiet refs/heads/issue/36-ports-adapter >/de
 [ ! -f "$HOME/.local/state/lead/workflows.json" ] || fail "browse recorded state"
 
 # --- 4. invalid hook value: non-zero, TTY untouched ---
-LEAD_TEST_SELECTION=bogus "$tmp/lead" work >/dev/null 2>&1 \
+LEAD_TEST_SELECTION=bogus "$tmp/lead" run >/dev/null 2>&1 \
   && fail "invalid selection exited 0"
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"

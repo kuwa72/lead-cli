@@ -2,7 +2,7 @@
 
 このプロジェクトでは `lead` を使った Issue 駆動開発フローを採用している。ユーザーが `/lead-flow <issue-number>` で作業を指示したら、以下を実行する。
 
-1. `lead work <issue-number>` でブランチ・作業状態を作成する。
+1. `lead run <issue-number>` でブランチ・作業状態を作成する。
 2. TDD：まず失敗するテストを追加し Red を確認してから実装し、Green を確認する。
 3. `./test/run-tests.sh`（または `go test ./...`、プロジェクト固有のテストコマンド）をすべてパスさせる。
 4. `git push -u origin $(git branch --show-current)` でブランチを push する。

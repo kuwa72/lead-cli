@@ -1,7 +1,7 @@
 // Package openurl opens URLs in a browser with environment-aware opener
 // selection (issue #217). gh delegates opener discovery to
 // xdg-open/wslview, which are absent on minimal WSL installs; lead picks
-// the opener itself so `lead work`/`lead inbox` browsing works there.
+// the opener itself so `lead run`/`lead inbox` browsing works there.
 //
 // Selection order (matching gh's own precedence):
 //  1. explicit browser: GH_BROWSER > `gh config get browser` > BROWSER

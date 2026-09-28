@@ -11,14 +11,14 @@ This skill tells you how to work on a GitHub Issue using `lead`.
 
 `/lead-flow <issue-number>`
 
-If the issue number is omitted, ask the user for one or run `lead work` to open the picker.
+If the issue number is omitted, ask the user for one or run `lead run` to open the picker.
 
 ## Steps
 
 1. Start the lead workflow:
 
    ```bash
-   lead work <issue-number>
+   lead run <issue-number>
    ```
 
    If you need a specific agent, add `--agent <name>`.
