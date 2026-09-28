@@ -14,6 +14,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
+	"github.com/kuwa72/lead-cli/internal/tui"
 )
 
 // initRepo creates a git repo with one commit.
@@ -144,6 +145,9 @@ func TestWork_WithExplicitWorktree(t *testing.T) {
 func TestWork_WithoutNumberEmptyList(t *testing.T) {
 	repo := initRepo(t)
 	deps, _, _ := workflowDeps(t, repo) // fake has no summaries
+	// Bypass the picker TTY check: this test covers the empty-list path,
+	// not the non-TTY failure (covered by test_cli_skeleton.sh §5).
+	deps.Selector = &tui.FakeSelector{}
 
 	out, err := executeWith(t, deps, "work")
 	if err != nil {
