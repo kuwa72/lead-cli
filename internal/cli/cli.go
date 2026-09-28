@@ -935,12 +935,15 @@ func runWorkTUI(cmd *cobra.Command, deps Deps) error {
 	if err != nil {
 		return fmt.Errorf("work: %w", err)
 	}
+	// TTY check before any picker/empty-list early return: the picker needs
+	// an interactive terminal, so a non-TTY bare `lead run` must fail
+	// regardless of the live issue list (consistent with the inbox).
+	if deps.Selector == nil && os.Getenv("LEAD_TEST_SELECTION") == "" && (!isTerminal(os.Stdin) || !isTerminal(os.Stdout)) {
+		return errors.New("lead run: the issue picker needs an interactive terminal; specify an issue number or run `lead --help`")
+	}
 	if len(summaries) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "no open issues")
 		return nil
-	}
-	if deps.Selector == nil && os.Getenv("LEAD_TEST_SELECTION") == "" && (!isTerminal(os.Stdin) || !isTerminal(os.Stdout)) {
-		return errors.New("lead run: the issue picker needs an interactive terminal; specify an issue number or run `lead --help`")
 	}
 	items := make([]tui.IssueItem, len(summaries))
 	for i, s := range summaries {
