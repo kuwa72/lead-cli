@@ -95,10 +95,14 @@ var ErrHeadlessUnsupported = errors.New("agent has no verified headless mode")
 //
 //	claude   -p --dangerously-skip-permissions <prompt>
 //	codex    exec --dangerously-bypass-approvals-and-sandbox <prompt>
-//	agy      --dangerously-skip-permissions -p --print-timeout <24h0m0s> <prompt>
+//	agy      --dangerously-skip-permissions --print-timeout <24h0m0s> -p <prompt>
 //	         (help: `--print-timeout` "Timeout for print mode wait (default
 //	         5m0s)"; lead passes DefaultPrintTimeout as a backstop — the
-//	         stall watchdog ends runs first, see issues #204, #215)
+//	         stall watchdog ends runs first, see issues #204, #215.
+//	         The prompt must directly follow -p: since agy 1.4.7 -p/--print
+//	         consumes the next token as the prompt value, so a flag between
+//	         them is eaten as the prompt and the real prompt is rejected —
+//	         issue #239)
 //	gemini   -y <prompt>            (positional prompt; -p is deprecated)
 //	opencode run --auto <prompt>
 //	devin    --permission-mode dangerous -p <prompt>
@@ -112,7 +116,7 @@ func HeadlessArgv(agentName, prompt string) ([]string, error) {
 	case "codex":
 		return []string{"codex", "exec", "--dangerously-bypass-approvals-and-sandbox", prompt}, nil
 	case "agy":
-		return []string{"agy", "--dangerously-skip-permissions", "-p", "--print-timeout", DefaultPrintTimeout.String(), prompt}, nil
+		return []string{"agy", "--dangerously-skip-permissions", "--print-timeout", DefaultPrintTimeout.String(), "-p", prompt}, nil
 	case "gemini":
 		return []string{"gemini", "-y", prompt}, nil
 	case "opencode":
