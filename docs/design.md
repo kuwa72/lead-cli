@@ -67,7 +67,7 @@ Issue一覧から2段階の選択（Issue選定→エージェント選定）を
 
 | エージェント | 対話モード (`interactive`) | 自走/一括モード (`batch` / `dangerous`) | 権限・承認スキップ仕様 (実機確認済み) |
 |---|---|---|---|
-| `agy` | `agy -i "<prompt>"` | `agy --dangerously-skip-permissions -p "<prompt>"` | `--dangerously-skip-permissions`: ツール実行プロンプトを全自動承認。`-p` で非対話実行。 |
+| `agy` | `agy -i "<prompt>"` | `agy --dangerously-skip-permissions --print-timeout 24h0m0s -p "<prompt>"` | `--dangerously-skip-permissions`: ツール実行プロンプトを全自動承認。`-p` で非対話実行（プロンプトは `-p` の直後に置く。agy 1.4.7 以降 `-p` は次トークンをプロンプト値として消費するため、間にフラグを挟むと起動に失敗する）。 |
 | `claude` | `claude "<prompt>"` | `claude -p --dangerously-skip-permissions "<prompt>"` | `--dangerously-skip-permissions`: ツール実行プロンプトを自動承認。`-p` で非対話実行。 |
 | `codex` | `codex "<prompt>"` | `codex exec --dangerously-bypass-approvals-and-sandbox "<prompt>"` | `exec`: 非対話実行。`--dangerously-bypass-approvals-and-sandbox`: サンドボックスおよび確認プロンプトをバイパス。 |
 | `gemini` | `gemini "<prompt>"` | `gemini -y "<prompt>"` | `-y` (`--yolo`): 全てのアクションを自動承認。 |

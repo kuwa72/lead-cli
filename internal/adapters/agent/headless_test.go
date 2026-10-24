@@ -17,8 +17,8 @@ func TestHeadlessArgv_MapsVerifiedFlags(t *testing.T) {
 	}{
 		{"claude", []string{"claude", "-p", "--dangerously-skip-permissions", p}},
 		{"codex", []string{"codex", "exec", "--dangerously-bypass-approvals-and-sandbox", p}},
-		{"agy", []string{"agy", "--dangerously-skip-permissions", "-p", "--print-timeout", "24h0m0s", p}},
-		{"", []string{"agy", "--dangerously-skip-permissions", "-p", "--print-timeout", "24h0m0s", p}},
+		{"agy", []string{"agy", "--dangerously-skip-permissions", "--print-timeout", "24h0m0s", "-p", p}},
+		{"", []string{"agy", "--dangerously-skip-permissions", "--print-timeout", "24h0m0s", "-p", p}},
 		{"gemini", []string{"gemini", "-y", p}},
 		{"opencode", []string{"opencode", "run", "--auto", p}},
 		{"devin", []string{"devin", "--permission-mode", "dangerous", "-p", p}},
@@ -49,6 +49,36 @@ func TestHeadlessArgv_AgyPrintTimeout(t *testing.T) {
 	d, err := time.ParseDuration(timeout)
 	if err != nil || d < 12*time.Hour {
 		t.Errorf("--print-timeout = %q, want a backstop well over the 3h max-runtime default", timeout)
+	}
+}
+
+// issue #239: agy 1.4.7's -p/--print consumes the very next token as the
+// prompt value, so `agy -p --print-timeout 24h0m0s <prompt>` made agy take
+// "--print-timeout" as the prompt and reject the real one (exit status 2).
+// The prompt must directly follow -p; every other flag must come before it.
+func TestHeadlessArgv_AgyPromptFollowsPrintFlag(t *testing.T) {
+	const prompt = "Issue #239: keep -p adjacent to the prompt"
+	argv, err := HeadlessArgv("agy", prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pi, ti := -1, -1
+	for i, a := range argv {
+		switch a {
+		case "-p":
+			pi = i
+		case "--print-timeout":
+			ti = i
+		}
+	}
+	if pi < 0 {
+		t.Fatalf("agy argv missing -p: %q", argv)
+	}
+	if pi+1 >= len(argv) || argv[pi+1] != prompt {
+		t.Errorf("token after -p = %q, want the prompt %q (argv: %q)", argv[pi+1], prompt, argv)
+	}
+	if ti < 0 || ti > pi {
+		t.Errorf("--print-timeout must precede -p (index %d vs -p at %d): %q", ti, pi, argv)
 	}
 }
 
