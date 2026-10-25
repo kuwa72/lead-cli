@@ -37,6 +37,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/doctor"
 	"github.com/kuwa72/lead-cli/internal/finish"
 	"github.com/kuwa72/lead-cli/internal/inbox"
+	"github.com/kuwa72/lead-cli/internal/issuecheck"
 	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/projinit"
@@ -427,6 +428,49 @@ $LEAD_SPEC_PROGRESS_INTERVAL; negative disables).`,
 	sayCmd.Flags().Int("follow-up", 0, "file follow-up issue(s) for issue <n> (実機 NG); body references #<n>")
 	sayCmd.Flags().Int("redraft", 0, "rewrite issue <n>'s title/body from the one-liner and comment the change")
 
+	newCmd := &cobra.Command{
+		Use:   "new",
+		Short: "Create an issue from a validated template",
+		Long: `Create an issue from a validated template (issue #254).
+
+` + "`lead new`" + ` opens $EDITOR with a skeleton and validates the saved body
+before creating anything. The body must contain a ` + "`## 受入条件`" + ` section with
+at least one ` + "`- [ ]`" + ` item, at least one executable acceptance condition (a
+バッククォートで囲まれたコマンド、または test/・*_test.go・*.spec.* などの
+テストパス), and a ` + "`## スコープ外`" + ` section. The issue also needs a risk label:
+risk:a or risk:b (--risk, default b).
+
+Labels: always risk:*; with --ready the issue is enqueued as ready, otherwise
+it is filed as needs-review. Without --body-file the command needs an
+interactive terminal and $EDITOR. --body-file <path> (- for stdin) is the
+non-interactive form for tests and automation. The title comes from --title,
+else from the first Markdown heading in the body.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runNew(cmd, deps)
+		},
+	}
+	newCmd.Flags().String("title", "", "issue title (default: first Markdown heading in the body)")
+	newCmd.Flags().String("risk", "b", "risk classification (a|b)")
+	newCmd.Flags().Bool("ready", false, "enqueue after validation (ready instead of needs-review)")
+	newCmd.Flags().String("body-file", "", "read the body from <path> (- for stdin) instead of $EDITOR")
+
+	readyCmd := &cobra.Command{
+		Use:   "ready <issue-number>",
+		Short: "Validate an issue body and move it to the ready queue",
+		Long: `Validate an issue body and move it to the ready queue (issue #254).
+
+Fetches issue <n> and applies the same rules as ` + "`lead new`" + `: a
+` + "`## 受入条件`" + ` section with at least one executable ` + "`- [ ]`" + ` item, a
+` + "`## スコープ外`" + ` section, and a risk label (risk:a or risk:b). On success it
+labels the issue risk:* and ready and removes needs-review. On failure it
+changes no labels, lists the missing items, and exits 1.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runReady(cmd, deps, args[0])
+		},
+	}
+
 	setupCmd := &cobra.Command{
 		Use:   "setup",
 		Short: "Set up your user environment (shell completions, keybinding)",
@@ -719,6 +763,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 
 	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, cleanCmd, peekCmd, stopCmd, finishCmd, reviewCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
+	root.AddCommand(newCmd, readyCmd)
 	return root
 }
 
@@ -940,6 +985,148 @@ func sayProgressInterval() (time.Duration, error) {
 		return 0, fmt.Errorf("say: LEAD_SPEC_PROGRESS_INTERVAL: %w", err)
 	}
 	return d, nil
+}
+
+// runNew implements `lead new` (issue #254): open a template in $EDITOR (or
+// read --body-file), validate the body, then create the issue with risk:* and
+// either needs-review or (--ready) ready.
+func runNew(cmd *cobra.Command, deps Deps) error {
+	flags := cmd.Flags()
+	title, _ := flags.GetString("title")
+	risk, _ := flags.GetString("risk")
+	ready, _ := flags.GetBool("ready")
+	bodyFile, _ := flags.GetString("body-file")
+
+	if risk != "a" && risk != "b" {
+		return fmt.Errorf("lead new: --risk must be a or b, got %q", risk)
+	}
+
+	body, err := newBody(deps, bodyFile)
+	if err != nil {
+		return err
+	}
+
+	if missing := issuecheck.Check(body, []string{issuecheck.RiskLabel(risk)}); len(missing) > 0 {
+		return errors.New(issuecheck.Message(missing))
+	}
+	if title == "" {
+		title = issuecheck.Title(body)
+	}
+	if title == "" {
+		return errors.New("lead new: cannot derive a title; pass --title or start the body with a Markdown heading")
+	}
+
+	labels := []string{issuecheck.RiskLabel(risk)}
+	if ready {
+		labels = append(labels, inbox.LabelReady)
+	} else {
+		labels = append(labels, inbox.LabelNeedsReview)
+	}
+	ref, err := deps.gh().IssueCreate(cmd.Context(), title, body, labels)
+	if err != nil {
+		return fmt.Errorf("lead new: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "created #%d %s\n", ref.Number, ref.URL)
+	return nil
+}
+
+// newBody returns the issue body from --body-file, stdin ("-"), or $EDITOR.
+// Non-TTY runs without --body-file fail before touching $EDITOR (same rule as
+// the inbox). LEAD_TEST_TTY is the headless test hook for the editor path.
+func newBody(deps Deps, bodyFile string) (string, error) {
+	if bodyFile == "-" {
+		b, err := io.ReadAll(deps.stdin())
+		if err != nil {
+			return "", fmt.Errorf("lead new: read stdin: %w", err)
+		}
+		return string(b), nil
+	}
+	if bodyFile != "" {
+		b, err := os.ReadFile(bodyFile)
+		if err != nil {
+			return "", fmt.Errorf("lead new: read %s: %w", bodyFile, err)
+		}
+		return string(b), nil
+	}
+	if os.Getenv("LEAD_TEST_TTY") == "" && (!isTerminal(os.Stdin) || !isTerminal(os.Stdout)) {
+		return "", errors.New("lead new: needs an interactive terminal (or --body-file <path>)")
+	}
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		return "", errors.New("lead new: $EDITOR is not set; pass --body-file <path>")
+	}
+	return editNewTemplate(editor)
+}
+
+func editNewTemplate(editor string) (string, error) {
+	f, err := os.CreateTemp("", "lead-new-*.md")
+	if err != nil {
+		return "", fmt.Errorf("lead new: %w", err)
+	}
+	path := f.Name()
+	defer os.Remove(path)
+	if _, err := f.WriteString(issuecheck.Template); err != nil {
+		f.Close()
+		return "", fmt.Errorf("lead new: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("lead new: %w", err)
+	}
+
+	argv := append(strings.Fields(editor), path)
+	c := exec.Command(argv[0], argv[1:]...)
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := c.Run(); err != nil {
+		return "", fmt.Errorf("lead new: editor: %w", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("lead new: read edited body: %w", err)
+	}
+	return string(b), nil
+}
+
+// runReady implements `lead ready <n>` (issue #254): validate the existing
+// body and risk label, then swap needs-review for ready.
+func runReady(cmd *cobra.Command, deps Deps, raw string) error {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return fmt.Errorf("lead ready: invalid issue number %q", raw)
+	}
+	iss, err := deps.gh().View(cmd.Context(), n)
+	if err != nil {
+		return fmt.Errorf("lead ready: %w", err)
+	}
+	if missing := issuecheck.Check(iss.Body, iss.Labels); len(missing) > 0 {
+		return errors.New(issuecheck.Message(missing))
+	}
+
+	ctx := cmd.Context()
+	risk := issuecheck.RiskFromLabels(iss.Labels)
+	if err := deps.gh().IssueAddLabel(ctx, n, risk); err != nil {
+		return fmt.Errorf("lead ready: add %s: %w", risk, err)
+	}
+	if !hasLabel(iss.Labels, inbox.LabelReady) {
+		if err := deps.gh().IssueAddLabel(ctx, n, inbox.LabelReady); err != nil {
+			return fmt.Errorf("lead ready: add %s: %w", inbox.LabelReady, err)
+		}
+	}
+	if hasLabel(iss.Labels, inbox.LabelNeedsReview) {
+		if err := deps.gh().IssueRemoveLabel(ctx, n, inbox.LabelNeedsReview); err != nil {
+			return fmt.Errorf("lead ready: remove %s: %w", inbox.LabelNeedsReview, err)
+		}
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "ready #%d\n", n)
+	return nil
+}
+
+func hasLabel(labels []string, want string) bool {
+	for _, l := range labels {
+		if l == want {
+			return true
+		}
+	}
+	return false
 }
 
 // runSay implements `lead say` (RFC inbox §8, issue #94). The headless run
