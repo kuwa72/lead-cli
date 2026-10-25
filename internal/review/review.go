@@ -112,6 +112,13 @@ func (r *Runner) Review(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("review: issue #%d: %w", issueNumber, err)
 	}
+	// Bind the review to the head before reading the diff: if a push lands
+	// mid-gather, the marker keeps the older SHA and finish stops instead
+	// of accepting a pass for a commit the reviewer never saw (issue #249).
+	headSHA, err := r.Gh.PrHeadSHA(ctx, pr)
+	if err != nil {
+		return Result{}, fmt.Errorf("review: PR #%d: head SHA: %w", pr, err)
+	}
 	diff, err := r.Gh.PrDiff(ctx, pr)
 	if err != nil {
 		return Result{}, fmt.Errorf("review: PR #%d: diff: %w", pr, err)
@@ -119,10 +126,6 @@ func (r *Runner) Review(ctx context.Context) (Result, error) {
 	checks, err := r.Gh.PrChecks(ctx, pr)
 	if err != nil {
 		return Result{}, fmt.Errorf("review: PR #%d: checks: %w", pr, err)
-	}
-	headSHA, err := r.Gh.PrHeadSHA(ctx, pr)
-	if err != nil {
-		return Result{}, fmt.Errorf("review: PR #%d: head SHA: %w", pr, err)
 	}
 
 	prompt, err := BuildPrompt(PromptInput{
@@ -173,12 +176,12 @@ func (r *Runner) Review(ctx context.Context) (Result, error) {
 	return res, nil
 }
 
-// publish posts the full reviewer output to the PR and swaps the verdict
-// label so a rerun cannot leave a stale review:pass behind.
+// publish swaps the verdict label and then posts the full reviewer output
+// (which carries the authoritative head-SHA marker) to the PR. The label
+// goes first so a failed label swap never leaves a marker that finish would
+// accept; a failed comment leaves only the display label, which finish
+// ignores.
 func (r *Runner) publish(ctx context.Context, pr int, res Result, label string) error {
-	if err := r.Gh.PrComment(ctx, pr, CommentBody(res)); err != nil {
-		return fmt.Errorf("review: PR #%d: comment: %w", pr, err)
-	}
 	labels, err := r.Gh.PrLabels(ctx, pr)
 	if err != nil {
 		return fmt.Errorf("review: PR #%d: labels: %w", pr, err)
@@ -196,6 +199,9 @@ func (r *Runner) publish(ctx context.Context, pr int, res Result, label string) 
 		if err := r.Gh.IssueAddLabel(ctx, pr, label); err != nil {
 			return fmt.Errorf("review: PR #%d: add label %s: %w", pr, label, err)
 		}
+	}
+	if err := r.Gh.PrComment(ctx, pr, CommentBody(res)); err != nil {
+		return fmt.Errorf("review: PR #%d: comment: %w", pr, err)
 	}
 	return nil
 }

@@ -41,8 +41,9 @@ type Options struct {
 	// stop for human approval by default. Unrelated to OverrideGuardrail.
 	Approve bool
 	// NoReview is the human-only confirmation that lets a risk:a PR merge
-	// without the independent reviewer's review:pass label (issue #246).
-	// It is never part of the headless dispatch prompt.
+	// without the independent reviewer's pass (issue #246). It requires
+	// Approve as well (issue #249), so an unattended agent cannot lift the
+	// review gate alone. It is never part of the headless dispatch prompt.
 	NoReview     bool
 	Timeout      time.Duration
 	PollInterval time.Duration
@@ -272,8 +273,8 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		switch {
 		case !found:
 			return Result{ChecksPassed: true,
-				Message: fmt.Sprintf("CI passed for PR #%d, but it has no %s review. Run `lead review %d` and merge after it passes; a human can override with `lead finish %d --merge --approve --no-review`.",
-					prNumber, state.ReviewPassLabel, prNumber, issue)}, nil
+				Message: fmt.Sprintf("CI passed for PR #%d, but it has no review pass for the current head. Run `lead review %d` and merge after it passes; a human can override with `lead finish %d --merge --approve --no-review`.",
+					prNumber, prNumber, issue)}, nil
 		case marker.Verdict != review.VerdictPass:
 			return Result{ChecksPassed: true,
 				Message: fmt.Sprintf("CI passed for PR #%d, but the last review verdict is %s. Address the findings, then run `lead review %d` again.",

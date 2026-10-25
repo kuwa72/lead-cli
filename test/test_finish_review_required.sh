@@ -107,7 +107,7 @@ out="$(cd "$tmp/repo-no-review" && "$tmp/lead" finish 36 --pr 7 --merge --timeou
   || fail "no-review: finish exited non-zero: $out"
 [ -f "$MERGED_MARK" ] && fail "no-review: PR merged without a review pass"
 grep -q '^GH pr merge ' "$GH_LOG" && fail "no-review: gh pr merge was called: $(cat "$GH_LOG")"
-case "$out" in *review:pass*) ;; *) fail "no-review: message missing review:pass: $out";; esac
+case "$out" in *"no review pass"*) ;; *) fail "no-review: message missing no review pass: $out";; esac
 case "$out" in *"lead review 7"*) ;; *) fail "no-review: message missing the lead review next step: $out";; esac
 grep -q '^GH pr view 7 --json headRefOid' "$GH_LOG" || fail "no-review: head SHA was not queried: $(cat "$GH_LOG")"
 grep -q '^GH pr view 7 --json comments' "$GH_LOG" || fail "no-review: PR comments were not queried: $(cat "$GH_LOG")"

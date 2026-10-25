@@ -602,7 +602,7 @@ func TestRun_RiskANeedsReviewPass(t *testing.T) {
 	if res.Merged || len(fake.MergeCalls) != 0 {
 		t.Fatalf("Result = %+v merges = %v; want no merge without a review pass", res, fake.MergeCalls)
 	}
-	for _, want := range []string{state.ReviewPassLabel, "lead review"} {
+	for _, want := range []string{"no review pass", "lead review"} {
 		if !strings.Contains(res.Message, want) {
 			t.Errorf("pause message missing %q: %s", want, res.Message)
 		}

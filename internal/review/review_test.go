@@ -88,6 +88,30 @@ func TestReview_PassLabelsPRAndPostsComment(t *testing.T) {
 	}
 }
 
+// The head must be captured before the diff: a push between the two calls
+// would otherwise let the marker claim a commit the reviewer never saw
+// (issue #249).
+func TestReview_BindsHeadBeforeReadingDiff(t *testing.T) {
+	gh := reviewGh()
+	r := newRunner(t, gh, &fakeAgent{out: []byte("VERDICT: pass")})
+
+	if _, err := r.Review(context.Background()); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	headIdx, diffIdx := -1, -1
+	for i, call := range gh.CallOrder {
+		switch call {
+		case "PrHeadSHA":
+			headIdx = i
+		case "PrDiff":
+			diffIdx = i
+		}
+	}
+	if headIdx < 0 || diffIdx < 0 || headIdx > diffIdx {
+		t.Fatalf("CallOrder = %v; want PrHeadSHA before PrDiff", gh.CallOrder)
+	}
+}
+
 func TestReview_NeedsWorkLabelsAndPostsComment(t *testing.T) {
 	gh := reviewGh()
 	agent := &fakeAgent{out: []byte("## 所見\n- テストが実装の写経\nVERDICT: needs-work")}

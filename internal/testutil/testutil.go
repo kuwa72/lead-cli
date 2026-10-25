@@ -156,6 +156,10 @@ type FakeGhClient struct {
 	LatestErr    error
 	BrowseErr    error
 
+	// CallOrder records the order of calls whose sequencing matters
+	// (review head binding, issue #249).
+	CallOrder []string
+
 	ListCalls   int
 	ViewCalls   []int
 	ChecksCalls int
@@ -464,6 +468,7 @@ func (f *FakeGhClient) PrBody(ctx context.Context, pr int) (string, error) {
 // and records the call.
 func (f *FakeGhClient) PrDiff(ctx context.Context, pr int) (string, error) {
 	f.PrDiffCalls = append(f.PrDiffCalls, pr)
+	f.CallOrder = append(f.CallOrder, "PrDiff")
 	if f.PrDiffErr != nil {
 		return "", f.PrDiffErr
 	}
@@ -476,6 +481,7 @@ func (f *FakeGhClient) PrDiff(ctx context.Context, pr int) (string, error) {
 // PrHeadSHA returns PRHeadSHA (or PRHeadSHAErr) and records the call.
 func (f *FakeGhClient) PrHeadSHA(ctx context.Context, pr int) (string, error) {
 	f.PRHeadSHACalls = append(f.PRHeadSHACalls, pr)
+	f.CallOrder = append(f.CallOrder, "PrHeadSHA")
 	if f.PRHeadSHAErr != nil {
 		return "", f.PRHeadSHAErr
 	}
