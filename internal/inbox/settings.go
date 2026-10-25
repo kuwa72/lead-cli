@@ -14,17 +14,43 @@ const (
 	IssueCreationAI     = "ai"
 )
 
+// AgentRoles splits the spec AI from the implementation AI
+// (docs/rfc-inbox-ux.md §13, issue #231). Empty fields fall back to the
+// shared Agent setting, so `agents` stays optional.
+type AgentRoles struct {
+	Spec string `json:"spec,omitempty"`
+	Impl string `json:"impl,omitempty"`
+}
+
 // Config represents the persisted user configuration (inbox-config.json).
 // StallTimeout/MaxRuntime are Go duration strings shared by every headless
 // launch path (issue #215); they are not editable from the settings UI, so
 // OnSettingsChange must preserve them when writing the file back.
 type Config struct {
-	Agent          string `json:"agent"`
-	AgentMode      string `json:"agent_mode"`
-	IssueCreation  string `json:"issue_creation"`
-	NotifyDisabled bool   `json:"notify_disabled"`
-	StallTimeout   string `json:"stall_timeout,omitempty"`
-	MaxRuntime     string `json:"max_runtime,omitempty"`
+	Agent          string      `json:"agent"`
+	Agents         *AgentRoles `json:"agents,omitempty"`
+	AgentMode      string      `json:"agent_mode"`
+	IssueCreation  string      `json:"issue_creation"`
+	NotifyDisabled bool        `json:"notify_disabled"`
+	StallTimeout   string      `json:"stall_timeout,omitempty"`
+	MaxRuntime     string      `json:"max_runtime,omitempty"`
+}
+
+// SpecAgent returns the spec AI's agent: agents.spec, else the shared agent.
+func (c Config) SpecAgent() string {
+	if c.Agents != nil && c.Agents.Spec != "" {
+		return c.Agents.Spec
+	}
+	return c.Agent
+}
+
+// ImplAgent returns the implementation AI's agent: agents.impl, else the
+// shared agent.
+func (c Config) ImplAgent() string {
+	if c.Agents != nil && c.Agents.Impl != "" {
+		return c.Agents.Impl
+	}
+	return c.Agent
 }
 
 // IssueCreation returns the current issue creation default ("direct" or "ai").

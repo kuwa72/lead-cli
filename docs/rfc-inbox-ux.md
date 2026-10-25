@@ -4,7 +4,7 @@
 - **Supersedes**: [rfc-16-product-ux.md](rfc-16-product-ux.md) §3（基本UXモデル）
 - **前提として維持**: [rfc-25-workflow-flexibility.md](rfc-25-workflow-flexibility.md)（モード・状態モデル・finish）、[AGENTS.md](../AGENTS.md)（TDD・PR・マージ手順）
 - **ステータス**: Proposal
-- **更新日**: 2026-09-08
+- **更新日**: 2026-10-25
 
 ---
 
@@ -14,11 +14,11 @@
 |---|---|
 | 人間のゲート | **Issue の承認（`needs-review` → `ready`）のみ**。プロンプト確認・コードレビューはゲートにしない |
 | 人間の常設画面 | エージェントの作業画面ではなく **受信箱**（人間にしかできない仕事の一覧） |
-| エージェントの実行形態 | **ヘッドレス・並列・worktree 分離**。人間は覗きたいときだけフルスクリーンで乗り込む |
+| エージェントの実行形態 | **ヘッドレス・並列・worktree 分離**。人間は覗きたいときだけ `$PAGER` でログを開く |
 | 実装 AI の完結範囲 | 単一セッションで TDD → PR → CI 待ち → squash merge → Issue close まで |
 | 人間の実機確認 | マージ後の `main`（＝ステージング）で**非同期**に行う。ゲートではない |
 | 情報の置き場 | GitHub Issue スレッドを唯一の正とする。`lead` は隠し状態を持たない |
-| 画面分割・herdr | 中核 UX から外す。herdr はタブ提供の任意依存 |
+| 画面分割・herdr | 中核 UX から外す。herdr 連携は #225 で削除し、ログは `$PAGER` で見る |
 
 ## 2. 解決する問題
 
@@ -99,13 +99,13 @@ a 承認  e 編集して承認  x 却下  t 一言返す  p 覗く  n 実機NG  
 | `e` | `$EDITOR` で本文を編集して承認 | 本文更新 + `ready` |
 | `x` | 却下 | close（理由は任意の一言） |
 | `t` | 一言返す | Issue コメント。仕様 AI（レビュー待ち）または実装 AI（止まってる）が再走 |
-| `p` | 覗く | 実行中 / 止まってるエージェントの画面にフルスクリーンで乗り込む。`q` で戻る |
+| `p` | 覗く | 実行中 / 止まってるエージェントのログを `$PAGER` で開く（herdr 連携は #225 で削除） |
 | `n` | 実機 NG | 一言を入力 → 仕様 AI が元 Issue にリンクした追い Issue を起票 |
 | `r` | 規約 | `AGENTS.md` を `$EDITOR` で開く |
 | `s` | say | 一言を入力 → 仕様 AI が起票 |
 | `o` | ブラウザで開く | なし |
 
-分割ペインは作らない。`p` は herdr があれば新タブ、なければカレント端末を明け渡す（tmux attach 相当）。左右配置の問題は消える。
+分割ペインは作らない。`p` はログを `$PAGER` で開く（herdr 連携は #225 で削除）。CLI からは `lead peek <issue>` で同じ操作ができる。左右配置の問題は消える。
 
 ## 6. コマンド
 
@@ -126,7 +126,7 @@ lead status / finish / clean                       # 現行どおり（RFC-25）
 - 着手順は GitHub 上の関係で決まる（#207）: open な blocked-by 依存を持つ Issue は依存が解消されるまで後回し（deferred、blocked ラベルは付かない）。残りは親（トラッキング）Issue の sub-issues 順。親を持たない Issue は最後に updatedAt 昇順
 - 並列上限 N（既定 2）。空きがあればキュー先頭から 1 件取り、worktree を払い出し、`agents.impl` で指定された実装 AI をヘッドレスモードで起動
 - 受信箱を閉じても起動済みのエージェントは殺さない。再度開いたとき `workflows.json` から実行中を再接続する
-- 起動プロンプト = Issue 番号・タイトル・本文・受入条件 ＋ AGENTS.md の管理ブロック ＋ 完了定義（PR merge・Issue close まで）
+- 起動プロンプト = Issue 番号・タイトル・本文・受入条件 ＋ 完了定義（PR merge・Issue close まで）。AGENTS.md はプロンプトに同梱しない。worktree にチェックアウトされた AGENTS.md（`lead enable` が管理ブロックを配置済み）をエージェント CLI が読む。規約の二重管理とプロンプト肥大を避ける（#231）
 - 各エージェント CLI のヘッドレス／自走フラグへのマッピング層を持つ（#83）。**フラグは実機の `--help` で確認し推測で組み立てない**（AGENTS.md テスト品質ルール 2）
 - 完了（Issue closed）で worktree を削除し `workflows.json` から除く
 - 失敗規約: CI 失敗またはエージェント異常終了が 3 回で `blocked` ラベル＋原因コメントを Issue に書いて停止。人間の `t` で再走
@@ -155,9 +155,8 @@ lead status / finish / clean                       # 現行どおり（RFC-25）
 | 捨てる | 理由 |
 |---|---|
 | Human-in-the-loop のプロンプト確認 Enter（RFC-16 §3.2） | ゲートは Issue 承認へ移った |
-| 左右マルチペイン（RFC-16 §3.3）、herdr 必須 | 覗くときだけフルスクリーン。herdr は任意 |
+| 左右マルチペイン（RFC-16 §3.3）、herdr 必須 | ログは `$PAGER` で見る。herdr 連携は #225 で削除 |
 | Issue picker を主画面にする（RFC-16 §3.1） | 受信箱の一区画に降格 |
-| `/lead-flow` スキル（エージェントが `lead work` を呼ぶ入口） | エージェントは起動される側。循環を解消 |
 | `lead work` を人間が打つ | `lead run` に改名し手動オーバーライドへ |
 | 「1 ストローク選定」のエージェント同時決定キー | エージェント選択はディスパッチャ設定。人間が毎回選ばない |
 
@@ -170,6 +169,7 @@ lead status / finish / clean                       # 現行どおり（RFC-25）
 | `internal/prompter` | 仕様 AI の中身 |
 | design.md §7 の server / socket API | ディスパッチャの土台 |
 | `lead enable`（AGENTS.md 管理ブロック） | 配る中身を「実装 AI 向け完了定義」に更新 |
+| `/lead-flow` スキル（#224） | 人間が `/lead-flow <issue>` で明示起動する入口。`lead enable` が `.agents/skills` と検出した各エージェントの skills dir に配布する。呼び出すのは `lead run` であり、エージェント起動時に循環しない |
 
 ## 11. 既存 Issue への影響
 
@@ -182,7 +182,7 @@ lead status / finish / clean                       # 現行どおり（RFC-25）
 | #89 レビュー・LGTM をスキル化 | 対象を PR から **Issue** に変更（`needs-review` → `ready`）。仕様 AI の再起案が中身 |
 | #71 `/lead-issue` | 仕様 AI の起票プロンプトとして吸収 |
 | #67 CI 失敗時のマージ防止・doctor | §9 の前提。優先度上げ |
-| #73 install のエージェント互換性 | `/lead-flow` 廃止に合わせ、配る中身を見直す |
+| #73 install のエージェント互換性 | `/lead-flow` は維持（#224）。`.agents/skills` と検出した各エージェントの skills dir へ配布し、配る中身を現行フローに合わせる |
 | #74 resume | 「止まってる」からの再走に使う。維持 |
 
 ## 12. 実装時の検証要件
@@ -199,7 +199,7 @@ AGENTS.md テスト品質ルールに従う。
 | 項目 | 決定 |
 |---|---|
 | ディスパッチャの起動形態 | **受信箱を開いている間だけ動く前景ループ**。人間は受信箱を開きっぱなしにする運用。常駐 `daemon` は作らない（design.md §7.2 と整合）。§6 の `lead daemon` は削除し、`lead --parallel N` の受信箱オプションにする |
-| 仕様 AI と実装 AI のエージェント | **分けられるようにする**。設定 `agents.spec` / `agents.impl`（既定は同じ値）。ディスパッチャは役割ごとに参照する |
+| 仕様 AI と実装 AI のエージェント | **分けられるようにする**（#231 で実装）。`inbox-config.json` の `agents.spec` / `agents.impl`。未設定の役割は共有 `agent` にフォールバックする。`say` は `--agent` → `$LEAD_SPEC_AGENT` → `agents.spec` → `agent`、dispatch/run/resume は `--agent` → `agents.impl` → `agent` の順で解決する |
 | ラベル名 | `needs-review` / `ready` / `blocked` で**固定**。設定化は必要になってから |
 
 ### 13.1 Issue の区画分け（フォルダ表示）の手段
@@ -243,3 +243,14 @@ Milestone・Issue Type・Projects v2 は採用しない。Projects v2 は GitHub
 - **更新・無効化条件**:
   - `R` キー（手動リロード）押下時、定期リフレッシュ（30s）時、および Issue 状態変更操作（承認・コメント等）完了時にバックグラウンドで再取得が行われ、最新キャッシュで上書きされる。
   - キャッシュ破損時は安全にスキップして GitHub から直接取得する。
+
+## 16. 実装との整合（Issue #231, 2026-10-25）
+
+本 RFC の決定と実装の差異を次のとおり解消した。
+
+| 項目 | 決定 | 反映先 |
+|---|---|---|
+| `lead peek <issue>`（§6） | **実装する**。受信箱 `p` と同じく、記録済みエージェントログを `$PAGER` で開く。`--part` で複数 PR の作業単位を指定できる | `internal/cli`（`runPeek`） |
+| `agents.spec` / `agents.impl`（§13） | **実装する**。`inbox-config.json` の `agents` オブジェクトで役割別に指定する。未設定は共有 `agent`、両方未設定は `agy`。設定画面の Agent は共有既定を編集する | `internal/inbox`（`Config.SpecAgent` / `ImplAgent`）、`internal/cli` |
+| `/lead-flow` スキル（§10） | **RFC を更新**（方針転換）。#224 で廃止を取り消し、`lead enable` が `.agents/skills` と検出した各エージェントの skills dir に配布する。人間が `/lead-flow <issue>` で起動して `lead run` を呼ぶ入口であり、エージェント起動時の循環はない | §10・§11 |
+| 起動プロンプトへの AGENTS.md 注入（§7） | **RFC を更新**（実装に合わせる）。プロンプトは Issue と完了定義のみ。AGENTS.md は worktree 内のものをエージェント CLI が読む。規約を二重管理せず、プロンプトを肥大させない | §7 |

@@ -50,6 +50,56 @@ func TestLoadConfig_InvalidJSONIsAnError(t *testing.T) {
 	}
 }
 
+// issue #231: agents.spec / agents.impl split the spec AI from the
+// implementation AI. Unset roles fall back to the shared agent.
+func TestConfig_RoleAgentsOverrideSharedAgent(t *testing.T) {
+	cfg := Config{Agent: "claude", Agents: &AgentRoles{Spec: "codex", Impl: "devin"}}
+	if got := cfg.SpecAgent(); got != "codex" {
+		t.Errorf("SpecAgent = %q, want codex", got)
+	}
+	if got := cfg.ImplAgent(); got != "devin" {
+		t.Errorf("ImplAgent = %q, want devin", got)
+	}
+}
+
+func TestConfig_RoleAgentsFallBackToSharedAgent(t *testing.T) {
+	cfg := Config{Agent: "claude"}
+	if got := cfg.SpecAgent(); got != "claude" {
+		t.Errorf("SpecAgent = %q, want shared agent claude", got)
+	}
+	if got := cfg.ImplAgent(); got != "claude" {
+		t.Errorf("ImplAgent = %q, want shared agent claude", got)
+	}
+	partial := Config{Agent: "claude", Agents: &AgentRoles{Spec: "codex"}}
+	if got := partial.SpecAgent(); got != "codex" {
+		t.Errorf("SpecAgent = %q, want codex", got)
+	}
+	if got := partial.ImplAgent(); got != "claude" {
+		t.Errorf("ImplAgent = %q, want shared agent claude", got)
+	}
+}
+
+func TestLoadConfig_ReadsAgentRoles(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "inbox-config.json")
+	data := `{"agent":"claude","agents":{"spec":"codex","impl":"devin"}}`
+	if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agents == nil || cfg.Agents.Spec != "codex" || cfg.Agents.Impl != "devin" {
+		t.Fatalf("cfg.Agents = %+v, want spec=codex impl=devin", cfg.Agents)
+	}
+	if got := cfg.SpecAgent(); got != "codex" {
+		t.Errorf("SpecAgent = %q, want codex", got)
+	}
+	if got := cfg.ImplAgent(); got != "devin" {
+		t.Errorf("ImplAgent = %q, want devin", got)
+	}
+}
+
 func TestConfig_DurationDefaultsAndErrors(t *testing.T) {
 	var zero Config
 	stall, err := zero.StallTimeoutOr(30 * time.Minute)
