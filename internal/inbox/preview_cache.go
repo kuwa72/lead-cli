@@ -95,6 +95,11 @@ func (s *PreviewCacheStore) Save(e PreviewCacheEntry) error {
 	if s == nil || s.Dir == "" || e.Number <= 0 {
 		return nil
 	}
+	if e.Issue.Number == 0 {
+		e.Issue.Number = e.Number
+	} else if e.Issue.Number != e.Number {
+		return fmt.Errorf("preview cache %s: issue number %d does not match entry %d", s.path(e.Number), e.Issue.Number, e.Number)
+	}
 	if e.FetchedAt.IsZero() {
 		e.FetchedAt = s.now().UTC()
 	}

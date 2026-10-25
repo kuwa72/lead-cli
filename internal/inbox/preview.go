@@ -172,12 +172,14 @@ func (m Model) previewLoadCmd(it Item, req int) tea.Cmd {
 					if iss.BlockedReason == "" {
 						iss.BlockedReason = extractBlockedReason(iss.Body)
 					}
-					_ = store.Save(PreviewCacheEntry{
+					if serr := store.Save(PreviewCacheEntry{
 						Repo:     repo,
 						Number:   it.Number,
 						Issue:    iss,
 						Comments: comments,
-					})
+					}); serr != nil {
+						warn = serr.Error()
+					}
 				}
 			}
 		}

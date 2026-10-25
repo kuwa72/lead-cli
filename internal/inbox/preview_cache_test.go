@@ -270,6 +270,29 @@ func TestPreviewDiskCache_RepoIsolation(t *testing.T) {
 	if strings.Contains(v, "repo A body") {
 		t.Errorf("preview must not show another repo's cached body, got:\n%s", v)
 	}
+
+	// Both repos now hold an entry for #7; a restart in repo B must read its
+	// own entry without gh.
+	viewCalls := len(gh.ViewCalls)
+	restarted := New(Options{
+		Gh:           gh,
+		Store:        &state.Store{Path: filepath.Join(t.TempDir(), "workflows.json")},
+		PreviewCache: storeB,
+		Repo:         "other/repo",
+		PreviewDelay: 0,
+		Headless:     true,
+		Now:          func() time.Time { return now },
+	})
+	restarted = drive(t, restarted, nil, restarted.Init())
+	restarted.width, restarted.height = 120, 30
+	restarted = press(t, restarted, "k", "j")
+
+	if len(gh.ViewCalls) != viewCalls {
+		t.Errorf("repo B restart should hit its own cache, got ViewCalls=%v", gh.ViewCalls[viewCalls:])
+	}
+	if v := restarted.View(); !strings.Contains(v, "repo B live body") {
+		t.Errorf("repo B restart should show its own cached body, got:\n%s", v)
+	}
 }
 
 func TestPreviewDiskCache_MemorySnapshotExpiresAfterTTL(t *testing.T) {
@@ -322,6 +345,41 @@ func TestPreviewDiskCache_MemorySnapshotExpiresAfterTTL(t *testing.T) {
 	}
 	if v := m.View(); !strings.Contains(v, "live body") {
 		t.Errorf("preview should show refreshed body after TTL, got:\n%s", v)
+	}
+}
+
+func TestPreviewDiskCache_GhFailureIsRetriedOnReselect(t *testing.T) {
+	now := time.Now().UTC()
+	gh, m, _ := newPreviewCacheFixture(t, now, func(pc *PreviewCacheStore) {
+		if err := pc.Save(PreviewCacheEntry{
+			Repo:      "kuwa72/lead-cli",
+			Number:    7,
+			FetchedAt: now.Add(-2 * DefaultPreviewTTL),
+			Issue:     ports.Issue{Number: 7, Title: "spec: add warning", Body: "cached body", State: "OPEN"},
+		}); err != nil {
+			t.Fatalf("seed cache: %v", err)
+		}
+	})
+	gh.ViewErr = errors.New("gh view failed")
+	m.width = 120
+	m.height = 30
+
+	m = selectIssue7(t, m)
+	if v := m.View(); !strings.Contains(v, "cached body") {
+		t.Fatalf("failure should keep cached body, got:\n%s", v)
+	}
+	failedCalls := len(gh.ViewCalls)
+
+	// gh recovers; reselecting must retry instead of pinning the fallback.
+	gh.ViewErr = nil
+	gh.Issues[7] = ports.Issue{Number: 7, Title: "spec: add warning", Body: "recovered body", State: "OPEN"}
+	m = selectIssue7(t, m)
+
+	if len(gh.ViewCalls) <= failedCalls {
+		t.Errorf("reselect after failure should retry gh, got ViewCalls=%v", gh.ViewCalls)
+	}
+	if v := m.View(); !strings.Contains(v, "recovered body") {
+		t.Errorf("preview should recover with fresh body, got:\n%s", v)
 	}
 }
 

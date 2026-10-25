@@ -693,10 +693,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.previewErr = nil
 		m.applySnapshot(msg.snapshot)
-		m.cacheSnapshot(msg.item.Number, msg.snapshot)
 		if msg.warn != "" {
+			// Do not memoize a fallback snapshot: the next selection should
+			// retry gh instead of pinning stale data for the whole TTL.
 			return m, m.setStatus("Error: " + msg.warn)
 		}
+		m.cacheSnapshot(msg.item.Number, msg.snapshot)
 		return m, nil
 	case previewDelayMsg:
 		if msg.req != m.previewReq {
