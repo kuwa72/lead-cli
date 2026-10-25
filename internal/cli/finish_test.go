@@ -10,6 +10,8 @@ import (
 	"github.com/kuwa72/lead-cli/internal/testutil"
 )
 
+const testHeadSHA = "0123456789abcdef0123456789abcdef01234567"
+
 // seedFinishRecord stores an in-progress workflow attached to PR 7.
 func seedFinishRecord(t *testing.T, stateFile string, mutate func(*state.Workflow)) *testutil.FakeGhClient {
 	t.Helper()
@@ -33,6 +35,8 @@ func seedFinishRecord(t *testing.T, stateFile string, mutate func(*state.Workflo
 		AutoMergeAllowed: true,
 		Issues:           map[int]ports.Issue{36: {Number: 36, Title: "x", Labels: []string{"risk:a"}}},
 		PRLabels:         []string{state.ReviewPassLabel},
+		PRHeadSHA:        testHeadSHA,
+		PRThread:         []ports.Comment{{Body: "<!-- lead-review sha=" + testHeadSHA + " verdict=pass -->"}},
 	}
 }
 
@@ -133,6 +137,22 @@ func TestFinish_ApproveMergesViaCLI(t *testing.T) {
 	}
 	if len(fake.RemovedLabels) != 1 || fake.RemovedLabels[0].Label != state.AwaitingHumanLabel {
 		t.Errorf("removed labels = %+v, want awaiting-human removed", fake.RemovedLabels)
+	}
+}
+
+// issue #249: --no-review alone is rejected, so an unattended agent cannot
+// lift the review gate without the human-only --approve.
+func TestFinish_NoReviewRequiresApproveViaCLI(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "wf.json")
+	fake := seedFinishRecord(t, stateFile, nil)
+	fake.PRThread = nil
+
+	out, err := executeWith(t, Deps{Gh: fake, StateFile: stateFile}, "finish", "36", "--merge", "--no-review")
+	if err == nil || !strings.Contains(err.Error(), "--approve") {
+		t.Fatalf("finish --no-review = %v, want rejection mentioning --approve\n%s", err, out)
+	}
+	if len(fake.MergeCalls) != 0 {
+		t.Errorf("merges = %v, want none", fake.MergeCalls)
 	}
 }
 

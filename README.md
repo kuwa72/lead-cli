@@ -127,8 +127,10 @@ guardrail. Mark a safe issue with `gh issue edit <n> --add-label risk:a`.
 An automatic (`risk:a`) merge also requires an independent review: run
 `lead review <pr>` (a separate headless agent reads the diff, the issue's
 acceptance criteria, and CI, then labels the PR `review:pass` or
-`review:needs-work`). `lead finish` pauses without `review:pass`; a human can
-skip the gate with `--no-review`.
+`review:needs-work`). The review comment records the reviewed head SHA, and
+`lead finish` merges only while the PR head still matches it — a commit
+pushed after the review requires another `lead review`. A human can skip the
+gate with `--no-review --approve` (`--no-review` alone is rejected).
 
 ## Conventions
 

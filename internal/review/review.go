@@ -73,6 +73,9 @@ type Result struct {
 	Issue   int
 	Verdict string
 	Passed  bool
+	// HeadSHA is the PR head the reviewer examined (issue #249). finish
+	// merges only when the current head still matches it.
+	HeadSHA string
 	Output  string
 	LogPath string
 	Message string
@@ -109,6 +112,13 @@ func (r *Runner) Review(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("review: issue #%d: %w", issueNumber, err)
 	}
+	// Bind the review to the head before reading the diff: if a push lands
+	// mid-gather, the marker keeps the older SHA and finish stops instead
+	// of accepting a pass for a commit the reviewer never saw (issue #249).
+	headSHA, err := r.Gh.PrHeadSHA(ctx, pr)
+	if err != nil {
+		return Result{}, fmt.Errorf("review: PR #%d: head SHA: %w", pr, err)
+	}
 	diff, err := r.Gh.PrDiff(ctx, pr)
 	if err != nil {
 		return Result{}, fmt.Errorf("review: PR #%d: diff: %w", pr, err)
@@ -135,7 +145,7 @@ func (r *Runner) Review(ctx context.Context) (Result, error) {
 	}
 	logPath := filepath.Join(r.Opts.LogDir, fmt.Sprintf("review-%d-%s.log", pr, time.Now().UTC().Format("20060102T150405Z")))
 	out, runErr := r.Agent.Run(ctx, r.Opts.WorkDir, argv, logPath)
-	res := Result{PR: pr, Issue: issueNumber, Output: string(out), LogPath: logPath}
+	res := Result{PR: pr, Issue: issueNumber, HeadSHA: headSHA, Output: string(out), LogPath: logPath}
 	if runErr != nil {
 		res.Message = fmt.Sprintf("review: agent failed for PR #%d (log: %s)", pr, logPath)
 		return res, fmt.Errorf("review: PR #%d: %w", pr, runErr)
@@ -166,12 +176,12 @@ func (r *Runner) Review(ctx context.Context) (Result, error) {
 	return res, nil
 }
 
-// publish posts the full reviewer output to the PR and swaps the verdict
-// label so a rerun cannot leave a stale review:pass behind.
+// publish swaps the verdict label and then posts the full reviewer output
+// (which carries the authoritative head-SHA marker) to the PR. The label
+// goes first so a failed label swap never leaves a marker that finish would
+// accept; a failed comment leaves only the display label, which finish
+// ignores.
 func (r *Runner) publish(ctx context.Context, pr int, res Result, label string) error {
-	if err := r.Gh.PrComment(ctx, pr, CommentBody(res)); err != nil {
-		return fmt.Errorf("review: PR #%d: comment: %w", pr, err)
-	}
 	labels, err := r.Gh.PrLabels(ctx, pr)
 	if err != nil {
 		return fmt.Errorf("review: PR #%d: labels: %w", pr, err)
@@ -190,14 +200,50 @@ func (r *Runner) publish(ctx context.Context, pr int, res Result, label string) 
 			return fmt.Errorf("review: PR #%d: add label %s: %w", pr, label, err)
 		}
 	}
+	if err := r.Gh.PrComment(ctx, pr, CommentBody(res)); err != nil {
+		return fmt.Errorf("review: PR #%d: comment: %w", pr, err)
+	}
 	return nil
 }
 
-// CommentBody renders the PR comment: a verdict header plus the reviewer's
+// CommentBody renders the PR comment: a machine-readable verdict marker
+// (head SHA + verdict, issue #249), a verdict header, and the reviewer's
 // full output.
 func CommentBody(res Result) string {
-	return fmt.Sprintf("## lead review: PR #%d\n\nVERDICT: %s\n\n%s",
-		res.PR, res.Verdict, strings.TrimRight(res.Output, "\n"))
+	return fmt.Sprintf("%s\n## lead review: PR #%d\n\nVERDICT: %s\n\n%s",
+		MarkerLine(res.HeadSHA, res.Verdict), res.PR, res.Verdict, strings.TrimRight(res.Output, "\n"))
+}
+
+// MarkerLine renders the marker finish reads back:
+// `<!-- lead-review sha=<40 hex> verdict=<verdict> -->`.
+func MarkerLine(sha, verdict string) string {
+	return fmt.Sprintf("<!-- lead-review sha=%s verdict=%s -->", sha, verdict)
+}
+
+// Marker is one parsed review verdict marker.
+type Marker struct {
+	SHA     string
+	Verdict string
+}
+
+// markerPattern matches a review marker. The verdict is captured verbatim
+// so an unknown verdict (including "invalid") still supersedes an older
+// pass; finish treats anything but pass as blocking.
+var markerPattern = regexp.MustCompile(`<!--\s*lead-review\s+sha=([0-9a-fA-F]{40})\s+verdict=([a-z-]+)\s*-->`)
+
+// LatestMarker returns the newest review marker across the PR's comments.
+// Comments come oldest-first from gh, so the scan runs backwards and takes
+// the last marker within a comment. ok is false when none is found.
+func LatestMarker(comments []ports.Comment) (Marker, bool) {
+	for i := len(comments) - 1; i >= 0; i-- {
+		all := markerPattern.FindAllStringSubmatch(comments[i].Body, -1)
+		if len(all) == 0 {
+			continue
+		}
+		m := all[len(all)-1]
+		return Marker{SHA: strings.ToLower(m[1]), Verdict: m[2]}, true
+	}
+	return Marker{}, false
 }
 
 // ParseVerdict reads only the last non-empty line. Anything but the two

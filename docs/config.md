@@ -62,7 +62,7 @@
 
 | Issue のラベル | `lead finish <n> --merge` の挙動 |
 |---|---|
-| `risk:a` | CI 成功かつ PR に `review:pass` があればマージする（規約ファイル保護のガードレールは別途適用） |
+| `risk:a` | CI 成功かつ現在の head SHA に対するレビュー pass があればマージする（規約ファイル保護のガードレールは別途適用） |
 | `risk:b` | マージせず、人間の承認待ちにする |
 | ラベルなし | `risk:b` と同じ（**既定は人間承認**） |
 
@@ -70,9 +70,14 @@
 `lead review <pr>` が PR の diff・Issue の受入条件・CI 結果を別プロセスの
 ヘッドレスエージェントに審査させ、最終行の `VERDICT: pass` /
 `VERDICT: needs-work` に応じて `review:pass` / `review:needs-work` を付ける。
-`review:pass` が無い場合はマージせず exit 0 で `lead review` を案内する。
-PR のラベルを取得できない場合は fail closed で exit 1（マージしない）。
-`--no-review` は人間専用の回避フラグで、ヘッドレス dispatch の完了定義には
+レビューコメントには審査時点の head SHA が
+`<!-- lead-review sha=<SHA> verdict=pass -->` として記録され、`lead finish`
+は現在の head SHA と一致する pass がある場合のみマージする（issue #249）。
+レビュー後にコミットを push すると再レビューが必要になり、finish は exit 0
+で `lead review` を案内する。コメントを取得できない場合は fail closed で
+exit 1（マージしない）。
+`--no-review` は `--approve` と同時に指定した場合のみ有効な人間専用の
+回避フラグで、単独ではエラーになる。ヘッドレス dispatch の完了定義には
 含めない。
 `review:pass` / `review:needs-work` は `lead enable` が作成する必須ラベルの
 一部（`lead enable --yes` で既存リポジトリにも追加できる）。

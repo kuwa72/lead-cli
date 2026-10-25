@@ -64,6 +64,8 @@ case "$1 $2" in
   "pr view")
     case "$*" in
       *"--json labels"*) printf 'review:pass\n' ;;
+      *"--json headRefOid"*) printf '{"headRefOid":"0123456789abcdef0123456789abcdef01234567"}' ;;
+      *"--json comments"*) printf '{"comments":[{"author":{"login":"lead"},"body":"<!-- lead-review sha=0123456789abcdef0123456789abcdef01234567 verdict=pass -->","createdAt":"2026-10-25T00:00:00Z"}]}' ;;
       *"--json files"*) printf '%s\n' "${FILES:-internal/x.go}" ;;
       *) printf '{"number":7,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}' ;;
     esac ;;

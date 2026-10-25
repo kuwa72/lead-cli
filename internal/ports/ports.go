@@ -69,6 +69,12 @@ type GhClient interface {
 	PrBody(ctx context.Context, pr int) (string, error)
 	// PrDiff mirrors `gh pr diff <pr>`.
 	PrDiff(ctx context.Context, pr int) (string, error)
+	// PrHeadSHA mirrors `gh pr view <pr> --json headRefOid` (review gate
+	// bound to the reviewed commit, issue #249).
+	PrHeadSHA(ctx context.Context, pr int) (string, error)
+	// PrComments mirrors `gh pr view <pr> --json comments` (review verdict
+	// markers, issue #249).
+	PrComments(ctx context.Context, pr int) ([]Comment, error)
 	// PrLabels mirrors `gh pr view <pr> --json labels --jq '.labels[].name'`
 	// (independent review gate, issue #246).
 	PrLabels(ctx context.Context, pr int) ([]string, error)

@@ -234,6 +234,51 @@ func (c *Client) PrDiff(ctx context.Context, pr int) (string, error) {
 	return string(out), nil
 }
 
+// PrHeadSHA runs `gh pr view <pr> --json headRefOid` and returns the
+// commit the PR currently points at (review gate, issue #249).
+func (c *Client) PrHeadSHA(ctx context.Context, pr int) (string, error) {
+	out, err := c.run(ctx, "pr", "view", strconv.Itoa(pr), "--json", "headRefOid")
+	if err != nil {
+		return "", err
+	}
+	var raw struct {
+		HeadRefOID string `json:"headRefOid"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return "", fmt.Errorf("gh pr view %d: decode JSON: %w", pr, err)
+	}
+	if raw.HeadRefOID == "" {
+		return "", fmt.Errorf("gh pr view %d: empty headRefOid", pr)
+	}
+	return raw.HeadRefOID, nil
+}
+
+// PrComments runs `gh pr view <pr> --json comments` and returns the PR's
+// conversation comments (review verdict markers, issue #249).
+func (c *Client) PrComments(ctx context.Context, pr int) ([]ports.Comment, error) {
+	out, err := c.run(ctx, "pr", "view", strconv.Itoa(pr), "--json", "comments")
+	if err != nil {
+		return nil, err
+	}
+	var raw struct {
+		Comments []struct {
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			Body      string `json:"body"`
+			CreatedAt string `json:"createdAt"`
+		} `json:"comments"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return nil, fmt.Errorf("gh pr view %d --json comments: decode JSON: %w", pr, err)
+	}
+	comments := make([]ports.Comment, len(raw.Comments))
+	for i, r := range raw.Comments {
+		comments[i] = ports.Comment{Author: r.Author.Login, Body: r.Body, CreatedAt: r.CreatedAt}
+	}
+	return comments, nil
+}
+
 // PrLabels runs `gh pr view <pr> --json labels --jq .labels[].name`.
 func (c *Client) PrLabels(ctx context.Context, pr int) ([]string, error) {
 	out, err := c.run(ctx, "pr", "view", strconv.Itoa(pr), "--json", "labels", "--jq", ".labels[].name")

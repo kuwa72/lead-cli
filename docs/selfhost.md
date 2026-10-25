@@ -91,7 +91,7 @@ lead finish <Issue番号> --pr <PR番号> --merge --close
 
 - **CI 監視**: `bin/ci-wait` と同様に GitHub Actions の完了を待機します。
 - **ポリシー判定**: ガードレール（重要規約ファイルの変更等）が検知された場合は安全のため一時停止します。
-- **リスク分級**: `risk:a` は `review:pass` がある場合のみ自動マージします。`risk:b` とラベルなしは `awaiting-human` になり、人間が `lead finish <Issue番号> --merge --approve` で承認します。`--no-review` / `--approve` / `--override-guardrail` は人間専用で、エージェントには使わせません。
+- **リスク分級**: `risk:a` は現在の head SHA に対するレビュー pass がある場合のみ自動マージします。レビュー後にコミットを push すると再レビューが必要です。`risk:b` とラベルなしは `awaiting-human` になり、人間が `lead finish <Issue番号> --merge --approve` で承認します。`--no-review`（`--approve` との同時指定が必須）/ `--approve` / `--override-guardrail` は人間専用で、エージェントには使わせません。
 - **マージ & クローズ**: CI パス後に squash merge を行い、Issue を自動でクローズしてワークフロー状態を完了（completed）に更新します。
 
 ### Step 5: クリーンアップ
