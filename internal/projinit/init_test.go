@@ -836,3 +836,227 @@ func TestRunApplySkipsCreationWithoutRepo(t *testing.T) {
 		t.Errorf("created = %v, want no creation without a remote", gh.created)
 	}
 }
+
+// Issue #232: `lead enable` records generated paths in the repository's
+// git exclude file so a freshly enabled repo does not report .worktrees/
+// or the lead-flow skill dirs as untracked.
+
+func testExcludePath(root string) string {
+	return filepath.Join(root, ".git", "info", "exclude")
+}
+
+func TestRunApplyIgnoresGeneratedPaths(t *testing.T) {
+	root := t.TempDir()
+	exclude := testExcludePath(root)
+	opts := Options{
+		Root:         root,
+		Yes:          true,
+		ExcludePath:  exclude,
+		SkillContent: testSkill,
+		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
+	}
+	rep, err := Run(opts)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !rep.Changed {
+		t.Error("Changed = false, want true after writing the ignore block")
+	}
+	if got := joinLines(rep); !strings.Contains(got, "ignore: new") {
+		t.Errorf("report missing ignore preview:\n%s", got)
+	}
+
+	got, err := os.ReadFile(exclude)
+	if err != nil {
+		t.Fatalf("exclude file missing: %v", err)
+	}
+	for _, want := range []string{ignoreBlockStart, ".worktrees/", ".agents/skills/lead-flow/", ignoreBlockEnd} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("exclude file missing %q:\n%s", want, got)
+		}
+	}
+
+	// Idempotent: one block, no further change.
+	rep, err = Run(opts)
+	if err != nil {
+		t.Fatalf("reinstall: %v", err)
+	}
+	if rep.Changed {
+		t.Errorf("reinstall Changed = true, want no-op (lines: %v)", rep.Lines)
+	}
+	again, _ := os.ReadFile(exclude)
+	if n := strings.Count(string(again), ignoreBlockStart); n != 1 {
+		t.Errorf("ignore block appears %d times, want 1:\n%s", n, again)
+	}
+}
+
+func TestRunApplyUpdatesIgnoreBlockForNewTargets(t *testing.T) {
+	root := t.TempDir()
+	exclude := testExcludePath(root)
+	base := Options{
+		Root:         root,
+		Yes:          true,
+		ExcludePath:  exclude,
+		SkillContent: testSkill,
+		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
+	}
+	if _, err := Run(base); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	base.Agent = "gemini"
+	if _, err := Run(base); err != nil {
+		t.Fatalf("install with gemini: %v", err)
+	}
+	got, _ := os.ReadFile(exclude)
+	if !strings.Contains(string(got), ".gemini/skills/lead-flow/") {
+		t.Errorf("exclude missing the new target:\n%s", got)
+	}
+	if n := strings.Count(string(got), ignoreBlockStart); n != 1 {
+		t.Errorf("ignore block appears %d times, want 1:\n%s", n, got)
+	}
+}
+
+func TestRunApplyIgnoreDefaultYes(t *testing.T) {
+	root := t.TempDir()
+	exclude := testExcludePath(root)
+	// "y" approves the install; the empty answer accepts the ignore default.
+	if _, err := Run(Options{
+		Root:         root,
+		Stdin:        strings.NewReader("y\n\n"),
+		ExcludePath:  exclude,
+		SkillContent: testSkill,
+		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := os.Stat(exclude); err != nil {
+		t.Errorf("default-yes answer did not write the exclude file: %v", err)
+	}
+}
+
+func TestRunApplyIgnoreDeclined(t *testing.T) {
+	root := t.TempDir()
+	exclude := testExcludePath(root)
+	// "y" approves the install, "n" declines the ignore entries.
+	rep, err := Run(Options{
+		Root:         root,
+		Stdin:        strings.NewReader("y\nn\n"),
+		ExcludePath:  exclude,
+		SkillContent: testSkill,
+		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertSkillFile(t, root, ".agents/skills")
+	if _, err := os.Stat(exclude); !os.IsNotExist(err) {
+		t.Errorf("declined ignore wrote the exclude file: %v", err)
+	}
+	got := joinLines(rep)
+	for _, want := range []string{"ignore: skipped", ".worktrees/", "untracked"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("declined report missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRunCheckReportsIgnoreState(t *testing.T) {
+	root := t.TempDir()
+	exclude := testExcludePath(root)
+	opts := Options{
+		Root:         root,
+		Yes:          true,
+		ExcludePath:  exclude,
+		SkillContent: testSkill,
+		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
+	}
+	if _, err := Run(opts); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	check := opts
+	check.Yes = false
+	check.Check = true
+	rep, err := Run(check)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if !rep.Complete {
+		t.Errorf("check after install = incomplete (lines: %v)", rep.Lines)
+	}
+	if got := joinLines(rep); !strings.Contains(got, "ignore: ok") {
+		t.Errorf("check missing ignore ok line:\n%s", got)
+	}
+
+	// A project may deliberately commit its skills: a missing block is
+	// reported with guidance but does not fail --check.
+	if err := os.Remove(exclude); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = Run(check)
+	if err != nil {
+		t.Fatalf("check without exclude: %v", err)
+	}
+	if !rep.Complete {
+		t.Errorf("check without ignore block = incomplete, want warning only (lines: %v)", rep.Lines)
+	}
+	got := joinLines(rep)
+	if !strings.Contains(got, "ignore: missing") || !strings.Contains(got, "untracked") {
+		t.Errorf("check without ignore block missing guidance:\n%s", got)
+	}
+}
+
+func TestRunUninstallRemovesIgnoreBlock(t *testing.T) {
+	root := t.TempDir()
+	exclude := testExcludePath(root)
+	if err := os.MkdirAll(filepath.Dir(exclude), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seeded := "# foreign\n" + ignoreBlockStart + "\n.worktrees/\n" + ignoreBlockEnd + "\n*.log\n"
+	if err := os.WriteFile(exclude, []byte(seeded), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := Run(Options{Root: root, Uninstall: true, ExcludePath: exclude})
+	if err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if got := joinLines(rep); !strings.Contains(got, "ignore: removed") {
+		t.Errorf("uninstall missing ignore removal report:\n%s", got)
+	}
+	got, _ := os.ReadFile(exclude)
+	if strings.Contains(string(got), ".worktrees/") || strings.Contains(string(got), ignoreBlockStart) {
+		t.Errorf("uninstall kept the managed ignore block:\n%s", got)
+	}
+	for _, want := range []string{"# foreign", "*.log"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("uninstall removed foreign content %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRunWithoutExcludePathSkipsIgnore(t *testing.T) {
+	root := t.TempDir()
+	rep, err := Run(Options{
+		Root:         root,
+		Yes:          true,
+		SkillContent: testSkill,
+		AgentsBlock:  testAgents,
+		LookPath:     missingLookPath,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".git")); !os.IsNotExist(err) {
+		t.Errorf("Run without ExcludePath created .git: %v", err)
+	}
+	if got := joinLines(rep); !strings.Contains(got, "ignore: skip") {
+		t.Errorf("report missing ignore skip line:\n%s", got)
+	}
+}

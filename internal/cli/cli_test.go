@@ -39,6 +39,9 @@ func (g *fakeGitRunner) ListBranches(repoDir string) ([]string, error) {
 	return nil, nil
 }
 func (g *fakeGitRunner) CheckoutBranch(repoDir, branch string) error { return nil }
+func (g *fakeGitRunner) GitPath(dir, name string) (string, error) {
+	return filepath.Join(g.root, ".git", filepath.FromSlash(name)), nil
+}
 
 var _ workflow.GitRunner = (*fakeGitRunner)(nil)
 

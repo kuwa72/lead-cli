@@ -75,6 +75,33 @@ func TestRepoSlug(t *testing.T) {
 	}
 }
 
+func TestGitPathResolvesSharedExcludeFile(t *testing.T) {
+	repo := initRepo(t)
+	want := filepath.Join(repo, ".git", "info", "exclude")
+
+	got, err := New().GitPath(repo, "info/exclude")
+	if err != nil {
+		t.Fatalf("GitPath: %v", err)
+	}
+	if got != want {
+		t.Errorf("GitPath = %q, want %q", got, want)
+	}
+
+	// Linked worktrees share the main repository's info/exclude, so a
+	// repo-level ignore decision must resolve to the same file.
+	wt := filepath.Join(t.TempDir(), "wt")
+	if err := New().WorktreeAdd(repo, wt, "feature"); err != nil {
+		t.Fatalf("WorktreeAdd: %v", err)
+	}
+	got, err = New().GitPath(wt, "info/exclude")
+	if err != nil {
+		t.Fatalf("GitPath from worktree: %v", err)
+	}
+	if got != want {
+		t.Errorf("GitPath from worktree = %q, want shared %q", got, want)
+	}
+}
+
 func TestRepoRootOutsideRepoFails(t *testing.T) {
 	if _, err := New().RepoRoot(t.TempDir()); err == nil {
 		t.Error("RepoRoot outside repo = nil, want failure")
@@ -219,4 +246,3 @@ func TestCheckoutBranchAndListBranches(t *testing.T) {
 		t.Fatalf("CheckoutBranch: %v", err)
 	}
 }
-

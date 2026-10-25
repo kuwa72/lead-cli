@@ -44,6 +44,12 @@ const (
 	// HasBlock/RemoveBlock recognize it; --write migrates it to BlockStart.
 	LegacyBlockStart = "<!-- lead-flow begin (managed by `lead init`; do not edit) -->"
 	LegacyBlockEnd   = "<!-- lead-flow end -->"
+
+	// ignoreBlockStart/ignoreBlockEnd fence the generated-path entries
+	// `lead enable` writes to the repository's git exclude file
+	// (issue #232).
+	ignoreBlockStart = "# lead-flow begin (managed by `lead enable`; do not edit)"
+	ignoreBlockEnd   = "# lead-flow end"
 )
 
 // Target is one skill installation location.
@@ -135,6 +141,10 @@ type Options struct {
 	// LookPath resolves agent binaries for detection; nil defaults to
 	// exec.LookPath. Tests inject fakes.
 	LookPath func(string) (string, error)
+	// ExcludePath is the repository's git exclude file, resolved with
+	// `git rev-parse --git-path info/exclude` (issue #232). Empty skips
+	// generated-path ignore handling (not a git repo / offline tests).
+	ExcludePath string
 }
 
 // Report describes what happened (Lines are user-facing).
@@ -168,7 +178,7 @@ func Run(opts Options) (Report, error) {
 
 	switch {
 	case opts.Uninstall:
-		return runUninstall(opts.Root)
+		return runUninstall(opts.Root, opts.ExcludePath)
 	case opts.Check:
 		return runCheck(opts.Root, opts, skill, agents)
 	case opts.DryRun:
@@ -211,10 +221,16 @@ func normalizeLegacy(content, block string) string {
 
 // UpsertBlock replaces the managed block or appends it (newline-terminated).
 func UpsertBlock(content, block string) string {
-	start := strings.Index(content, BlockStart)
-	end := strings.Index(content, BlockEnd)
+	return upsertMarked(content, BlockStart, BlockEnd, block)
+}
+
+// upsertMarked replaces the fenced block or appends it
+// (newline-terminated).
+func upsertMarked(content, startMarker, endMarker, block string) string {
+	start := strings.Index(content, startMarker)
+	end := strings.Index(content, endMarker)
 	if start >= 0 && end > start {
-		end += len(BlockEnd)
+		end += len(endMarker)
 		rest := content[end:]
 		rest = strings.TrimLeft(rest, "\n")
 		return content[:start] + block + rest
@@ -311,6 +327,73 @@ func allTargets() []Target {
 	return out
 }
 
+// ignoreEntries lists the repo-relative paths lead generates locally:
+// the worktree root used by `lead run --worktree` / `lead dispatch`, and
+// each lead-flow skill dir (issue #232). Only the managed skill dir is
+// ignored, so other project skills stay committable.
+func ignoreEntries(targets []Target) []string {
+	out := []string{".worktrees/"}
+	for _, t := range targets {
+		out = append(out, t.Dir+"/")
+	}
+	return out
+}
+
+func ignoreBlock(targets []Target) string {
+	var b strings.Builder
+	b.WriteString(ignoreBlockStart + "\n")
+	for _, entry := range ignoreEntries(targets) {
+		b.WriteString(entry + "\n")
+	}
+	b.WriteString(ignoreBlockEnd + "\n")
+	return b.String()
+}
+
+// ignoreAction reports how applying would change the exclude file and
+// the content to write ("new", "append", "update", or "keep").
+func ignoreAction(path string, block string) (string, string) {
+	cur, _ := os.ReadFile(path)
+	content := string(cur)
+	hasBlock := strings.Contains(content, ignoreBlockStart) &&
+		strings.Contains(content, ignoreBlockEnd)
+	if !hasBlock {
+		if content == "" {
+			return "new", block
+		}
+		return "append", upsertMarked(content, ignoreBlockStart, ignoreBlockEnd, block)
+	}
+	next := upsertMarked(content, ignoreBlockStart, ignoreBlockEnd, block)
+	if next == content {
+		return "keep", content
+	}
+	return "update", next
+}
+
+// ignorePreview appends the exclude-file status line and returns the
+// action plus the content applying would write ("skip" when no git
+// exclude path was resolved).
+func ignorePreview(rep *Report, excludePath string, targets []Target) (string, string) {
+	if excludePath == "" {
+		rep.Lines = append(rep.Lines, "ignore: skip (git exclude path not resolved)")
+		return "skip", ""
+	}
+	action, next := ignoreAction(excludePath, ignoreBlock(targets))
+	rep.Lines = append(rep.Lines, fmt.Sprintf("ignore: %s %s", action, excludePath))
+	return action, next
+}
+
+// writeIgnore creates the exclude file's parent directory and writes the
+// managed block.
+func writeIgnore(path, content string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
 // previewLines appends the skill and AGENTS.md status lines and reports
 // whether applying would change anything.
 func previewLines(rep *Report, root string, targets []Target, wantSkill []byte, block string) bool {
@@ -339,7 +422,11 @@ func previewLines(rep *Report, root string, targets []Target, wantSkill []byte, 
 // anything locally or remotely (`--dry-run`).
 func runPreview(root string, opts Options, wantSkill, wantAgents []byte) (Report, error) {
 	var rep Report
-	needChange := previewLines(&rep, root, skillTargets(opts), wantSkill, wantBlock(wantAgents))
+	targets := skillTargets(opts)
+	needChange := previewLines(&rep, root, targets, wantSkill, wantBlock(wantAgents))
+	if action, _ := ignorePreview(&rep, opts.ExcludePath, targets); action != "keep" && action != "skip" {
+		needChange = true
+	}
 	labelLines, _ := labelReport(opts.Gh, opts.Repo)
 	rep.Lines = append(rep.Lines, labelLines...)
 	protLines, _ := protectionReport(opts.Protection, opts.Repo)
@@ -358,22 +445,30 @@ func runApply(root string, opts Options, wantSkill, wantAgents []byte) (Report, 
 	var rep Report
 	block := wantBlock(wantAgents)
 	targets := skillTargets(opts)
-	needChange := previewLines(&rep, root, targets, wantSkill, block)
+	skillChange := previewLines(&rep, root, targets, wantSkill, block)
+	ignoreChange, ignoreNext := ignorePreview(&rep, opts.ExcludePath, targets)
+
+	// One scanner serves both prompts so a piped stdin does not lose the
+	// answer buffered by the first read.
+	var sc *bufio.Scanner
+	if opts.Stdin != nil {
+		sc = bufio.NewScanner(opts.Stdin)
+	}
 
 	if !opts.Yes {
 		// The approval gates both local writes and remote label
 		// creation: probe (read-only) whether labels are pending so an
 		// installed tree with missing labels still asks first.
-		if needChange || len(missingLabels(opts.Gh, opts.Repo)) > 0 {
+		if skillChange || len(missingLabels(opts.Gh, opts.Repo)) > 0 {
 			fmt.Fprint(os.Stderr, "Install lead-flow project configuration? [y/N] ")
-			if !ask(opts.Stdin) {
+			if !ask(sc) {
 				rep.Lines = append(rep.Lines, "aborted: no changes")
 				return rep, nil
 			}
 		}
 	}
 
-	if needChange {
+	if skillChange {
 		for _, t := range targets {
 			path := filepath.Join(root, t.Dir, "SKILL.md")
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -395,6 +490,29 @@ func runApply(root string, opts Options, wantSkill, wantAgents []byte) (Report, 
 		}
 	}
 
+	// Generated paths are a project decision: a repo may want to commit
+	// its skills, so this is a separate question (default yes). --yes
+	// applies without asking (issue #232).
+	ignoreSkipped := false
+	wroteIgnore := false
+	if ignoreChange != "keep" && ignoreChange != "skip" {
+		applyIgnore := opts.Yes
+		if !opts.Yes {
+			fmt.Fprintf(os.Stderr, "Add .worktrees/ and lead-flow skill dirs to %s? [Y/n] ", opts.ExcludePath)
+			applyIgnore = askDefaultYes(sc)
+		}
+		if applyIgnore {
+			if err := writeIgnore(opts.ExcludePath, ignoreNext); err != nil {
+				return rep, err
+			}
+			wroteIgnore = true
+		} else {
+			ignoreSkipped = true
+			rep.Lines = append(rep.Lines, "ignore: skipped ("+opts.ExcludePath+")")
+			rep.Lines = append(rep.Lines, "hint: generated paths (.worktrees/, skills dirs) will show as untracked in `git status`; ignore them or commit them deliberately")
+		}
+	}
+
 	// Remote labels last, after the approval above: create what is missing.
 	labelLines, labelsCreated := ensureLabels(opts.Gh, opts.Repo)
 	rep.Lines = append(rep.Lines, labelLines...)
@@ -405,9 +523,11 @@ func runApply(root string, opts Options, wantSkill, wantAgents []byte) (Report, 
 	protLines, _ := protectionReport(opts.Protection, opts.Repo)
 	rep.Lines = append(rep.Lines, protLines...)
 
-	rep.Changed = needChange || labelsCreated
+	rep.Changed = skillChange || wroteIgnore || labelsCreated
 	if !rep.Changed {
-		rep.Lines = append(rep.Lines, "lead-flow is already installed: no changes")
+		if !ignoreSkipped {
+			rep.Lines = append(rep.Lines, "lead-flow is already installed: no changes")
+		}
 		return rep, nil
 	}
 	rep.Lines = append(rep.Lines, "done: lead-flow is installed")
@@ -448,6 +568,23 @@ func runCheck(root string, opts Options, wantSkill, wantAgents []byte) (Report, 
 		}
 	} else {
 		rep.Lines = append(rep.Lines, fmt.Sprintf("AGENTS.md: ok (%s)", agentsPath))
+	}
+
+	// Generated-path ignores are a project decision (a repo may commit its
+	// skills), so a missing block is reported with guidance but never
+	// makes --check fail (same stance as branch protection, issue #200).
+	if opts.ExcludePath == "" {
+		rep.Lines = append(rep.Lines, "ignore: skip (git exclude path not resolved)")
+	} else {
+		action, _ := ignoreAction(opts.ExcludePath, ignoreBlock(skillTargets(opts)))
+		switch action {
+		case "keep":
+			rep.Lines = append(rep.Lines, fmt.Sprintf("ignore: ok (%s)", opts.ExcludePath))
+		case "update":
+			rep.Lines = append(rep.Lines, fmt.Sprintf("ignore: differs (%s; run `lead enable` to update the managed block)", opts.ExcludePath))
+		default:
+			rep.Lines = append(rep.Lines, fmt.Sprintf("ignore: missing (%s; .worktrees/ and lead-flow skill dirs will show as untracked — run `lead enable` or add them manually)", opts.ExcludePath))
+		}
 	}
 
 	labelLines, labelsOK := labelReport(opts.Gh, opts.Repo)
@@ -603,8 +740,23 @@ func ensureLabels(gh LabelClient, repo string) (lines []string, created bool) {
 	return lines, created
 }
 
-func runUninstall(root string) (Report, error) {
+func runUninstall(root, excludePath string) (Report, error) {
 	var rep Report
+
+	// Drop the managed generated-path block first: the AGENTS.md path
+	// returns early when there is no block (issue #232).
+	if excludePath != "" {
+		cur, err := os.ReadFile(excludePath)
+		if err == nil {
+			if next, ok := removeMarker(string(cur), ignoreBlockStart, ignoreBlockEnd); ok {
+				if err := os.WriteFile(excludePath, []byte(next), 0o644); err != nil {
+					return rep, fmt.Errorf("write %s: %w", excludePath, err)
+				}
+				rep.Changed = true
+				rep.Lines = append(rep.Lines, fmt.Sprintf("ignore: removed (%s)", excludePath))
+			}
+		}
+	}
 
 	for _, t := range allTargets() {
 		path := filepath.Join(root, t.Dir, "SKILL.md")
@@ -683,14 +835,20 @@ func removeEmptyParents(dir, stop string) {
 	}
 }
 
-func ask(stdin io.Reader) bool {
-	if stdin == nil {
-		return false
-	}
-	sc := bufio.NewScanner(stdin)
-	if !sc.Scan() {
+func ask(sc *bufio.Scanner) bool {
+	if sc == nil || !sc.Scan() {
 		return false
 	}
 	ans := strings.ToLower(strings.TrimSpace(sc.Text()))
 	return ans == "y" || ans == "yes"
+}
+
+// askDefaultYes treats an empty answer as yes; only an explicit no
+// declines.
+func askDefaultYes(sc *bufio.Scanner) bool {
+	if sc == nil || !sc.Scan() {
+		return false
+	}
+	ans := strings.ToLower(strings.TrimSpace(sc.Text()))
+	return ans != "n" && ans != "no"
 }

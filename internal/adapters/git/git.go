@@ -70,6 +70,21 @@ func (r *Runner) RepoRoot(dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// GitPath returns the absolute path of a file inside the repository's git
+// directory (e.g. "info/exclude"). Linked worktrees resolve to the shared
+// common dir, so repository-wide ignore decisions land in one file.
+func (r *Runner) GitPath(dir, name string) (string, error) {
+	out, err := r.run(context.Background(), dir, "rev-parse", "--git-path", name)
+	if err != nil {
+		return "", err
+	}
+	p := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(dir, p)
+	}
+	return p, nil
+}
+
 // BranchExists reports whether branch exists in the repo.
 func (r *Runner) BranchExists(repoDir, branch string) (bool, error) {
 	_, err := r.run(context.Background(), repoDir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)

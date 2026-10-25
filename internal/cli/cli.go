@@ -499,6 +499,10 @@ in this repository can run the lead issue-driven TDD workflow. The skill
 is written to .agents/skills/lead-flow and, for each agent detected on
 PATH or configured in inbox-config.json, to that agent's skills
 directory (.claude/skills, .devin/skills, .gemini/skills, .opencode/skills).
+It also offers to add the paths it generates (.worktrees/ and the
+lead-flow skill dirs) to the repository's git exclude file
+(.git/info/exclude) so ` + "`git status`" + ` stays clean; decline to commit
+those paths instead. --yes applies the ignore entries without asking.
 Operates only on this repository and never touches $HOME; for
 user-environment setup (shell completions, keybinding) see ` + "`lead setup`" + `.
 Applies changes after approval (use --yes non-interactively); --dry-run
@@ -514,10 +518,11 @@ previews without changing anything, --check verifies only.`,
 	disableCmd := &cobra.Command{
 		Use:   "disable",
 		Short: "Disable this repository for the lead workflow (remove lead-flow skill)",
-		Long: `Remove the /lead-flow skill files and the AGENTS.md managed block
-installed by ` + "`lead enable`" + ` from every known skills directory
-(.agents, .claude, .devin, .gemini, .opencode). Operates only on this
-repository and never touches $HOME. Repository issue labels are kept.`,
+		Long: `Remove the /lead-flow skill files, the AGENTS.md managed block, and
+the managed generated-path block in .git/info/exclude installed by
+` + "`lead enable`" + ` from every known skills directory (.agents, .claude,
+.devin, .gemini, .opencode). Operates only on this repository and never
+touches $HOME. Repository issue labels are kept.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDisable(cmd, deps)
 		},
@@ -1756,6 +1761,27 @@ func runStop(cmd *cobra.Command, deps Deps, raw string) error {
 	return nil
 }
 
+// gitPathRunner is the optional git capability that resolves a file inside
+// the repository's git dir (info/exclude, issue #232). Fakes without it
+// simply skip generated-path ignore handling.
+type gitPathRunner interface {
+	GitPath(dir, name string) (string, error)
+}
+
+// gitExcludePath resolves the repository's shared git exclude file, or ""
+// when the git implementation cannot resolve it.
+func gitExcludePath(g GitRunner, dir string) string {
+	r, ok := g.(gitPathRunner)
+	if !ok {
+		return ""
+	}
+	p, err := r.GitPath(dir, "info/exclude")
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
 // runEnable implements `lead enable` (issue #169): repository-oriented
 // agent configuration (lead-flow skill + AGENTS.md managed block).
 // Operates only on the repository, never on $HOME. Applies by default
@@ -1777,16 +1803,17 @@ func runEnable(cmd *cobra.Command, deps Deps) error {
 	}
 
 	rep, err := projinit.Run(projinit.Options{
-		Root:       repoRoot,
-		DryRun:     dryRun,
-		Check:      check,
-		Yes:        yes,
-		Stdin:      deps.stdin(),
-		Gh:         deps.gh(),
-		Protection: deps.gh(),
-		Repo:       deps.repoSlug(),
-		Agent:      deps.configuredAgent(),
-		LookPath:   deps.LookPath,
+		Root:        repoRoot,
+		DryRun:      dryRun,
+		Check:       check,
+		Yes:         yes,
+		Stdin:       deps.stdin(),
+		Gh:          deps.gh(),
+		Protection:  deps.gh(),
+		Repo:        deps.repoSlug(),
+		Agent:       deps.configuredAgent(),
+		LookPath:    deps.LookPath,
+		ExcludePath: gitExcludePath(deps.gitRunner(), repoRoot),
 	})
 	if err != nil {
 		return err
@@ -1821,8 +1848,9 @@ func runDisable(cmd *cobra.Command, deps Deps) error {
 	}
 
 	rep, err := projinit.Run(projinit.Options{
-		Root:      repoRoot,
-		Uninstall: true,
+		Root:        repoRoot,
+		Uninstall:   true,
+		ExcludePath: gitExcludePath(deps.gitRunner(), repoRoot),
 	})
 	if err != nil {
 		return err
