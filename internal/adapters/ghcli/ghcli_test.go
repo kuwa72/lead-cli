@@ -657,6 +657,59 @@ func TestPrDiff_CallsGhWithExpectedArgs(t *testing.T) {
 	}
 }
 
+func TestPrHeadSHA_ReturnsOID(t *testing.T) {
+	body := "if [ \"$1 $2\" = \"pr view\" ]; then printf '{\"headRefOid\":\"0123456789abcdef0123456789abcdef01234567\"}'\n" +
+		"else echo \"unexpected: $@\" >&2; exit 3\nfi"
+	logPath := testutil.InstallDummy(t, "gh", body)
+	testutil.ClearLog(t, logPath)
+
+	got, err := New().PrHeadSHA(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("PrHeadSHA: %v", err)
+	}
+	if want := "0123456789abcdef0123456789abcdef01234567"; got != want {
+		t.Errorf("PrHeadSHA = %q, want %q", got, want)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, wantArg := range []string{"<pr>", "<view>", "<7>", "<--json>", "<headRefOid>"} {
+		if !strings.Contains(log, wantArg) {
+			t.Errorf("gh args log missing %q, got:\n%s", wantArg, log)
+		}
+	}
+}
+
+func TestPrHeadSHA_EmptyOIDIsAnError(t *testing.T) {
+	body := "if [ \"$1 $2\" = \"pr view\" ]; then printf '{\"headRefOid\":\"\"}'\n" +
+		"else echo \"unexpected: $@\" >&2; exit 3\nfi"
+	testutil.InstallDummy(t, "gh", body)
+
+	if _, err := New().PrHeadSHA(context.Background(), 7); err == nil {
+		t.Fatal("PrHeadSHA with an empty oid = nil, want an error")
+	}
+}
+
+func TestPrComments_ReturnsBodies(t *testing.T) {
+	body := "if [ \"$1 $2\" = \"pr view\" ]; then printf '{\"comments\":[{\"author\":{\"login\":\"octocat\"},\"body\":\"<!-- lead-review sha=0123456789abcdef0123456789abcdef01234567 verdict=pass -->\",\"createdAt\":\"2026-10-25T00:00:00Z\"}]}'\n" +
+		"else echo \"unexpected: $@\" >&2; exit 3\nfi"
+	logPath := testutil.InstallDummy(t, "gh", body)
+	testutil.ClearLog(t, logPath)
+
+	got, err := New().PrComments(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("PrComments: %v", err)
+	}
+	want := []ports.Comment{{Author: "octocat", Body: "<!-- lead-review sha=0123456789abcdef0123456789abcdef01234567 verdict=pass -->", CreatedAt: "2026-10-25T00:00:00Z"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("PrComments = %+v, want %+v", got, want)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, wantArg := range []string{"<pr>", "<view>", "<7>", "<--json>", "<comments>"} {
+		if !strings.Contains(log, wantArg) {
+			t.Errorf("gh args log missing %q, got:\n%s", wantArg, log)
+		}
+	}
+}
+
 func TestPrLabels_ReturnsNames(t *testing.T) {
 	body := "if [ \"$1 $2\" = \"pr view\" ]; then printf 'review:pass\\nreview:needs-work\\n'\n" +
 		"else echo \"unexpected: $@\" >&2; exit 3\nfi"

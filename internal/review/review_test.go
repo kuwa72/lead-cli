@@ -27,11 +27,14 @@ func (a *fakeAgent) Run(_ context.Context, dir string, argv []string, logPath st
 	return a.out, a.err
 }
 
+const testSHA = "0123456789abcdef0123456789abcdef01234567"
+
 func reviewGh() *testutil.FakeGhClient {
 	return &testutil.FakeGhClient{
-		PrBodies: map[int]string{7: "Closes #246"},
-		PrDiffs:  map[int]string{7: "diff --git a/x b/x\n+new"},
-		Checks:   []ports.PRCheck{{Name: "test", Bucket: "pass", State: "SUCCESS"}},
+		PrBodies:  map[int]string{7: "Closes #246"},
+		PrDiffs:   map[int]string{7: "diff --git a/x b/x\n+new"},
+		Checks:    []ports.PRCheck{{Name: "test", Bucket: "pass", State: "SUCCESS"}},
+		PRHeadSHA: testSHA,
 		Issues: map[int]ports.Issue{246: {
 			Number: 246, Title: "feat(review): gate", Body: "## 受入条件\n- review:pass",
 		}},
@@ -67,6 +70,12 @@ func TestReview_PassLabelsPRAndPostsComment(t *testing.T) {
 	}
 	if !strings.Contains(gh.PRComments[0].Body, "受入条件は満たしている") {
 		t.Errorf("comment does not carry the review body:\n%s", gh.PRComments[0].Body)
+	}
+	if want := "<!-- lead-review sha=" + testSHA + " verdict=pass -->"; !strings.Contains(gh.PRComments[0].Body, want) {
+		t.Errorf("comment missing the machine-readable marker %q:\n%s", want, gh.PRComments[0].Body)
+	}
+	if res.HeadSHA != testSHA {
+		t.Errorf("HeadSHA = %q, want the reviewed head %q", res.HeadSHA, testSHA)
 	}
 	if want := []testutil.LabelCall{{Number: 7, Label: state.ReviewPassLabel}}; !reflect.DeepEqual(gh.AddedLabels, want) {
 		t.Errorf("added labels = %+v, want %+v", gh.AddedLabels, want)
@@ -206,6 +215,41 @@ func TestParseVerdict_OnlyLooksAtTheLastLine(t *testing.T) {
 			got, ok := ParseVerdict([]byte(tc.in))
 			if got != tc.want || ok != tc.ok {
 				t.Errorf("ParseVerdict(%q) = %q, %v; want %q, %v", tc.in, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+// The marker is machine-readable and must round-trip the reviewed head.
+func TestLatestMarker_TakesTheNewestOccurrence(t *testing.T) {
+	older := testSHA
+	newer := "fedcba9876543210fedcba9876543210fedcba98"
+	cases := []struct {
+		name     string
+		comments []ports.Comment
+		want     Marker
+		ok       bool
+	}{
+		{"none", nil, Marker{}, false},
+		{"plain comments only", []ports.Comment{{Body: "LGTM"}}, Marker{}, false},
+		{"single", []ports.Comment{{Body: "<!-- lead-review sha=" + older + " verdict=pass -->"}},
+			Marker{SHA: older, Verdict: VerdictPass}, true},
+		{"newest comment wins", []ports.Comment{
+			{Body: "<!-- lead-review sha=" + older + " verdict=pass -->"},
+			{Body: "<!-- lead-review sha=" + newer + " verdict=needs-work -->"},
+		}, Marker{SHA: newer, Verdict: VerdictNeedsWork}, true},
+		{"last marker within a comment wins", []ports.Comment{
+			{Body: "<!-- lead-review sha=" + older + " verdict=needs-work -->\n<!-- lead-review sha=" + newer + " verdict=pass -->"},
+		}, Marker{SHA: newer, Verdict: VerdictPass}, true},
+		{"malformed sha is ignored", []ports.Comment{{Body: "<!-- lead-review sha=abc verdict=pass -->"}}, Marker{}, false},
+		{"unknown verdict still supersedes", []ports.Comment{{Body: "<!-- lead-review sha=" + older + " verdict=lgtm -->"}},
+			Marker{SHA: older, Verdict: "lgtm"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := LatestMarker(tc.comments)
+			if got != tc.want || ok != tc.ok {
+				t.Errorf("LatestMarker = %+v, %v; want %+v, %v", got, ok, tc.want, tc.ok)
 			}
 		})
 	}

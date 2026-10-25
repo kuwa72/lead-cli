@@ -125,6 +125,16 @@ type FakeGhClient struct {
 	PRLabels     []string
 	PRLabelsErr  error
 	PRLabelCalls []int
+	// PRHeadSHA feeds PrHeadSHA (review gate head binding, issue #249);
+	// PRHeadSHAErr fails every call.
+	PRHeadSHA      string
+	PRHeadSHAErr   error
+	PRHeadSHACalls []int
+	// PRThread feeds PrComments (the PR's existing comments); PRThreadErr
+	// fails every call.
+	PRThread      []ports.Comment
+	PRThreadErr   error
+	PRThreadCalls []int
 	// PRComments records PrComment calls; PRCommentErr fails every call.
 	PRComments   []IssueComment
 	PRCommentErr error
@@ -461,6 +471,24 @@ func (f *FakeGhClient) PrDiff(ctx context.Context, pr int) (string, error) {
 		return diff, nil
 	}
 	return "", fmt.Errorf("fake gh: PR #%d diff not found", pr)
+}
+
+// PrHeadSHA returns PRHeadSHA (or PRHeadSHAErr) and records the call.
+func (f *FakeGhClient) PrHeadSHA(ctx context.Context, pr int) (string, error) {
+	f.PRHeadSHACalls = append(f.PRHeadSHACalls, pr)
+	if f.PRHeadSHAErr != nil {
+		return "", f.PRHeadSHAErr
+	}
+	return f.PRHeadSHA, nil
+}
+
+// PrComments returns PRThread (or PRThreadErr) and records the call.
+func (f *FakeGhClient) PrComments(ctx context.Context, pr int) ([]ports.Comment, error) {
+	f.PRThreadCalls = append(f.PRThreadCalls, pr)
+	if f.PRThreadErr != nil {
+		return nil, f.PRThreadErr
+	}
+	return f.PRThread, nil
 }
 
 // PrLabels returns PRLabels (or PRLabelsErr) and records the call.

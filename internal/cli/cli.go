@@ -589,11 +589,15 @@ and left open; this is not a failure. A human merges it with --approve:
   lead finish <n> --merge --approve
 
 An automatic (risk:a) merge also requires the independent reviewer's
-` + "`review:pass`" + ` label (issue #246). Without it finish pauses and points at
-` + "`lead review <pr>`" + `. --no-review is the human-only override.
+` + "`review:pass`" + ` verdict (issue #246), recorded as a PR comment bound to the
+head SHA the reviewer examined (issue #249). A pass for an older commit does
+not count: finish pauses and points at ` + "`lead review <pr>`" + `.
+` + "`--no-review --approve`" + ` is the human-only override; --no-review alone is
+rejected.
 
-Pauses — confirm policy, never policy, auto-merge-disabled repos, missing
-review, and awaiting human approval — exit 0 with the next step, not an error.`,
+Pauses — confirm policy, never policy, auto-merge-disabled repos, missing or
+stale review, and awaiting human approval — exit 0 with the next step, not an
+error.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFinish(cmd, deps, args[0])
@@ -603,7 +607,7 @@ review, and awaiting human approval — exit 0 with the next step, not an error.
 	finishCmd.Flags().String("part", "", "work unit within a multi-PR issue")
 	finishCmd.Flags().Bool("merge", false, "merge after CI passes (overrides confirm pause)")
 	finishCmd.Flags().Bool("approve", false, "human-only: approve merging a risk:b issue (default risk class)")
-	finishCmd.Flags().Bool("no-review", false, "human-only: merge a risk:a PR without the independent review's review:pass")
+	finishCmd.Flags().Bool("no-review", false, "human-only: with --approve, merge without the independent review")
 	finishCmd.Flags().Bool("override-guardrail", false, "merge even though the PR touches protected convention files (human confirmation; never pass this from an unattended agent)")
 	finishCmd.Flags().Bool("close", false, "close the issue")
 	finishCmd.Flags().Bool("no-close", false, "never close the issue")
@@ -625,7 +629,8 @@ output is posted to the PR and its final line must be one of:
 
 The PR gets review:pass or review:needs-work. Exit status is 0 for pass and
 1 for needs-work (or a missing/unrecognized verdict, which never passes).
-` + "`lead finish`" + ` requires review:pass for an automatic (risk:a) merge.
+The comment also records the reviewed head SHA; ` + "`lead finish`" + ` merges an
+automatic (risk:a) PR only while its head still matches that SHA (issue #249).
 
 The issue number is read from a closing keyword in the PR body (Closes #n)
 or from an issue/<n>-<slug> branch; --issue overrides it. The reviewer is

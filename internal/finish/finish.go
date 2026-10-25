@@ -2,6 +2,7 @@ package finish
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/review"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/workflow"
 )
@@ -127,6 +129,9 @@ func WaitChecks(ctx context.Context, gh ports.GhClient, pr int, timeout, interva
 // Run executes finish for one issue: re-verify PR, wait CI, policy-gated
 // merge, optional comment/close, and state recording.
 func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, opts Options) (Result, error) {
+	if opts.NoReview && !opts.Approve {
+		return Result{}, errors.New("finish: --no-review requires --approve (both are human-only confirmations)")
+	}
 	w, ok, err := store.Get(issue, opts.Part)
 	if err != nil {
 		return Result{}, err
@@ -249,18 +254,34 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return runAwaitingHuman(ctx, gh, store, w, prNumber, risk, opts)
 	}
 	// Independent review gate (issue #246): an unattended merge of a
-	// risk:a PR also needs the separate reviewer's verdict. Missing label
-	// (or an unreadable label list) stops before merging; --no-review is
-	// the human-only override.
+	// risk:a PR also needs the separate reviewer's verdict. Since issue
+	// #249 that verdict is a PR comment marker bound to the head SHA the
+	// reviewer examined: the label alone is display only. A missing or
+	// stale marker stops before merging; --no-review --approve is the
+	// human-only override.
 	if risk == RiskA && !opts.NoReview {
-		labels, err := gh.PrLabels(ctx, prNumber)
+		head, err := gh.PrHeadSHA(ctx, prNumber)
 		if err != nil {
-			return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: labels (review gate): %w", prNumber, err)
+			return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: head SHA (review gate): %w", prNumber, err)
 		}
-		if !slices.Contains(labels, state.ReviewPassLabel) {
+		comments, err := gh.PrComments(ctx, prNumber)
+		if err != nil {
+			return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: comments (review gate): %w", prNumber, err)
+		}
+		marker, found := review.LatestMarker(comments)
+		switch {
+		case !found:
 			return Result{ChecksPassed: true,
-				Message: fmt.Sprintf("CI passed for PR #%d, but it has no %s label. Run `lead review %d` and merge after it passes; a human can override with `lead finish %d --merge --no-review`.",
+				Message: fmt.Sprintf("CI passed for PR #%d, but it has no %s review. Run `lead review %d` and merge after it passes; a human can override with `lead finish %d --merge --approve --no-review`.",
 					prNumber, state.ReviewPassLabel, prNumber, issue)}, nil
+		case marker.Verdict != review.VerdictPass:
+			return Result{ChecksPassed: true,
+				Message: fmt.Sprintf("CI passed for PR #%d, but the last review verdict is %s. Address the findings, then run `lead review %d` again.",
+					prNumber, marker.Verdict, prNumber)}, nil
+		case !strings.EqualFold(marker.SHA, head):
+			return Result{ChecksPassed: true,
+				Message: fmt.Sprintf("CI passed for PR #%d, but the review passed %s and the head is now %s; re-review required: run `lead review %d`.",
+					prNumber, shortSHA(marker.SHA), shortSHA(head), prNumber)}, nil
 		}
 	}
 	if err := gh.PrMerge(ctx, prNumber); err != nil {
@@ -311,6 +332,14 @@ func cleanupWorktree(opts Options, w *state.Workflow) string {
 	}
 	w.Worktree = ""
 	return ""
+}
+
+// shortSHA abbreviates a commit SHA for pause messages (7 chars).
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }
 
 // guardrail lists the PR's protected files (see ProtectedPaths).

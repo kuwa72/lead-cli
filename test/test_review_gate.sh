@@ -47,6 +47,7 @@ case "$1 $2" in
       *"--json labels"*) cat "$LABELS_FILE" ;;
       *"--json body"*) printf '%s' '{"body":"Closes #246"}' ;;
       *"--json headRefName"*) printf '%s' '{"headRefName":"issue/246-feat-review"}' ;;
+      *"--json headRefOid"*) printf '%s' '{"headRefOid":"0123456789abcdef0123456789abcdef01234567"}' ;;
       *) printf '%s' '{"number":7,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}' ;;
     esac ;;
   "pr diff") printf '%s' 'diff --git a/internal/review/review.go b/internal/review/review.go
@@ -96,6 +97,8 @@ out="$(cd "$repo" && "$tmp/lead" review 7 --agent claude 2>&1)" \
 case "$out" in *review:pass*) ;; *) fail "pass output missing review:pass: $out";; esac
 label_present 'review:pass' || fail "review:pass label was not added: $(cat "$LABELS_FILE")"
 grep -q 'VERDICT: pass' "$COMMENT_FILE" || fail "PR comment missing the review body: $(cat "$COMMENT_FILE")"
+grep -qF -- '<!-- lead-review sha=0123456789abcdef0123456789abcdef01234567 verdict=pass -->' "$COMMENT_FILE" \
+  || fail "PR comment missing the head-SHA marker: $(cat "$COMMENT_FILE")"
 grep -q '受入条件を実行ログで確認した' "$COMMENT_FILE" || fail "PR comment missing the findings"
 grep -qx 'GH issue edit 7 --add-label review:pass' "$GH_LOG" \
   || fail "review:pass was not applied through gh issue edit: $(cat "$GH_LOG")"

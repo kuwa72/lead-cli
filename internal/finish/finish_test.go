@@ -46,6 +46,9 @@ func seedWithPR(t *testing.T, path string, w state.Workflow) {
 	seedRecord(t, path, w)
 }
 
+// testSHA is the PR head the base fixtures' review comment passed.
+const testSHA = "0123456789abcdef0123456789abcdef01234567"
+
 func baseFake() *testutil.FakeGhClient {
 	return &testutil.FakeGhClient{
 		Checks:           []ports.PRCheck{{Name: "test", Bucket: "pass", State: "SUCCESS"}},
@@ -53,9 +56,12 @@ func baseFake() *testutil.FakeGhClient {
 		AutoMergeAllowed: true,
 		// risk:a keeps the pre-#245 merge fixtures merging; the risk-gate
 		// tests below opt into other label sets explicitly. issue #246:
-		// automatic merge also needs the independent review's pass label.
-		Issues:   map[int]ports.Issue{36: {Number: 36, Title: "x", Labels: []string{"risk:a"}}},
-		PRLabels: []string{state.ReviewPassLabel},
+		// automatic merge also needs the independent review's pass, and
+		// issue #249 binds that pass to the reviewed head SHA.
+		Issues:    map[int]ports.Issue{36: {Number: 36, Title: "x", Labels: []string{"risk:a"}}},
+		PRLabels:  []string{state.ReviewPassLabel},
+		PRHeadSHA: testSHA,
+		PRThread:  []ports.Comment{{Body: "<!-- lead-review sha=" + testSHA + " verdict=pass -->"}},
 	}
 }
 
@@ -577,14 +583,15 @@ func TestRun_RiskAMerges(t *testing.T) {
 	}
 }
 
-// issue #246: automatic merge (risk:a) also requires the independent
-// review's pass label. Without it finish pauses (not an error) and merges
-// nothing.
+// issue #246/#249: automatic merge (risk:a) also requires the independent
+// review's pass on the current head. Without any verdict marker finish
+// pauses (not an error) and merges nothing.
 func TestRun_RiskANeedsReviewPass(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	seedWithPR(t, path, state.Workflow{})
 	fake := riskFake("risk:a")
 	fake.PRLabels = nil
+	fake.PRThread = nil
 
 	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
 		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
@@ -593,7 +600,7 @@ func TestRun_RiskANeedsReviewPass(t *testing.T) {
 		t.Fatalf("review pause = %v, want a clean pause", err)
 	}
 	if res.Merged || len(fake.MergeCalls) != 0 {
-		t.Fatalf("Result = %+v merges = %v; want no merge without review:pass", res, fake.MergeCalls)
+		t.Fatalf("Result = %+v merges = %v; want no merge without a review pass", res, fake.MergeCalls)
 	}
 	for _, want := range []string{state.ReviewPassLabel, "lead review"} {
 		if !strings.Contains(res.Message, want) {
@@ -602,41 +609,143 @@ func TestRun_RiskANeedsReviewPass(t *testing.T) {
 	}
 }
 
-// --no-review is the human-only override that keeps a risk:a merge moving
-// without the independent review.
+// issue #249: a review:pass label alone is not enough — the pass must come
+// from a review comment. A stale label on a PR with no marker stops.
+func TestRun_ReviewPassLabelAloneDoesNotMerge(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := riskFake("risk:a")
+	fake.PRThread = nil
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil {
+		t.Fatalf("review pause = %v, want a clean pause", err)
+	}
+	if res.Merged || len(fake.MergeCalls) != 0 {
+		t.Fatalf("Result = %+v merges = %v; want no merge from the label alone", res, fake.MergeCalls)
+	}
+}
+
+// issue #249: a pass for an older commit must not merge the new head.
+func TestRun_ReviewStaleHeadStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := riskFake("risk:a")
+	fake.PRHeadSHA = "fedcba9876543210fedcba9876543210fedcba98"
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil {
+		t.Fatalf("stale review pause = %v, want a clean pause", err)
+	}
+	if res.Merged || len(fake.MergeCalls) != 0 {
+		t.Fatalf("Result = %+v merges = %v; want no merge when the review is stale", res, fake.MergeCalls)
+	}
+	for _, want := range []string{"re-review", "lead review 7"} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("pause message missing %q: %s", want, res.Message)
+		}
+	}
+}
+
+// issue #249: the newest marker decides — a later needs-work wins over an
+// earlier pass on the same head.
+func TestRun_NewestNeedsWorkStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := riskFake("risk:a")
+	fake.PRThread = []ports.Comment{
+		{Body: "<!-- lead-review sha=" + testSHA + " verdict=pass -->"},
+		{Body: "<!-- lead-review sha=" + testSHA + " verdict=needs-work -->"},
+	}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil {
+		t.Fatalf("needs-work pause = %v, want a clean pause", err)
+	}
+	if res.Merged || len(fake.MergeCalls) != 0 {
+		t.Fatalf("Result = %+v merges = %v; want no merge after needs-work", res, fake.MergeCalls)
+	}
+}
+
+// --no-review is a human-only override; it requires --approve so an
+// unattended agent cannot lift the review gate alone (issue #249).
+func TestRun_NoReviewRequiresApprove(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := riskFake("risk:a")
+	fake.PRThread = nil
+
+	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, NoReview: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err == nil || !strings.Contains(err.Error(), "--approve") {
+		t.Fatalf("err = %v, want --no-review without --approve rejected", err)
+	}
+	if len(fake.MergeCalls) != 0 {
+		t.Errorf("merged with --no-review alone")
+	}
+}
+
+// --no-review --approve is the human-only combination that keeps a risk:a
+// merge moving without the independent review.
 func TestRun_RiskANoReviewFlagMerges(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	seedWithPR(t, path, state.Workflow{})
 	fake := riskFake("risk:a")
 	fake.PRLabels = nil
+	fake.PRThread = nil
 
 	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
-		Merge: true, Close: true, NoReview: true, Timeout: time.Minute, Sleep: noSleep,
+		Merge: true, Close: true, NoReview: true, Approve: true, Timeout: time.Minute, Sleep: noSleep,
 	})
 	if err != nil || !res.Merged {
-		t.Fatalf("Result = %+v, %v; want --no-review to merge", res, err)
+		t.Fatalf("Result = %+v, %v; want --no-review --approve to merge", res, err)
 	}
 	if !reflect.DeepEqual(fake.MergeCalls, []int{7}) {
 		t.Errorf("merges = %v, want PR 7", fake.MergeCalls)
 	}
 }
 
-// A failed PR-label lookup cannot prove a review pass, so finish must stop
-// (fail closed).
-func TestRun_ReviewLabelLookupFailureStops(t *testing.T) {
+// A failed PR-comment lookup cannot prove a review pass, so finish must
+// stop (fail closed).
+func TestRun_ReviewCommentLookupFailureStops(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	seedWithPR(t, path, state.Workflow{})
 	fake := riskFake("risk:a")
-	fake.PRLabelsErr = errors.New("labels boom")
+	fake.PRThreadErr = errors.New("comments boom")
 
 	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
 		Merge: true, Timeout: time.Minute, Sleep: noSleep,
 	})
-	if err == nil || !strings.Contains(err.Error(), "labels boom") {
-		t.Fatalf("err = %v, want the label lookup failure surfaced", err)
+	if err == nil || !strings.Contains(err.Error(), "comments boom") {
+		t.Fatalf("err = %v, want the comment lookup failure surfaced", err)
 	}
 	if len(fake.MergeCalls) != 0 {
 		t.Errorf("merged despite an unknown review verdict")
+	}
+}
+
+// A failed head-SHA lookup cannot prove the review is current either.
+func TestRun_HeadSHALookupFailureStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := riskFake("risk:a")
+	fake.PRHeadSHAErr = errors.New("head boom")
+
+	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err == nil || !strings.Contains(err.Error(), "head boom") {
+		t.Fatalf("err = %v, want the head lookup failure surfaced", err)
+	}
+	if len(fake.MergeCalls) != 0 {
+		t.Errorf("merged despite an unknown head SHA")
 	}
 }
 

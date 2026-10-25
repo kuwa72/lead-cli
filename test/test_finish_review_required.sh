@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# issue #246: `lead finish` は自動マージ（risk:a）に独立レビューの
-# review:pass を要求する。ダミー gh で
-#   - review:pass なし → マージせず exit 0（レビュー手順を案内）
-#   - review:needs-work のみ → マージしない
-#   - review:pass あり → マージして close
-#   - --no-review（人間専用）→ ラベルなしでもマージ
-#   - ラベル取得失敗 → マージしない（fail closed）
+# issue #246 / #249: `lead finish` は自動マージ（risk:a）に独立レビューの
+# pass を要求する。pass は PR コメントの
+# `<!-- lead-review sha=<head> verdict=pass -->` で表され、現在の head SHA
+# と一致する場合のみ有効。ダミー gh で
+#   - レビューコメントなし → マージせず exit 0（レビュー手順を案内）
+#   - needs-work のみ → マージしない
+#   - 現在の head に対する pass あり → マージして close
+#   - --no-review --approve（人間専用）→ コメントなしでもマージ
+#   - コメント取得失敗 → マージしない（fail closed）
 # を検証する（grep によるソース検査なし・一時 HOME/リポジトリ）。
 set -euo pipefail
 
@@ -25,9 +27,10 @@ export LEAD_NOTIFY=0
 mkdir -p "$HOME"
 
 export GH_LOG="$tmp/gh.log"
-export PR_LABELS_FILE="$tmp/pr-labels.txt"
+export PR_MARKER_FILE="$tmp/pr-marker.txt"
+export HEAD_SHA_FILE="$tmp/head-sha.txt"
 export MERGED_MARK="$tmp/merged" CLOSED_MARK="$tmp/closed"
-: > "$GH_LOG"; : > "$PR_LABELS_FILE"
+: > "$GH_LOG"; : > "$PR_MARKER_FILE"; : > "$HEAD_SHA_FILE"
 
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/gh" <<'EOF'
@@ -41,12 +44,18 @@ case "$1 $2" in
   "issue edit"|"issue comment"|"auth status") : ;;
   "pr view")
     case "$*" in
-      *"--json labels"*)
-        if [ "${PR_LABELS_FAIL:-0}" = "1" ]; then
-          echo "gh: labels unavailable" >&2
+      *"--json headRefOid"*) printf '{"headRefOid":"%s"}' "$(cat "$HEAD_SHA_FILE")" ;;
+      *"--json comments"*)
+        if [ "${PR_COMMENTS_FAIL:-0}" = "1" ]; then
+          echo "gh: comments unavailable" >&2
           exit 1
         fi
-        cat "$PR_LABELS_FILE" ;;
+        if [ -s "$PR_MARKER_FILE" ]; then
+          printf '{"comments":[{"author":{"login":"lead"},"body":"%s","createdAt":"2026-10-25T00:00:00Z"}]}' "$(cat "$PR_MARKER_FILE")"
+        else
+          printf '{"comments":[]}'
+        fi ;;
+      *"--json labels"*) printf '' ;;
       *"--json files"*) printf 'internal/x.go\n' ;;
       *) printf '{"number":7,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}' ;;
     esac ;;
@@ -77,59 +86,64 @@ mk_repo() {
   git -C "$repo" remote add origin https://github.com/o/r.git
 }
 
-# seed <case> <label>... : fresh repo/state with the given PR labels.
+HEAD_A="0123456789abcdef0123456789abcdef01234567"
+
+# seed <case> <marker-or-empty> : fresh repo/state with the given review marker.
 seed() {
-  local name="$1"; shift
+  local name="$1" marker="$2"
   local repo="$tmp/repo-$name"
   mk_repo "$repo"
   export LEAD_STATE_FILE="$tmp/state-$name.json"
-  : > "$PR_LABELS_FILE"
-  for l in "$@"; do printf '%s\n' "$l" >> "$PR_LABELS_FILE"; done
+  printf '%s' "$marker" > "$PR_MARKER_FILE"
+  printf '%s' "$HEAD_A" > "$HEAD_SHA_FILE"
   rm -f "$MERGED_MARK" "$CLOSED_MARK"
   : > "$GH_LOG"
   (cd "$repo" && "$tmp/lead" run 36 >/dev/null) || fail "$name: lead run failed"
 }
 
-# --- 1. review:pass なし → マージせず、レビュー手順を案内して exit 0 ---
-seed no-review
+# --- 1. レビューコメントなし → マージせず、レビュー手順を案内して exit 0 ---
+seed no-review ''
 out="$(cd "$tmp/repo-no-review" && "$tmp/lead" finish 36 --pr 7 --merge --timeout 60s --poll-interval 1s)" \
   || fail "no-review: finish exited non-zero: $out"
-[ -f "$MERGED_MARK" ] && fail "no-review: PR merged without review:pass"
+[ -f "$MERGED_MARK" ] && fail "no-review: PR merged without a review pass"
 grep -q '^GH pr merge ' "$GH_LOG" && fail "no-review: gh pr merge was called: $(cat "$GH_LOG")"
 case "$out" in *review:pass*) ;; *) fail "no-review: message missing review:pass: $out";; esac
 case "$out" in *"lead review 7"*) ;; *) fail "no-review: message missing the lead review next step: $out";; esac
+grep -q '^GH pr view 7 --json headRefOid' "$GH_LOG" || fail "no-review: head SHA was not queried: $(cat "$GH_LOG")"
+grep -q '^GH pr view 7 --json comments' "$GH_LOG" || fail "no-review: PR comments were not queried: $(cat "$GH_LOG")"
 
-# --- 2. review:needs-work のみ → マージしない ---
-seed needs-work review:needs-work
+# --- 2. needs-work のみ → マージしない ---
+seed needs-work "<!-- lead-review sha=$HEAD_A verdict=needs-work -->"
 out="$(cd "$tmp/repo-needs-work" && "$tmp/lead" finish 36 --pr 7 --merge --timeout 60s --poll-interval 1s)" \
   || fail "needs-work: finish exited non-zero: $out"
 [ -f "$MERGED_MARK" ] && fail "needs-work: PR merged with a needs-work verdict"
 grep -q '^GH pr merge ' "$GH_LOG" && fail "needs-work: gh pr merge was called: $(cat "$GH_LOG")"
+case "$out" in *"lead review 7"*) ;; *) fail "needs-work: message missing the re-review step: $out";; esac
 
-# --- 3. review:pass あり → マージして close ---
-seed pass review:pass
+# --- 3. 現在の head に対する pass あり → マージして close ---
+seed pass "<!-- lead-review sha=$HEAD_A verdict=pass -->"
 out="$(cd "$tmp/repo-pass" && "$tmp/lead" finish 36 --pr 7 --merge --close --timeout 60s --poll-interval 1s)" \
   || fail "pass: finish failed: $out"
 [ -f "$MERGED_MARK" ] || fail "pass: PR was not merged"
 [ -f "$CLOSED_MARK" ] || fail "pass: issue was not closed"
 grep -qx 'GH pr merge 7 --squash --delete-branch' "$GH_LOG" || fail "pass: squash merge not invoked: $(cat "$GH_LOG")"
 
-# --- 4. --no-review（人間専用）→ ラベルなしでもマージ ---
-seed no-review-flag
-out="$(cd "$tmp/repo-no-review-flag" && "$tmp/lead" finish 36 --pr 7 --merge --no-review --close --timeout 60s --poll-interval 1s)" \
+# --- 4. --no-review --approve（人間専用）→ コメントなしでもマージ ---
+seed no-review-flag ''
+out="$(cd "$tmp/repo-no-review-flag" && "$tmp/lead" finish 36 --pr 7 --merge --no-review --approve --close --timeout 60s --poll-interval 1s)" \
   || fail "no-review flag: finish failed: $out"
 [ -f "$MERGED_MARK" ] || fail "no-review flag: PR was not merged"
 [ -f "$CLOSED_MARK" ] || fail "no-review flag: issue was not closed"
 
-# --- 5. ラベル取得失敗 → マージしない（fail closed） ---
-seed label-fail review:pass
-export PR_LABELS_FAIL=1
-if out="$(cd "$tmp/repo-label-fail" && "$tmp/lead" finish 36 --pr 7 --merge --timeout 60s --poll-interval 1s 2>&1)"; then
-  fail "label failure: finish exited 0: $out"
+# --- 5. コメント取得失敗 → マージしない（fail closed） ---
+seed comment-fail "<!-- lead-review sha=$HEAD_A verdict=pass -->"
+export PR_COMMENTS_FAIL=1
+if out="$(cd "$tmp/repo-comment-fail" && "$tmp/lead" finish 36 --pr 7 --merge --timeout 60s --poll-interval 1s 2>&1)"; then
+  fail "comment failure: finish exited 0: $out"
 fi
-unset PR_LABELS_FAIL
-[ -f "$MERGED_MARK" ] && fail "label failure: PR merged despite an unknown review verdict"
-grep -q '^GH pr merge ' "$GH_LOG" && fail "label failure: gh pr merge was called: $(cat "$GH_LOG")"
+unset PR_COMMENTS_FAIL
+[ -f "$MERGED_MARK" ] && fail "comment failure: PR merged despite an unknown review verdict"
+grep -q '^GH pr merge ' "$GH_LOG" && fail "comment failure: gh pr merge was called: $(cat "$GH_LOG")"
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"
 
