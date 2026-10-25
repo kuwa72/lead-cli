@@ -62,6 +62,9 @@ type Options struct {
 	Theme string
 	// Cache is the persistent issue cache store (issue #140).
 	Cache *CacheStore
+	// PreviewCache persists issue details (body, state, labels, comments)
+	// per repository so reselecting an issue skips gh issue view (issue #263).
+	PreviewCache *PreviewCacheStore
 	// Agent is the active coding agent (agy/claude/codex/devin/opencode/gemini).
 	Agent string
 	// AgentMode is the active agent dispatch mode (batch/dangerous/interactive).
@@ -192,6 +195,9 @@ type (
 		item     Item
 		snapshot previewSnapshot
 		err      error
+		// warn reports a refresh failure while snapshot still holds the last
+		// good detail (issue #263).
+		warn string
 	}
 	previewDelayMsg struct {
 		req  int
@@ -688,6 +694,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.previewErr = nil
 		m.applySnapshot(msg.snapshot)
 		m.cacheSnapshot(msg.item.Number, msg.snapshot)
+		if msg.warn != "" {
+			return m, m.setStatus("Error: " + msg.warn)
+		}
 		return m, nil
 	case previewDelayMsg:
 		if msg.req != m.previewReq {

@@ -25,6 +25,8 @@ type previewSnapshot struct {
 	agentLog    string
 	prDiff      string
 	prDiffErr   bool
+	// fetchedAt bounds how long the in-session snapshot is reused (issue #263).
+	fetchedAt time.Time
 }
 
 // applySnapshot updates the model's current detail fields from a snapshot.
@@ -45,16 +47,42 @@ func (m *Model) cacheSnapshot(number int, s previewSnapshot) {
 	if m.previewCache == nil {
 		m.previewCache = make(map[int]previewSnapshot)
 	}
+	if s.fetchedAt.IsZero() {
+		s.fetchedAt = m.now()
+	}
 	m.previewCache[number] = s
 }
 
-// cachedSnapshot returns the cached snapshot and true if it exists.
+// cachedSnapshot returns the cached snapshot and true if it exists and is
+// still within the preview TTL.
 func (m *Model) cachedSnapshot(number int) (previewSnapshot, bool) {
 	if m.previewCache == nil {
 		return previewSnapshot{}, false
 	}
 	s, ok := m.previewCache[number]
-	return s, ok
+	if !ok {
+		return previewSnapshot{}, false
+	}
+	if !s.fetchedAt.IsZero() && m.now().Sub(s.fetchedAt) > m.previewTTL() {
+		return previewSnapshot{}, false
+	}
+	return s, true
+}
+
+// previewTTL is the preview cache lifetime, shared by memory and disk entries.
+func (m Model) previewTTL() time.Duration {
+	if m.opts.PreviewCache != nil && m.opts.PreviewCache.TTL > 0 {
+		return m.opts.PreviewCache.TTL
+	}
+	return DefaultPreviewTTL
+}
+
+// diskSnapshot returns the fresh disk-cached detail for an issue (issue #263).
+func (m Model) diskSnapshot(number int) (PreviewCacheEntry, bool) {
+	if m.opts.PreviewCache == nil {
+		return PreviewCacheEntry{}, false
+	}
+	return m.opts.PreviewCache.Load(number)
 }
 
 // issueChanged reports whether a freshly fetched issue differs from the loaded preview.
@@ -95,22 +123,68 @@ func (m Model) previewDelayCmd(it Item, req int) tea.Cmd {
 }
 
 // previewLoadCmd fetches the issue body, comments, and linked PR body.
+// A fresh disk-cached detail is rendered without calling gh issue view
+// (issue #263); PR body/diff are always fetched.
 func (m Model) previewLoadCmd(it Item, req int) tea.Cmd {
 	gh := m.opts.Gh
+	store := m.opts.PreviewCache
+	repo := m.opts.Repo
 	return func() tea.Msg {
 		ctx := context.Background()
-		iss, err := gh.View(ctx, it.Number)
-		if err != nil {
-			if it.Kind == KindRunning {
+		var (
+			iss         ports.Issue
+			comments    []ports.Comment
+			commentsErr bool
+			cached      bool
+			warn        string
+		)
+		if store != nil {
+			if entry, ok := store.Load(it.Number); ok {
+				iss, comments, cached = entry.Issue, entry.Comments, true
+			}
+		}
+		if !cached {
+			fresh, err := gh.View(ctx, it.Number)
+			switch {
+			case err == nil:
+				iss = fresh
+			case it.Kind == KindRunning:
 				iss = ports.Issue{Number: it.Number, Title: it.Title, State: "OPEN"}
-			} else {
-				return previewMsg{req: req, item: it, err: err}
+			default:
+				entry, ok := PreviewCacheEntry{}, false
+				if store != nil {
+					entry, ok = store.LoadStale(it.Number)
+				}
+				if !ok {
+					return previewMsg{req: req, item: it, err: err}
+				}
+				iss, comments, cached = entry.Issue, entry.Comments, true
+				warn = fmt.Sprintf("Unable to refresh #%d: %v", it.Number, err)
+			}
+			if !cached {
+				got, cerr := gh.IssueComments(ctx, it.Number)
+				if cerr != nil {
+					commentsErr = true
+				} else {
+					comments = got
+				}
+				if err == nil && !commentsErr && store != nil {
+					if iss.BlockedReason == "" {
+						iss.BlockedReason = extractBlockedReason(iss.Body)
+					}
+					_ = store.Save(PreviewCacheEntry{
+						Repo:     repo,
+						Number:   it.Number,
+						Issue:    iss,
+						Comments: comments,
+					})
+				}
 			}
 		}
 		if iss.BlockedReason == "" {
 			iss.BlockedReason = extractBlockedReason(iss.Body)
 		}
-		snap := previewSnapshot{issue: iss, prNumber: it.PRNumber}
+		snap := previewSnapshot{issue: iss, prNumber: it.PRNumber, comments: comments, commentsErr: commentsErr}
 		if it.Kind == KindRunning && it.LogPath != "" {
 			snap.agentLog = readLogTail(it.LogPath, 50)
 		}
@@ -128,13 +202,7 @@ func (m Model) previewLoadCmd(it Item, req int) tea.Cmd {
 				snap.prDiff = diff
 			}
 		}
-		comments, err := gh.IssueComments(ctx, it.Number)
-		if err != nil {
-			snap.commentsErr = true
-		} else {
-			snap.comments = comments
-		}
-		return previewMsg{req: req, item: it, snapshot: snap}
+		return previewMsg{req: req, item: it, snapshot: snap, warn: warn}
 	}
 }
 
@@ -207,6 +275,16 @@ func (m *Model) loadPreviewForCurrent() tea.Cmd {
 	m.previewReq++
 	req := m.previewReq
 	if snap, ok := m.cachedSnapshot(it.Number); ok {
+		m.applySnapshot(snap)
+		m.previewLoading = false
+		m.previewErr = nil
+	} else if entry, ok := m.diskSnapshot(it.Number); ok {
+		// Render the saved detail immediately; the delayed load still runs to
+		// pick up PR body/diff (issue #263).
+		snap := previewSnapshot{issue: entry.Issue, prNumber: it.PRNumber, comments: entry.Comments}
+		if it.Kind == KindRunning && it.LogPath != "" {
+			snap.agentLog = readLogTail(it.LogPath, 50)
+		}
 		m.applySnapshot(snap)
 		m.previewLoading = false
 		m.previewErr = nil
