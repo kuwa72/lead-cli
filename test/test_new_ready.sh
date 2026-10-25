@@ -59,6 +59,10 @@ JSON
 {"number":44,"title":"no risk","body":"# no risk\n\n## 受入条件\n\n- [ ] `./test/run-tests.sh` が pass する\n\n## スコープ外\n\n- none","state":"OPEN","labels":[{"name":"needs-review"}]}
 JSON
         ;;
+      45) cat <<'JSON'
+{"number":45,"title":"english","body":"# english\n\n## Acceptance criteria\n\n- [ ] `./test/run-tests.sh` passes\n\n## Scope\n\n**変更対象**\n- preview cache\n\n**対象外**\n- list cache","state":"OPEN","labels":[{"name":"needs-review"}]}
+JSON
+        ;;
       *) echo "unexpected issue view: $*" >&2; exit 3 ;;
     esac ;;
   "issue edit") ;;
@@ -181,5 +185,23 @@ for needle in "## 受入条件" "## スコープ外" "risk:a" "risk:b" "バッ�
 done
 out="$("$tmp/lead" ready --help 2>&1)" || fail "lead ready --help failed"
 case "$out" in *"lead ready"*) ;; *) fail "lead ready --help lacks command name: $out";; esac
+case "$out" in *"--risk"*) ;; *) fail "lead ready --help lacks --risk: $out";; esac
+case "$out" in *"Acceptance criteria"*) ;; *) fail "lead ready --help lacks the English heading: $out";; esac
+
+# --- 10. English headings + **対象外**: --risk applies the classification ----
+: > "$GH_LOG"
+out="$("$tmp/lead" ready 45 --risk b 2>&1)" || fail "lead ready 45 --risk b exited non-zero: $out"
+grep -qxF 'GH issue edit 45 --add-label risk:b' "$GH_LOG" || fail "risk:b not added for english body: $(cat "$GH_LOG")"
+grep -qxF 'GH issue edit 45 --add-label ready' "$GH_LOG" || fail "ready not added for english body: $(cat "$GH_LOG")"
+grep -qxF 'GH issue edit 45 --remove-label needs-review' "$GH_LOG" || fail "needs-review not removed for english body: $(cat "$GH_LOG")"
+
+# --- 11. English body with no risk label and no --risk is still rejected -----
+: > "$GH_LOG"
+set +e
+out="$("$tmp/lead" ready 45 2>&1)"
+status=$?
+set -e
+[ "$status" -eq 1 ] || fail "no-risk english ready exit = $status, want 1: $out"
+grep -q '^GH issue edit' "$GH_LOG" && fail "no-risk english ready must not change labels: $(cat "$GH_LOG")"
 
 echo "new/ready tests passed"

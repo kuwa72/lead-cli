@@ -17,6 +17,15 @@ const (
 	OutOfScopeHeading = "## スコープ外"
 )
 
+// Accepted aliases. Bodies written in English (or by an AI draft) must not be
+// rejected just because the heading language differs, and `**対象外**`-style
+// bold labels count as the out-of-scope section (issue #264).
+var (
+	AcceptanceHeadings = []string{AcceptanceHeading, "## Acceptance criteria"}
+	OutOfScopeHeadings = []string{OutOfScopeHeading, "## Scope", "## Out of scope", "## 対象外"}
+	OutOfScopeMarkers  = []string{"**対象外**", "**スコープ外**", "**Out of scope**"}
+)
+
 // RiskLabels are the accepted risk classifications (docs/config.md).
 var RiskLabels = []string{"risk:a", "risk:b"}
 
@@ -68,9 +77,9 @@ func Title(body string) string {
 func Check(body string, labels []string) []string {
 	var missing []string
 
-	acceptance, ok := section(body, AcceptanceHeading)
+	acceptance, ok := sectionAny(body, AcceptanceHeadings)
 	if !ok {
-		missing = append(missing, "`"+AcceptanceHeading+"` セクションがありません")
+		missing = append(missing, "`"+AcceptanceHeading+"` または `## Acceptance criteria` セクションがありません")
 	} else {
 		items := checkItems(acceptance)
 		switch {
@@ -81,8 +90,8 @@ func Check(body string, labels []string) []string {
 		}
 	}
 
-	if _, ok := section(body, OutOfScopeHeading); !ok {
-		missing = append(missing, "`"+OutOfScopeHeading+"` セクションがありません")
+	if _, ok := sectionAny(body, OutOfScopeHeadings); !ok && !hasAnyMarker(body, OutOfScopeMarkers) {
+		missing = append(missing, "`"+OutOfScopeHeading+"` / `## Scope` / `## Out of scope`（または `**対象外**`）がありません")
 	}
 
 	if riskLabel(labels) == "" {
@@ -120,13 +129,20 @@ func riskLabel(labels []string) string {
 	return ""
 }
 
-// section returns the lines under heading up to the next level-1/2 heading.
-func section(body, headingText string) (string, bool) {
+// sectionAny returns the lines under the first matching heading up to the
+// next level-1/2 heading. Heading comparison is case-insensitive.
+func sectionAny(body string, headings []string) (string, bool) {
 	lines := strings.Split(body, "\n")
 	start := -1
 	for i, line := range lines {
-		if strings.TrimSpace(line) == headingText {
-			start = i + 1
+		s := strings.TrimSpace(line)
+		for _, h := range headings {
+			if strings.EqualFold(s, h) {
+				start = i + 1
+				break
+			}
+		}
+		if start >= 0 {
 			break
 		}
 	}
@@ -143,6 +159,20 @@ func section(body, headingText string) (string, bool) {
 		b.WriteString("\n")
 	}
 	return b.String(), true
+}
+
+// hasAnyMarker reports whether any line is exactly one of markers
+// (case-insensitive), e.g. a bold `**対象外**` inside a Scope section.
+func hasAnyMarker(body string, markers []string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		s := strings.TrimSpace(line)
+		for _, m := range markers {
+			if strings.EqualFold(s, m) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func checkItems(section string) []string {

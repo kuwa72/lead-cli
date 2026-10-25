@@ -460,16 +460,20 @@ else from the first Markdown heading in the body.`,
 		Short: "Validate an issue body and move it to the ready queue",
 		Long: `Validate an issue body and move it to the ready queue (issue #254).
 
-Fetches issue <n> and applies the same rules as ` + "`lead new`" + `: a
-` + "`## 受入条件`" + ` section with at least one executable ` + "`- [ ]`" + ` item, a
-` + "`## スコープ外`" + ` section, and a risk label (risk:a or risk:b). On success it
-labels the issue risk:* and ready and removes needs-review. On failure it
-changes no labels, lists the missing items, and exits 1.`,
+Fetches issue <n> and applies the same rules as ` + "`lead new`" + `: an
+acceptance section (` + "`## 受入条件`" + ` or ` + "`## Acceptance criteria`" + `) with at least
+one executable ` + "`- [ ]`" + ` item, an out-of-scope section (` + "`## スコープ外`" + `,
+` + "`## Scope`" + `, ` + "`## Out of scope`" + `, or a bold ` + "`**対象外**`" + `), and a risk
+label (risk:a or risk:b). Use --risk to apply the classification when the
+issue has none. On success it labels the issue risk:* and ready and removes
+needs-review. On failure it changes no labels, lists the missing items, and
+exits 1.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runReady(cmd, deps, args[0])
 		},
 	}
+	readyCmd.Flags().String("risk", "", "risk classification to apply when the issue has none (a|b)")
 
 	setupCmd := &cobra.Command{
 		Use:   "setup",
@@ -1097,12 +1101,20 @@ func runReady(cmd *cobra.Command, deps Deps, raw string) error {
 	if err != nil {
 		return fmt.Errorf("lead ready: %w", err)
 	}
-	if missing := issuecheck.Check(iss.Body, iss.Labels); len(missing) > 0 {
+	riskFlag, _ := cmd.Flags().GetString("risk")
+	if riskFlag != "" && riskFlag != "a" && riskFlag != "b" {
+		return fmt.Errorf("lead ready: --risk must be a or b, got %q", riskFlag)
+	}
+	checkLabels := append([]string(nil), iss.Labels...)
+	if riskFlag != "" {
+		checkLabels = append(checkLabels, issuecheck.RiskLabel(riskFlag))
+	}
+	if missing := issuecheck.Check(iss.Body, checkLabels); len(missing) > 0 {
 		return errors.New(issuecheck.Message(missing))
 	}
 
 	ctx := cmd.Context()
-	risk := issuecheck.RiskFromLabels(iss.Labels)
+	risk := issuecheck.RiskFromLabels(checkLabels)
 	if err := deps.gh().IssueAddLabel(ctx, n, risk); err != nil {
 		return fmt.Errorf("lead ready: add %s: %w", risk, err)
 	}
