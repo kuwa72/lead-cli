@@ -576,8 +576,19 @@ returns to the dispatch queue.`,
 		Use:   "finish <issue-number>",
 		Short: "Wait CI, squash-merge the PR, and close the issue",
 		Long: `Re-verify the recorded PR, wait for CI, then merge (squash) and close
-under the merge policy (RFC §7). Pauses — confirm policy, never policy,
-auto-merge-disabled repos — exit 0 with the next step, not an error.`,
+under the merge policy (RFC §7) and the issue's risk class (issue #245).
+
+Risk classes (issue labels):
+  risk:a      merge after CI passes (protected-file guardrail still applies)
+  risk:b      stop and wait for human approval (the default)
+  (no label)  same as risk:b
+
+A risk:b issue is labelled ` + "`awaiting-human`" + `, recorded as awaiting_review,
+and left open; this is not a failure. A human merges it with --approve:
+  lead finish <n> --merge --approve
+
+Pauses — confirm policy, never policy, auto-merge-disabled repos, and
+awaiting human approval — exit 0 with the next step, not an error.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFinish(cmd, deps, args[0])
@@ -586,6 +597,7 @@ auto-merge-disabled repos — exit 0 with the next step, not an error.`,
 	finishCmd.Flags().Int("pr", 0, "use this PR number instead of the recorded one")
 	finishCmd.Flags().String("part", "", "work unit within a multi-PR issue")
 	finishCmd.Flags().Bool("merge", false, "merge after CI passes (overrides confirm pause)")
+	finishCmd.Flags().Bool("approve", false, "human-only: approve merging a risk:b issue (default risk class)")
 	finishCmd.Flags().Bool("override-guardrail", false, "merge even though the PR touches protected convention files (human confirmation; never pass this from an unattended agent)")
 	finishCmd.Flags().Bool("close", false, "close the issue")
 	finishCmd.Flags().Bool("no-close", false, "never close the issue")
@@ -1678,6 +1690,7 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 	pr, _ := flags.GetInt("pr")
 	part, _ := flags.GetString("part")
 	merge, _ := flags.GetBool("merge")
+	approve, _ := flags.GetBool("approve")
 	overrideGuardrail, _ := flags.GetBool("override-guardrail")
 	closeIssue, _ := flags.GetBool("close")
 	noClose, _ := flags.GetBool("no-close")
@@ -1686,12 +1699,18 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 	policy, _ := flags.GetString("merge-policy")
 	timeout, _ := flags.GetDuration("timeout")
 	interval, _ := flags.GetDuration("poll-interval")
+	workDir, err := deps.workDir()
+	if err != nil {
+		return err
+	}
 
 	res, err := finish.Run(cmd.Context(), deps.gh(), &state.Store{Path: deps.stateFile()}, number, finish.Options{
 		PR: pr, Part: part, Merge: merge, Close: closeIssue, NoClose: noClose,
 		Comment: comment, Outcome: outcome, MergePolicy: policy,
+		Approve:           approve,
 		OverrideGuardrail: overrideGuardrail,
-		Timeout:           timeout, PollInterval: interval,
+		Git:               deps.gitRunner(), WorkDir: workDir,
+		Timeout: timeout, PollInterval: interval,
 	})
 	if res.Message != "" {
 		fmt.Fprintln(cmd.OutOrStdout(), res.Message)

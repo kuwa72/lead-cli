@@ -16,6 +16,11 @@ import (
 // GitHub's open/closed; they describe local work progress.
 type Status string
 
+// AwaitingHumanLabel marks a PR whose CI passed but whose risk class needs
+// a human's approval before merge (issue #245). It is not a state label:
+// the issue keeps `ready` so the inbox still lists it.
+const AwaitingHumanLabel = "awaiting-human"
+
 const (
 	StatusOpen           Status = "open"
 	StatusPlanned        Status = "planned"

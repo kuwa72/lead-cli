@@ -77,6 +77,25 @@ func TestGuardedFiles_ProtectedConventionPaths(t *testing.T) {
 	}
 }
 
+func TestRiskClass(t *testing.T) {
+	cases := []struct {
+		labels []string
+		want   Risk
+	}{
+		{nil, RiskB},                                   // unlabelled defaults to human approval
+		{[]string{"ready"}, RiskB},                     // unrelated labels stay b
+		{[]string{"risk:b"}, RiskB},                    // explicit b
+		{[]string{"risk:a"}, RiskA},                    // explicit a
+		{[]string{"ready", "risk:a", "risk:b"}, RiskA}, // a wins
+		{[]string{" risk:a "}, RiskA},                  // trimmed
+	}
+	for _, tc := range cases {
+		if got := RiskClass(tc.labels); got != tc.want {
+			t.Errorf("RiskClass(%q) = %q, want %q", tc.labels, got, tc.want)
+		}
+	}
+}
+
 func TestResolveInvalidFallsBackToConfirm(t *testing.T) {
 	// RFC §7.1: invalid values fall back to the safe side (confirm).
 	for _, args := range [][4]string{

@@ -300,6 +300,14 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 			title += "  "
 		}
 		title += note
+	} else if it.AwaitingHuman {
+		// Awaiting-human rows show why dispatch left them alone (issue #245).
+		note := "awaiting human approval"
+		title = truncTail(title, c.titleW-cellWidth(note)-2)
+		if title != "" {
+			title += "  "
+		}
+		title += note
 	}
 	b.WriteString(fitRight(fmt.Sprintf("#%d", it.Number), c.issueW))
 	b.WriteString(" ")

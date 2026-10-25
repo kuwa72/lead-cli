@@ -27,7 +27,7 @@ cat > "$tmp/bin/gh" <<'EOF'
 echo "GHLOG $@" >> "$GH_ARGS_LOG"
 case "$1 $2" in
   "issue view")
-    printf '{"number":36,"title":"demo","body":"b","state":"OPEN"}' ;;
+    printf '{"number":36,"title":"demo","body":"b","state":"OPEN","labels":[{"name":"risk:a"}]}' ;;
   "pr view")
     case "$*" in
       *"--json files"*) printf '%s\n' "${GH_FILES:-src/main.go}" ;;

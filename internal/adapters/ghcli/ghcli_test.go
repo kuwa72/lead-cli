@@ -94,7 +94,7 @@ func TestIssueEdit_UsesBodyFile(t *testing.T) {
 const ghServeBody = `if [ "$1 $2" = "issue list" ]; then
   printf '[{"number":50,"title":"Tracking issue"},{"number":36,"title":"ports adapter"}]'
 elif [ "$1 $2" = "issue view" ]; then
-  printf '{"number":36,"title":"ports adapter","body":"hello body","state":"OPEN"}'
+  printf '{"number":36,"title":"ports adapter","body":"hello body","state":"OPEN","labels":[{"name":"risk:a"},{"name":"ready"}]}'
 else
   echo "unexpected: $@" >&2; exit 3
 fi`
@@ -201,10 +201,13 @@ func TestView_CallsGhViewWithJSONFields(t *testing.T) {
 	if got.Number != 36 || got.Title != "ports adapter" || got.Body != "hello body" || got.State != "OPEN" {
 		t.Fatalf("View = %+v, want number/title/body/state", got)
 	}
+	if want := []string{"risk:a", "ready"}; !reflect.DeepEqual(got.Labels, want) {
+		t.Errorf("View labels = %q, want %q", got.Labels, want)
+	}
 
 	log := testutil.LogText(t, logPath)
 	for _, want := range []string{
-		"<issue>", "<view>", "<36>", "<--json>", "<number,title,body,state>",
+		"<issue>", "<view>", "<36>", "<--json>", "<number,title,body,state,labels>",
 	} {
 		if !strings.Contains(log, want) {
 			t.Errorf("gh args log missing %q, got:\n%s", want, log)

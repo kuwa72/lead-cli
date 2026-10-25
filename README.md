@@ -76,7 +76,6 @@ lead enable                 # this repository (skill + AGENTS.md block)
 
 `lead setup --write` sets up your user environment (shell completion and a keybinding, `$HOME` only); `lead enable` enables this repository (the `AGENTS.md` rule block and the lead-flow skill, written to `.agents/skills/lead-flow` plus the skills directory of each agent detected on `PATH` or configured in `inbox-config.json`).
 
-<<<<<<< HEAD
 ### Generated files and `git status`
 
 `lead enable` offers to add the paths it generates to the repository's local git exclude file (`.git/info/exclude`, resolved with `git rev-parse --git-path info/exclude`):
@@ -89,7 +88,7 @@ lead enable                 # this repository (skill + AGENTS.md block)
 ```
 
 This keeps `git status` clean after enabling: `.worktrees/` (used by `lead run --worktree` and `lead dispatch`) and the lead-flow skill copies no longer appear as untracked. The prompt defaults to yes and `--yes` applies it without asking. Decline if the project wants to commit its skills; the command prints the entries and a hint so the choice is explicit. `lead disable` removes the managed block and leaves foreign exclude entries untouched.
-=======
+
 ## Configuration
 
 Settings are stored in `inbox-config.json` next to the state file
@@ -99,7 +98,30 @@ Settings view (`,` / `S`), but can be edited by hand.
 
 Keys, types, defaults, and the environment variables that override them are
 documented in [docs/config.md](docs/config.md).
->>>>>>> 1c9d489 (docs(readme): サブコマンド表を lead --help と一致させ、設定リファレンスを追加 (fixes #233))
+
+## Risk gate for merges
+
+`lead finish <n> --merge` classifies the issue by label before merging
+(issue #245):
+
+| Issue label | Behavior |
+|---|---|
+| `risk:a` | merge after CI passes (the protected-file guardrail still applies) |
+| `risk:b` | stop and wait for human approval |
+| none | same as `risk:b` — **human approval is the default** |
+
+A waiting issue is labelled `awaiting-human`, recorded as `awaiting_review`,
+and left open; this is not a failure. `lead dispatch` does not count it as an
+attempt and does not label it `blocked`, so the inbox keeps showing it while a
+human reviews the PR. The human merges it with `--approve`:
+
+```sh
+lead finish <n> --merge --approve
+```
+
+`--approve` is human-only and is never part of the headless dispatch prompt.
+It is separate from `--override-guardrail`, which lifts the protected-file
+guardrail. Mark a safe issue with `gh issue edit <n> --add-label risk:a`.
 
 ## Conventions
 

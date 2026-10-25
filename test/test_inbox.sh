@@ -186,7 +186,7 @@ grep -q 'issue edit' "$GH_LOG" && fail "t must not relabel"
 : > "$GH_LOG"; : > "$EDITOR_LOG"; rm -f "$GH_STDIN"
 LEAD_TEST_INBOX_KEYS=e,q "$tmp/lead" >/dev/null 2>&1 || fail "headless e flow failed"
 grep -q '^<' "$EDITOR_LOG" || fail "editor was not invoked"
-grep -qxF 'GH issue view 7 --json number,title,body,state' "$GH_LOG" || fail "e did not fetch body: $(cat "$GH_LOG")"
+grep -qxF 'GH issue view 7 --json number,title,body,state,labels' "$GH_LOG" || fail "e did not fetch body: $(cat "$GH_LOG")"
 grep -qxF 'GH issue edit 7 --body-file -' "$GH_LOG" || fail "body not updated via stdin: $(cat "$GH_LOG")"
 [ -f "$GH_STDIN" ] || fail "gh did not receive body on stdin"
 printf '## Acceptance\n- warns- edited by human\n' | cmp -s - "$GH_STDIN" \
@@ -207,7 +207,7 @@ grep -qxF 'GH issue view 7 --json url' "$GH_LOG" || fail "o did not fetch the is
 grep -qxF '<https://github.com/acme/widgets/issues/7>' "$BROWSER_LOG" \
   || fail "o opener did not receive the URL: $(cat "$BROWSER_LOG")"
 grep -q 'issue view 7 --web' "$GH_LOG" && fail "--web must not be used"
-grep -qxF 'GH issue view 7 --json number,title,body,state' "$GH_LOG" || fail "enter did not fetch detail"
+grep -qxF 'GH issue view 7 --json number,title,body,state,labels' "$GH_LOG" || fail "enter did not fetch detail"
 
 # --- 9.5. enter on blocked issue with linked PR: shows issue body + PR checklist ----
 : > "$GH_LOG"
@@ -216,7 +216,7 @@ case "$out" in *"## Acceptance"*) ;; *) fail "detail missing issue body: $out";;
 case "$out" in *"PR body"*) ;; *) fail "detail missing PR header: $out";; esac
 case "$out" in *"- [ ] task A"*) ;; *) fail "detail missing PR checklist: $out";; esac
 case "$out" in *"（PR 未記録）"*) fail "detail should not show 'no PR' when linked: $out";; esac
-grep -qxF 'GH issue view 9 --json number,title,body,state' "$GH_LOG" || fail "enter did not fetch issue #9: $(cat "$GH_LOG")"
+grep -qxF 'GH issue view 9 --json number,title,body,state,labels' "$GH_LOG" || fail "enter did not fetch issue #9: $(cat "$GH_LOG")"
 grep -qxF 'GH pr view 99 --json body' "$GH_LOG" || fail "enter did not fetch PR body: $(cat "$GH_LOG")"
 
 # --- 10. s: 直接起票（デフォルト） & !prefix での spec AI 起票 -------------------------
@@ -235,7 +235,7 @@ tr '\n' ' ' < "$GH_LOG" | grep -q 'issue create --title fix(stock): warn on zero
 # --- 11. n: 実機NG → 元 Issue 参照つき追い Issue --------------------------------------
 : > "$GH_LOG"; : > "$AGY_LOG"
 LEAD_TEST_INBOX_KEYS='n,text:still broken on main,enter,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless n flow failed"
-grep -qxF 'GH issue view 7 --json number,title,body,state' "$GH_LOG" \
+grep -qxF 'GH issue view 7 --json number,title,body,state,labels' "$GH_LOG" \
   || fail "n did not fetch the parent issue: $(cat "$GH_LOG")"
 grep -q 'issue create' "$GH_LOG" || fail "n did not create a follow-up issue"
 tr '\n' ' ' < "$GH_LOG" | grep -q 'issue create.*#7' \

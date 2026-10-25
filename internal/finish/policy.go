@@ -71,6 +71,33 @@ func isProtectedPath(file string) bool {
 	return false
 }
 
+// Risk classes merge gating (issue #245). The default is b: an issue
+// without a risk label needs a human's approval before `lead finish`
+// merges it, so a headless agent cannot land an unreviewed change.
+type Risk string
+
+const (
+	RiskA Risk = "a" // safe to auto-merge
+	RiskB Risk = "b" // needs human approval
+)
+
+const (
+	RiskALabel = "risk:a"
+	RiskBLabel = "risk:b"
+)
+
+// RiskClass derives the risk class from an issue's labels. `risk:a` wins;
+// everything else (no label, risk:b, unrelated labels) is b — the safe
+// default.
+func RiskClass(labels []string) Risk {
+	for _, l := range labels {
+		if strings.TrimSpace(l) == RiskALabel {
+			return RiskA
+		}
+	}
+	return RiskB
+}
+
 // Policy is the merge policy (RFC §7.1).
 type Policy string
 

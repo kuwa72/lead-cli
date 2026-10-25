@@ -3,12 +3,14 @@ package finish
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
+	"github.com/kuwa72/lead-cli/internal/workflow"
 )
 
 // Defaults mirror bin/ci-wait (1800s cap, 10s poll).
@@ -32,8 +34,16 @@ type Options struct {
 	// protected-file guardrail (issue #230). Merge alone does not: the
 	// headless completion definition merges with --merge.
 	OverrideGuardrail bool
-	Timeout           time.Duration
-	PollInterval      time.Duration
+	// Approve is the human-only confirmation that merges a risk:b issue
+	// (issue #245). Merge alone does not: unlabelled and risk:b issues
+	// stop for human approval by default. Unrelated to OverrideGuardrail.
+	Approve      bool
+	Timeout      time.Duration
+	PollInterval time.Duration
+	// Git and WorkDir let finish remove the issue's worktree when it
+	// defers the merge to a human (issue #245). Nil Git skips cleanup.
+	Git     workflow.GitRunner
+	WorkDir string
 	// Sleep waits between polls; defaults to time.Sleep (tests inject no-op).
 	Sleep func(time.Duration)
 }
@@ -47,6 +57,9 @@ type Result struct {
 	Message      string
 	// Guarded lists protected files that lowered the policy to confirm.
 	Guarded []string
+	// AwaitingHuman is true when CI passed but the risk gate deferred the
+	// merge to a human (issue #245). Not an error.
+	AwaitingHuman bool
 }
 
 func (o *Options) timeout() time.Duration {
@@ -166,6 +179,16 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return Result{}, fmt.Errorf("PR #%d: merge conflict; resolve it first (checks will not run)", prNumber)
 	}
 
+	// Risk classification (issue #245): labels come from the issue, not the
+	// PR. Fail closed — if the lookup fails, we cannot tell a safe change
+	// from a risky one, so stop before merging.
+	iss, err := gh.View(ctx, issue)
+	if err != nil {
+		return Result{}, fmt.Errorf("issue #%d: view labels (risk gate): %w", issue, err)
+	}
+	risk := RiskClass(iss.Labels)
+	hadAwaiting := slices.Contains(iss.Labels, state.AwaitingHumanLabel)
+
 	// Guardrail (RFC inbox §7): a PR touching protected convention files
 	// never auto-merges. Lower auto → confirm and persist the reason so the
 	// inbox can show why this issue stopped. Checked before the CI wait so a
@@ -215,10 +238,60 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 			return Result{ChecksPassed: true, Message: msg}, nil
 		}
 	}
+	// Risk gate (issue #245): only risk:a merges unattended. Unlabelled
+	// and risk:b stop here as awaiting-human — a clean pause, not a
+	// failure. The human merges with --approve.
+	if risk != RiskA && !opts.Approve {
+		return runAwaitingHuman(ctx, gh, store, w, prNumber, risk, opts)
+	}
 	if err := gh.PrMerge(ctx, prNumber); err != nil {
 		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: merge: %w", prNumber, err)
 	}
+	if hadAwaiting {
+		if err := gh.IssueRemoveLabel(ctx, w.Issue, state.AwaitingHumanLabel); err != nil {
+			return Result{ChecksPassed: true, Merged: true},
+				fmt.Errorf("PR #%d merged, but removing the %s label failed: %w", prNumber, state.AwaitingHumanLabel, err)
+		}
+	}
 	return runClosePhase(ctx, gh, store, w, prRef, prNumber, opts, true)
+}
+
+// runAwaitingHuman records that CI passed but the risk class needs a
+// human's approval: label the issue, move the workflow to awaiting_review,
+// clean the worktree (branch and PR stay), and report a clean pause.
+func runAwaitingHuman(ctx context.Context, gh ports.GhClient, store *state.Store, w state.Workflow, prNumber int, risk Risk, opts Options) (Result, error) {
+	if err := gh.IssueAddLabel(ctx, w.Issue, state.AwaitingHumanLabel); err != nil {
+		return Result{ChecksPassed: true}, fmt.Errorf("issue #%d: add label %s: %w", w.Issue, state.AwaitingHumanLabel, err)
+	}
+	w.Status = state.StatusAwaitingReview
+	w.PID = 0
+	msg := fmt.Sprintf("CI passed for PR #%d; issue #%d is risk:%s (unlabelled means risk:b), so it is awaiting human approval. Review the PR, then run `lead finish %d --merge --approve`.",
+		prNumber, w.Issue, risk, w.Issue)
+	if cleanup := cleanupWorktree(opts, &w); cleanup != "" {
+		msg += " (" + cleanup + ")"
+	}
+	if err := store.Upsert(w); err != nil {
+		return Result{ChecksPassed: true}, err
+	}
+	return Result{ChecksPassed: true, AwaitingHuman: true, Message: msg}, nil
+}
+
+// cleanupWorktree removes the issue's worktree for an awaiting-human pause.
+// Best effort: a failure is reported in the message but never turns the
+// pause into a failed dispatch attempt. The branch and PR are untouched.
+func cleanupWorktree(opts Options, w *state.Workflow) string {
+	if w.Worktree == "" || opts.Git == nil {
+		return ""
+	}
+	root, err := opts.Git.RepoRoot(opts.WorkDir)
+	if err != nil {
+		return "worktree cleanup failed: " + err.Error()
+	}
+	if err := opts.Git.WorktreeRemove(root, w.Worktree, true); err != nil {
+		return "worktree cleanup failed: " + err.Error()
+	}
+	w.Worktree = ""
+	return ""
 }
 
 // guardrail lists the PR's protected files (see ProtectedPaths).
