@@ -62,6 +62,19 @@ func TestFilterUnseenMerged_ZeroSinceIncludesAllUnconfirmed(t *testing.T) {
 	}
 }
 
+// sectionByKind finds one section by kind (the display order is asserted
+// separately, so tests do not depend on raw indices).
+func sectionByKind(t *testing.T, sections []Section, kind Kind) *Section {
+	t.Helper()
+	for i := range sections {
+		if sections[i].Kind == kind {
+			return &sections[i]
+		}
+	}
+	t.Fatalf("section %v missing from %+v", kind, sections)
+	return nil
+}
+
 func TestBuild_CapsMergedSection(t *testing.T) {
 	var merged []ports.MergedIssue
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
@@ -69,8 +82,8 @@ func TestBuild_CapsMergedSection(t *testing.T) {
 		merged = append(merged, ports.MergedIssue{Number: i, Title: "merged", MergedAt: now.Add(-time.Duration(i) * time.Minute)})
 	}
 	got := Build(nil, nil, merged, &SeenState{LastSeenAt: now.Add(-100 * time.Hour)}, nil)
-	if len(got[3].Items) != MaxMergedItems {
-		t.Errorf("merged capped = %d, want %d", len(got[3].Items), MaxMergedItems)
+	if sec := sectionByKind(t, got, KindMerged); len(sec.Items) != MaxMergedItems {
+		t.Errorf("merged capped = %d, want %d", len(sec.Items), MaxMergedItems)
 	}
 }
 
@@ -82,7 +95,7 @@ func TestBuild_FiltersWorkflowsByRepo(t *testing.T) {
 	}
 	// With repo filter "kuwa72/lead-cli", zenn.git must be excluded, local/empty repo is kept.
 	got := Build(nil, nil, nil, nil, wfs, BuildOptions{Repo: "kuwa72/lead-cli"})
-	runningItems := got[4].Items
+	runningItems := sectionByKind(t, got, KindRunning).Items
 	if len(runningItems) != 2 {
 		t.Fatalf("running count = %d, want 2 (zenn.git excluded)", len(runningItems))
 	}
@@ -98,7 +111,7 @@ func TestBuild_FiltersClosedIssueWorkflows(t *testing.T) {
 	}
 	openSet := map[int]bool{89: true} // 36 is closed on GitHub
 	got := Build(nil, nil, nil, nil, wfs, BuildOptions{OpenNumbers: openSet})
-	runningItems := got[4].Items
+	runningItems := sectionByKind(t, got, KindRunning).Items
 	if len(runningItems) != 1 {
 		t.Fatalf("running count = %d, want 1 (issue 36 excluded because closed)", len(runningItems))
 	}
@@ -119,13 +132,10 @@ func TestBuild_IncludesBacklogSection(t *testing.T) {
 	sections := Build(review, blocked, nil, nil, nil, BuildOptions{
 		OpenIssues: open,
 	})
-	if len(sections) != 6 {
-		t.Fatalf("expected 6 sections, got %d", len(sections))
+	if len(sections) != 7 {
+		t.Fatalf("expected 7 sections, got %d", len(sections))
 	}
-	backlog := sections[5]
-	if backlog.Kind != KindBacklog {
-		t.Errorf("section[4] kind = %v, want KindBacklog", backlog.Kind)
-	}
+	backlog := sectionByKind(t, sections, KindBacklog)
 	if !backlog.Collapsed {
 		t.Errorf("backlog section should be collapsed by default")
 	}
@@ -149,8 +159,8 @@ func TestBuild_ReadySectionDispatchOrderAndDeferred(t *testing.T) {
 		{Number: 8, Title: "gated last", BlockedBy: []ports.IssueDependency{{Number: 9, State: "OPEN"}}},
 	}
 	sections := Build(nil, nil, nil, nil, nil, BuildOptions{Ready: ready})
-	if len(sections) != 6 {
-		t.Fatalf("expected 6 sections, got %d", len(sections))
+	if len(sections) != 7 {
+		t.Fatalf("expected 7 sections, got %d", len(sections))
 	}
 	sec := sections[2]
 	if sec.Kind != KindReady {
@@ -191,24 +201,85 @@ func TestBuild_ReadyExcludedFromBacklog(t *testing.T) {
 	ready := []ports.IssueSummary{{Number: 5, Title: "queued"}}
 	open := []ports.IssueSummary{{Number: 5, Title: "queued"}, {Number: 6, Title: "plain"}}
 	sections := Build(nil, nil, nil, nil, nil, BuildOptions{Ready: ready, OpenIssues: open})
-	backlog := sections[5]
+	backlog := sectionByKind(t, sections, KindBacklog)
 	if len(backlog.Items) != 1 || backlog.Items[0].Number != 6 {
 		t.Errorf("backlog = %+v, want only #6", backlog.Items)
 	}
 }
 
-// Issue #245: an awaiting-human workflow stays in Ready (the issue keeps
-// its ready label) and is annotated so the inbox shows why it is waiting.
-func TestBuild_ReadyAnnotatesAwaitingHuman(t *testing.T) {
-	ready := []ports.IssueSummary{{Number: 7, Title: "risky change"}}
-	wfs := []state.Workflow{{Issue: 7, Status: state.StatusAwaitingReview}}
-	sections := Build(nil, nil, nil, nil, wfs, BuildOptions{Ready: ready})
-	sec := sections[2]
-	if sec.Kind != KindReady || len(sec.Items) != 1 {
-		t.Fatalf("ready section = %+v, want one item", sec)
+// Issue #255: awaiting-human issues leave Ready for their own section
+// (between Ready and Merged) and carry the PR, verdict, and CI facts.
+func TestBuild_AwaitingApprovalSection(t *testing.T) {
+	ready := []ports.IssueSummary{{Number: 7, Title: "risky change"}, {Number: 8, Title: "safe change"}}
+	awaiting := []AwaitingIssue{{
+		Number: 7, Title: "risky change", PRNumber: 12,
+		Verdict: state.ReviewPassLabel, CI: CIBucket([]ports.PRCheck{{Bucket: "pass"}}),
+	}}
+	sections := Build(nil, nil, nil, nil, nil, BuildOptions{Ready: ready, Awaiting: awaiting})
+
+	var kinds []Kind
+	for _, s := range sections {
+		kinds = append(kinds, s.Kind)
 	}
-	if !sec.Items[0].AwaitingHuman {
-		t.Errorf("AwaitingHuman = false, want true for awaiting_review")
+	want := []Kind{KindNeedsReview, KindBlocked, KindReady, KindAwaitingApproval, KindMerged, KindRunning, KindBacklog}
+	if !reflect.DeepEqual(kinds, want) {
+		t.Fatalf("section order = %v, want %v", kinds, want)
+	}
+
+	sec := sectionByKind(t, sections, KindAwaitingApproval)
+	if len(sec.Items) != 1 {
+		t.Fatalf("awaiting items = %+v, want one", sec.Items)
+	}
+	it := sec.Items[0]
+	if it.Number != 7 || it.PRNumber != 12 || it.ReviewVerdict != state.ReviewPassLabel || it.CIState != "pass" {
+		t.Errorf("awaiting item = %+v, want #7 PR #12 review:pass CI pass", it)
+	}
+	if readySec := sectionByKind(t, sections, KindReady); len(readySec.Items) != 1 || readySec.Items[0].Number != 8 {
+		t.Errorf("ready items = %+v, want only #8 (awaiting issue moved out)", readySec.Items)
+	}
+}
+
+// Issue #255: the Awaiting approval section is always present so an empty
+// queue is visible, not silently missing.
+func TestBuild_AwaitingApprovalAlwaysPresent(t *testing.T) {
+	sections := Build(nil, nil, nil, nil, nil)
+	sec := sectionByKind(t, sections, KindAwaitingApproval)
+	if len(sec.Items) != 0 {
+		t.Errorf("awaiting items = %+v, want none", sec.Items)
+	}
+}
+
+func TestReviewVerdict(t *testing.T) {
+	cases := []struct {
+		labels []string
+		want   string
+	}{
+		{[]string{state.ReviewPassLabel}, state.ReviewPassLabel},
+		{[]string{state.ReviewNeedsWorkLabel}, state.ReviewNeedsWorkLabel},
+		{nil, ""},
+		{[]string{"risk:b", state.AwaitingHumanLabel}, ""},
+	}
+	for _, c := range cases {
+		if got := ReviewVerdict(c.labels); got != c.want {
+			t.Errorf("ReviewVerdict(%v) = %q, want %q", c.labels, got, c.want)
+		}
+	}
+}
+
+func TestCIBucket(t *testing.T) {
+	cases := []struct {
+		checks []ports.PRCheck
+		want   string
+	}{
+		{nil, ""},
+		{[]ports.PRCheck{{Bucket: "pass"}, {Bucket: "skipping"}}, "pass"},
+		{[]ports.PRCheck{{Bucket: "pending"}, {Bucket: "pass"}}, "pending"},
+		{[]ports.PRCheck{{Bucket: "fail"}, {Bucket: "pass"}}, "fail"},
+	}
+	for _, c := range cases {
+		if got := CIBucket(c.checks); got != c.want {
+			t.Errorf("CIBucket(%+v) = %q, want %q", c.checks, got, c.want)
+		}
 	}
 }
 

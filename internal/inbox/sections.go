@@ -28,11 +28,13 @@ const (
 type Kind int
 
 // Sections in display order: human work first (RFC §5.1). Ready shows the
-// dispatch queue (issue #212).
+// dispatch queue (issue #212); Awaiting approval holds the issues the risk
+// gate parked for a human (issue #255).
 const (
 	KindNeedsReview Kind = iota
 	KindBlocked
 	KindReady
+	KindAwaitingApproval
 	KindMerged
 	KindRunning
 	KindBacklog
@@ -47,6 +49,8 @@ func (k Kind) Title() string {
 		return "Blocked"
 	case KindReady:
 		return "Ready"
+	case KindAwaitingApproval:
+		return "Awaiting approval"
 	case KindMerged:
 		return "Merged"
 	case KindRunning:
@@ -85,9 +89,53 @@ type Item struct {
 	// DeferredBy is the first open blocked-by issue number (issue #212);
 	// the row shows "deferred: blocked by #N". 0 means dispatchable.
 	DeferredBy int
-	// AwaitingHuman marks a ready issue whose CI passed but whose risk
-	// class waits for human approval (issue #245).
-	AwaitingHuman bool
+	// ReviewVerdict is the PR's review label (review:pass /
+	// review:needs-work) and CIState its CI bucket (pass / pending /
+	// fail) for the Awaiting approval section (issue #255).
+	ReviewVerdict string
+	CIState       string
+}
+
+// AwaitingIssue is one issue the risk gate parked as awaiting-human, with
+// the PR facts its row shows (issue #255). The inbox fetches these in
+// loadCmd because Build stays a pure function.
+type AwaitingIssue struct {
+	Number    int
+	Title     string
+	UpdatedAt time.Time
+	PRNumber  int
+	Verdict   string // review:pass / review:needs-work / "" (no review yet)
+	CI        string // pass / pending / fail / "" (unknown)
+}
+
+// ReviewVerdict returns the PR's review verdict label, or "" when the
+// independent reviewer has not run (issue #255).
+func ReviewVerdict(labels []string) string {
+	for _, l := range labels {
+		if l == state.ReviewPassLabel || l == state.ReviewNeedsWorkLabel {
+			return l
+		}
+	}
+	return ""
+}
+
+// CIBucket reduces PR checks to pass/pending/fail, or "" when no check has
+// reported yet (issue #255).
+func CIBucket(checks []ports.PRCheck) string {
+	if len(checks) == 0 {
+		return ""
+	}
+	bucket := "pass"
+	for _, c := range checks {
+		switch c.Bucket {
+		case "pass", "skipping":
+		case "fail", "cancel":
+			return "fail"
+		default:
+			bucket = "pending"
+		}
+	}
+	return bucket
 }
 
 // Section is one heading plus its rows.
@@ -110,6 +158,9 @@ type BuildOptions struct {
 	// that order and moves deferred ones (open blocked-by) last with the
 	// blocker number attached.
 	Ready []ports.IssueSummary
+	// Awaiting holds awaiting-human issues with their PR facts (issue
+	// #255). They leave Ready/Backlog so each issue appears once.
+	Awaiting []AwaitingIssue
 }
 
 // Build sections issues: `needs-review` and `blocked` come from gh label
@@ -132,8 +183,10 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 	}
 	enrich := func(it Item) Item {
 		if w, ok := byIssue[it.Number]; ok {
-			it.Agent, it.Attempts, it.PID, it.LogPath, it.Branch, it.PRNumber = w.Agent, w.Attempts, w.PID, w.LogPath, w.Branch, firstPRNumber(w.PullRequests)
-			it.AwaitingHuman = w.Status == state.StatusAwaitingReview
+			it.Agent, it.Attempts, it.PID, it.LogPath, it.Branch = w.Agent, w.Attempts, w.PID, w.LogPath, w.Branch
+			if n := firstPRNumber(w.PullRequests); n > 0 {
+				it.PRNumber = n
+			}
 		}
 		return it
 	}
@@ -154,6 +207,22 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		}
 		seenNumbers[s.Number] = true
 		stuck.Items = append(stuck.Items, enrich(Item{Number: s.Number, Title: s.Title, Kind: KindBlocked, UpdatedAt: s.UpdatedAt}))
+	}
+
+	// Awaiting approval comes after Ready: the risk gate leaves the ready
+	// label in place, so mark these numbers seen first and keep each issue
+	// in exactly one section (issue #255).
+	awaitingSection := Section{Kind: KindAwaitingApproval}
+	for _, a := range bo.Awaiting {
+		if seenNumbers[a.Number] {
+			continue
+		}
+		seenNumbers[a.Number] = true
+		it := enrich(Item{
+			Number: a.Number, Title: a.Title, Kind: KindAwaitingApproval, UpdatedAt: a.UpdatedAt,
+			PRNumber: a.PRNumber, ReviewVerdict: a.Verdict, CIState: a.CI,
+		})
+		awaitingSection.Items = append(awaitingSection.Items, it)
 	}
 
 	// bo.Ready arrives in dispatch order (dispatch.OrderReady). Deferred
@@ -227,7 +296,7 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		}))
 	}
 
-	return []Section{review, stuck, readySection, mergedSection, running, backlogSection}
+	return []Section{review, stuck, readySection, awaitingSection, mergedSection, running, backlogSection}
 }
 
 func firstPRNumber(prs []state.PRRef) int {

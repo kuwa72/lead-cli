@@ -44,7 +44,10 @@ type Options struct {
 	// without the independent reviewer's pass (issue #246). It requires
 	// Approve as well (issue #249), so an unattended agent cannot lift the
 	// review gate alone. It is never part of the headless dispatch prompt.
-	NoReview     bool
+	NoReview bool
+	// DryRun is `lead approve --dry-run` (issue #255): report the target
+	// PR and review state without waiting, merging, or closing.
+	DryRun       bool
 	Timeout      time.Duration
 	PollInterval time.Duration
 	// Git and WorkDir let finish remove the issue's worktree when it
@@ -67,6 +70,9 @@ type Result struct {
 	// AwaitingHuman is true when CI passed but the risk gate deferred the
 	// merge to a human (issue #245). Not an error.
 	AwaitingHuman bool
+	// DryRun is true when `lead approve --dry-run` only reported the
+	// target PR and review state (issue #255).
+	DryRun bool
 }
 
 func (o *Options) timeout() time.Duration {
@@ -141,28 +147,7 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return Result{}, fmt.Errorf("no workflow for #%d; run `lead run %d` first", issue, issue)
 	}
 
-	prNumber := opts.PR
-	var prRef *state.PRRef
-	if prNumber != 0 {
-		for i := range w.PullRequests {
-			if w.PullRequests[i].Number == prNumber {
-				prRef = &w.PullRequests[i]
-				break
-			}
-		}
-	} else if len(w.PullRequests) > 0 {
-		prRef = &w.PullRequests[0]
-		prNumber = prRef.Number
-	}
-
-	// Discovery (issue #230): a headless `lead finish <issue> --merge`
-	// runs against a dispatch record that never learned the PR number.
-	// Look it up from the recorded branch before asking for --pr.
-	if prNumber == 0 && w.Branch != "" {
-		if n, err := gh.PrNumberForBranch(ctx, w.Branch); err == nil && n > 0 {
-			prNumber = n
-		}
-	}
+	prNumber, prRef := resolvePR(ctx, gh, w, opts)
 
 	// No-PR path (research/docs without PR): require an explicit outcome.
 	if prNumber == 0 {
@@ -311,6 +296,31 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		}
 	}
 	return runClosePhase(ctx, gh, store, w, prRef, prNumber, opts, true)
+}
+
+// resolvePR picks the PR finish acts on: --pr, else the recorded PR, else a
+// lookup from the recorded branch (issue #230 discovery). A non-nil ref
+// points into w.PullRequests so the close phase can mark it merged.
+func resolvePR(ctx context.Context, gh ports.GhClient, w state.Workflow, opts Options) (int, *state.PRRef) {
+	prNumber := opts.PR
+	var prRef *state.PRRef
+	if prNumber != 0 {
+		for i := range w.PullRequests {
+			if w.PullRequests[i].Number == prNumber {
+				prRef = &w.PullRequests[i]
+				break
+			}
+		}
+	} else if len(w.PullRequests) > 0 {
+		prRef = &w.PullRequests[0]
+		prNumber = prRef.Number
+	}
+	if prNumber == 0 && w.Branch != "" {
+		if n, err := gh.PrNumberForBranch(ctx, w.Branch); err == nil && n > 0 {
+			prNumber = n
+		}
+	}
+	return prNumber, prRef
 }
 
 // runAwaitingHuman records that CI passed but the risk class needs a

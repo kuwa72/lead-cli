@@ -12,6 +12,8 @@ Sections:
 
 - レビュー待ち (`needs-review`): issues waiting for human approval
 - 止まってる (`blocked`): agents that failed or are stuck; `lead resume <issue>` reconnects to the existing branch and worktree
+- Ready: the dispatch queue, in dispatch order (deferred issues last)
+- Awaiting approval (`awaiting-human`): issues the risk gate parked for a human; each row shows the PR, the review verdict, and CI state. The section always stays visible (even at zero) so a pending approval cannot be missed
 - 最近マージ (`merged`, collapsible): recently merged issues for staging verification
 - 実行中 (`running`, collapsible): currently running agents
 
@@ -20,6 +22,7 @@ Sections:
 | Key | Action |
 |---|---|
 | `a` | approve: `needs-review` → `ready` |
+| `A` | approve & merge an `awaiting-human` issue: asks y/N, then CI wait → squash merge → close (same as `lead approve <n>`) |
 | `e` | edit body with `$EDITOR`, then approve |
 | `x` | reject and close the issue |
 | `t` | add a comment; spec or impl agent will re-run |
@@ -52,6 +55,7 @@ Sections:
 | `lead new` | create an issue from a validated template (`--ready` enqueues it directly) |
 | `lead ready <n>` | validate an existing issue body and move it to `ready` |
 | `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
+| `lead approve <n>` | approve an `awaiting-human` issue in one step (CI wait → squash merge → close; `--dry-run` to inspect) |
 | `lead review <pr>` | run an independent headless review; label `review:pass` / `review:needs-work` |
 | `lead clean <n>` | remove the workflow worktree and state |
 | `lead peek <n>` | open the running agent log with `$PAGER` |
@@ -144,16 +148,24 @@ documented in [docs/config.md](docs/config.md).
 
 A waiting issue is labelled `awaiting-human`, recorded as `awaiting_review`,
 and left open; this is not a failure. `lead dispatch` does not count it as an
-attempt and does not label it `blocked`, so the inbox keeps showing it while a
-human reviews the PR. The human merges it with `--approve`:
+attempt and does not label it `blocked`, so the inbox keeps showing it under
+**Awaiting approval** while a human reviews the PR. Approve it in one step:
 
 ```sh
-lead finish <n> --merge --approve
+lead approve <n>              # CI wait → squash merge → close
+lead approve <n> --dry-run    # show the PR and review verdict, merge nothing
 ```
 
+`lead approve` refuses an issue without the `awaiting-human` label (exit 1,
+no merge). It warns when the PR has no `review:pass` but continues: the
+human's judgement wins over the reviewer. In the inbox, `A` in the Awaiting
+approval section runs the same flow after a y/N confirmation.
+
+The underlying flags remain available: `lead finish <n> --merge --approve`.
 `--approve` is human-only and is never part of the headless dispatch prompt.
 It is separate from `--override-guardrail`, which lifts the protected-file
-guardrail. Mark a safe issue with `gh issue edit <n> --add-label risk:a`.
+guardrail (approve never passes it). Mark a safe issue with
+`gh issue edit <n> --add-label risk:a`.
 
 An automatic (`risk:a`) merge also requires an independent review: run
 `lead review <pr>` (a separate headless agent reads the diff, the issue's

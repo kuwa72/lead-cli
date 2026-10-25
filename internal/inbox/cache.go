@@ -23,6 +23,9 @@ type IssueCache struct {
 	// Ready is the dispatch queue in display order (already sorted by
 	// dispatch.OrderReady, deferred issues last). Issue #212.
 	Ready []ports.IssueSummary `json:"ready,omitempty"`
+	// Awaiting holds the awaiting-human issues with their PR facts for the
+	// Awaiting approval section (issue #255).
+	Awaiting []AwaitingIssue `json:"awaiting,omitempty"`
 }
 
 // ResolveCachePath picks the cache file location next to workflows.json.

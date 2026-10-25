@@ -33,11 +33,11 @@ func TestBuild_SectionsFromLabelsAndState(t *testing.T) {
 	}
 
 	got := Build(needsReview, blocked, merged, nil, wfs)
-	if len(got) != 6 {
-		t.Fatalf("Build returned %d sections, want 6", len(got))
+	if len(got) != 7 {
+		t.Fatalf("Build returned %d sections, want 7", len(got))
 	}
-	kinds := []Kind{got[0].Kind, got[1].Kind, got[2].Kind, got[3].Kind, got[4].Kind, got[5].Kind}
-	if want := []Kind{KindNeedsReview, KindBlocked, KindReady, KindMerged, KindRunning, KindBacklog}; !reflect.DeepEqual(kinds, want) {
+	kinds := []Kind{got[0].Kind, got[1].Kind, got[2].Kind, got[3].Kind, got[4].Kind, got[5].Kind, got[6].Kind}
+	if want := []Kind{KindNeedsReview, KindBlocked, KindReady, KindAwaitingApproval, KindMerged, KindRunning, KindBacklog}; !reflect.DeepEqual(kinds, want) {
 		t.Fatalf("section order = %v, want %v", kinds, want)
 	}
 	if nums := numbers(got[0]); !reflect.DeepEqual(nums, []int{92, 93}) {
@@ -50,17 +50,17 @@ func TestBuild_SectionsFromLabelsAndState(t *testing.T) {
 	if b.Agent != "claude" || b.Attempts != 3 || b.LogPath != "/logs/issue-88.log" {
 		t.Errorf("blocked item not enriched from state: %+v", b)
 	}
-	if nums := numbers(got[3]); !reflect.DeepEqual(nums, []int{60, 61}) {
+	if nums := numbers(got[4]); !reflect.DeepEqual(nums, []int{60, 61}) {
 		t.Errorf("merged = %v, want [60 61]", nums)
 	}
-	if nums := numbers(got[4]); !reflect.DeepEqual(nums, []int{70}) {
+	if nums := numbers(got[5]); !reflect.DeepEqual(nums, []int{70}) {
 		t.Errorf("running = %v, want [70]", nums)
 	}
-	if got[4].Items[0].Agent != "agy" || got[4].Items[0].Branch != "issue/70-x" {
-		t.Errorf("running item lacks agent/branch: %+v", got[4].Items[0])
+	if got[5].Items[0].Agent != "agy" || got[5].Items[0].Branch != "issue/70-x" {
+		t.Errorf("running item lacks agent/branch: %+v", got[5].Items[0])
 	}
-	if got[0].Collapsed || got[1].Collapsed || got[2].Collapsed || !got[3].Collapsed || !got[4].Collapsed || !got[5].Collapsed {
-		t.Errorf("collapsed flags: %v %v %v %v %v %v, want false false false true true true", got[0].Collapsed, got[1].Collapsed, got[2].Collapsed, got[3].Collapsed, got[4].Collapsed, got[5].Collapsed)
+	if got[0].Collapsed || got[1].Collapsed || got[2].Collapsed || got[3].Collapsed || !got[4].Collapsed || !got[5].Collapsed || !got[6].Collapsed {
+		t.Errorf("collapsed flags: %v %v %v %v %v %v %v, want false false false false true true true", got[0].Collapsed, got[1].Collapsed, got[2].Collapsed, got[3].Collapsed, got[4].Collapsed, got[5].Collapsed, got[6].Collapsed)
 	}
 }
 
@@ -198,17 +198,88 @@ func TestKeyA_ApprovesBacklogIssue(t *testing.T) {
 	})
 	m = drive(t, m, nil, m.Init())
 	// Backlog is the last section, collapsed initially.
-	// Headers: Review (0), Blocked (0), Ready (0), Merged (0), Running (0), Backlog.
-	// Cursor starts at 0. Press "j" 5 times to reach Backlog header.
+	// Headers: Review, Blocked, Ready, Awaiting approval, Merged, Running, Backlog.
+	// Cursor starts at 0. Press "j" 6 times to reach the Backlog header.
 	// Press "enter" to expand Backlog.
 	// Press "j" to select issue #42.
 	// Press "a" to approve #42.
-	m = press(t, m, "j", "j", "j", "j", "j", "enter", "j", "a")
+	m = press(t, m, "j", "j", "j", "j", "j", "j", "enter", "j", "a")
 	if want := []testutil.LabelCall{{Number: 42, Label: LabelReady}}; !reflect.DeepEqual(gh.AddedLabels, want) {
 		t.Errorf("AddedLabels = %+v, want %+v", gh.AddedLabels, want)
 	}
 	if !strings.Contains(m.View(), "#42") || !strings.Contains(m.View(), "ready") {
 		t.Errorf("status line should report #42 ready, got:\n%s", m.View())
+	}
+}
+
+// Issue #255: in the Awaiting approval section, A asks for confirmation and
+// only then runs the approval (CI wait → merge → close).
+func TestKeyUpperA_ApprovesAwaitingIssueAfterConfirmation(t *testing.T) {
+	gh := &testutil.FakeGhClient{
+		Labeled: map[string][]ports.IssueSummary{
+			state.AwaitingHumanLabel: {{Number: 7, Title: "risky change"}},
+		},
+		Issues: map[int]ports.Issue{7: {Number: 7, Title: "risky change", State: "OPEN"}},
+	}
+	var approved []int
+	m := New(Options{
+		Gh:       gh,
+		Shell:    &fakeShell{},
+		Headless: true,
+		Approve: func(ctx context.Context, number int) (string, error) {
+			approved = append(approved, number)
+			return fmt.Sprintf("PR #12 merged, issue #%d closed.", number), nil
+		},
+	})
+	m = drive(t, m, nil, m.Init())
+
+	m = press(t, m, "A")
+	if len(approved) != 0 {
+		t.Fatalf("A must only prompt, approved = %v", approved)
+	}
+	if !strings.Contains(m.View(), "Approve and merge #7") {
+		t.Errorf("confirmation prompt missing:\n%s", m.View())
+	}
+
+	m = press(t, m, "n", "enter")
+	if len(approved) != 0 {
+		t.Fatalf("a non-y answer must not approve, approved = %v", approved)
+	}
+
+	m = press(t, m, "A", "y", "enter")
+	if want := []int{7}; !reflect.DeepEqual(approved, want) {
+		t.Errorf("approved = %v, want %v", approved, want)
+	}
+	if !strings.Contains(m.View(), "closed") {
+		t.Errorf("approval result missing from the status line:\n%s", m.View())
+	}
+}
+
+// A outside the Awaiting approval section never merges.
+func TestKeyUpperA_OnReadyIssueDoesNotApprove(t *testing.T) {
+	gh := &testutil.FakeGhClient{
+		Labeled: map[string][]ports.IssueSummary{
+			LabelReady: {{Number: 8, Title: "queued"}},
+		},
+		Issues: map[int]ports.Issue{8: {Number: 8, Title: "queued", State: "OPEN"}},
+	}
+	var approved []int
+	m := New(Options{
+		Gh:       gh,
+		Shell:    &fakeShell{},
+		Headless: true,
+		Approve: func(ctx context.Context, number int) (string, error) {
+			approved = append(approved, number)
+			return "", nil
+		},
+	})
+	m = drive(t, m, nil, m.Init())
+	m = press(t, m, "A")
+	if len(approved) != 0 {
+		t.Errorf("ready issue must not be approved with A: %v", approved)
+	}
+	if !strings.Contains(m.View(), "not awaiting approval") {
+		t.Errorf("rejection hint missing:\n%s", m.View())
 	}
 }
 
@@ -436,7 +507,7 @@ func TestKeyP_RunningWithoutLogShowsStatus(t *testing.T) {
 	}
 	m, _ = Drain(m, m.loadCmd())
 	m.expanded = true
-	m.cursor = 8 // running #70 (Ready header sits between Blocked and Merged)
+	m.cursor = 9 // running #70 (Ready and Awaiting approval headers sit before Merged)
 	m = press(t, m, "p")
 	if !strings.Contains(m.View(), "#70 has no agent log") {
 		t.Errorf("status should explain the missing log, got:\n%s", m.View())
@@ -772,7 +843,7 @@ func newMergedFixture(t *testing.T) (*testutil.FakeGhClient, *fakeShell, *SeenSt
 func TestKeyC_ConfirmsMergedAndRefreshes(t *testing.T) {
 	_, _, seen, m := newMergedFixture(t)
 	m.expanded = true
-	m.cursor = 5 // merged #42 (Ready header sits between Blocked and Merged)
+	m.cursor = 6 // merged #42 (Ready and Awaiting approval headers sit before Merged)
 	m = press(t, m, "c")
 
 	st, err := seen.Load()
@@ -803,7 +874,7 @@ func TestKeyC_OnNonMergedDoesNothing(t *testing.T) {
 func TestKeyN_OnMergedConfirmsAndFollowsUp(t *testing.T) {
 	_, _, seen, m := newMergedFixture(t)
 	m.expanded = true
-	m.cursor = 5 // merged #42 (Ready header sits between Blocked and Merged)
+	m.cursor = 6 // merged #42 (Ready and Awaiting approval headers sit before Merged)
 	var calls []sayCall
 	m.opts.Say = fakeSay(&calls)
 	m = press(t, m, "n", "text:still broken", "enter")

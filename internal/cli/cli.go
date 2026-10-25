@@ -663,6 +663,35 @@ error.`,
 	finishCmd.Flags().Duration("timeout", 0, "CI wait cap (default 30m)")
 	finishCmd.Flags().Duration("poll-interval", 0, "CI poll interval (default 10s)")
 
+	approveCmd := &cobra.Command{
+		Use:   "approve <issue-number>",
+		Short: "Approve and merge an awaiting-human issue in one step",
+		Long: `The morning approval for an issue the risk gate parked (issue #255):
+verify the ` + "`awaiting-human`" + ` label, wait for CI, squash-merge the PR, and
+close the issue. It is ` + "`lead finish <n> --merge --approve --close`" + ` with the
+label check in front, so it refuses any issue that is not awaiting a human.
+
+An issue without the awaiting-human label is rejected (exit 1) before any
+merge, so a typo cannot land an unreviewed change. A missing ` + "`review:pass`" + `
+only warns and continues: the human's judgement wins over the reviewer.
+
+  lead approve 255
+  lead approve 255 --dry-run   # show the PR and review state, merge nothing
+
+The inbox equivalent is A in the Awaiting approval section (it asks y/N
+first). Approve never passes --override-guardrail: a PR touching protected
+convention files still pauses for that explicit confirmation.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runApprove(cmd, deps, args[0])
+		},
+	}
+	approveCmd.Flags().Int("pr", 0, "use this PR number instead of the recorded one")
+	approveCmd.Flags().String("part", "", "work unit within a multi-PR issue")
+	approveCmd.Flags().Bool("dry-run", false, "show the PR and review state without merging")
+	approveCmd.Flags().Duration("timeout", 0, "CI wait cap (default 30m)")
+	approveCmd.Flags().Duration("poll-interval", 0, "CI poll interval (default 10s)")
+
 	reviewCmd := &cobra.Command{
 		Use:   "review <pr-number>",
 		Short: "Run an independent headless review of a PR",
@@ -761,7 +790,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, cleanCmd, peekCmd, stopCmd, finishCmd, reviewCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, cleanCmd, peekCmd, stopCmd, finishCmd, approveCmd, reviewCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	root.AddCommand(newCmd, readyCmd)
 	return root
@@ -827,6 +856,18 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 			return "", err
 		}
 		return fmt.Sprintf("Stopped #%d", number), nil
+	}
+	opts.Approve = func(ctx context.Context, number int) (string, error) {
+		res, err := finish.Approve(ctx, deps.gh(), store, number, finish.Options{
+			Git: deps.gitRunner(), WorkDir: cwd,
+		})
+		// The status bar is one line: keep the last line (the merge/close
+		// report) and let a preceding warning stay in the log.
+		msg := strings.TrimSpace(res.Message)
+		if i := strings.LastIndexByte(msg, '\n'); i >= 0 {
+			msg = strings.TrimSpace(msg[i+1:])
+		}
+		return msg, err
 	}
 	opts.Say = func(ctx context.Context, oneLiner string, followUp int) (string, error) {
 		// Under the TUI stdout is a terminal owned by bubbletea: progress
@@ -1943,6 +1984,35 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 		NoReview:          noReview,
 		OverrideGuardrail: overrideGuardrail,
 		Git:               deps.gitRunner(), WorkDir: workDir,
+		Timeout: timeout, PollInterval: interval,
+	})
+	if res.Message != "" {
+		fmt.Fprintln(cmd.OutOrStdout(), res.Message)
+	}
+	return err
+}
+
+// runApprove implements `lead approve <n>` (issue #255): the label-gated
+// morning approval that waits CI, squash-merges, and closes in one step.
+func runApprove(cmd *cobra.Command, deps Deps, raw string) error {
+	number, err := strconv.Atoi(raw)
+	if err != nil || number <= 0 {
+		return fmt.Errorf("invalid issue number %q", raw)
+	}
+	flags := cmd.Flags()
+	pr, _ := flags.GetInt("pr")
+	part, _ := flags.GetString("part")
+	dryRun, _ := flags.GetBool("dry-run")
+	timeout, _ := flags.GetDuration("timeout")
+	interval, _ := flags.GetDuration("poll-interval")
+	workDir, err := deps.workDir()
+	if err != nil {
+		return err
+	}
+
+	res, err := finish.Approve(cmd.Context(), deps.gh(), &state.Store{Path: deps.stateFile()}, number, finish.Options{
+		PR: pr, Part: part, DryRun: dryRun,
+		Git: deps.gitRunner(), WorkDir: workDir,
 		Timeout: timeout, PollInterval: interval,
 	})
 	if res.Message != "" {

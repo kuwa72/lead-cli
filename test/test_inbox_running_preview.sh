@@ -131,8 +131,8 @@ CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 
 cd "$repo"
 
-# 1. Start inbox headless, expand all (z), move down 5 times to issue 143 in Running, quit
-out="$(LEAD_TEST_INBOX_WIDTH=130 LEAD_TEST_INBOX_HEIGHT=30 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,q "$tmp/lead" 2>&1)" || fail "lead exited non-zero: $out"
+# 1. Start inbox headless, expand all (z), move down 6 times to issue 143 in Running, quit
+out="$(LEAD_TEST_INBOX_WIDTH=130 LEAD_TEST_INBOX_HEIGHT=30 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,j,q "$tmp/lead" 2>&1)" || fail "lead exited non-zero: $out"
 printf '%s\n' "$out" > "$tmp/screen.log"
 
 case "$out" in
@@ -157,7 +157,7 @@ esac
 
 # 1b. #144 has no log file: last-activity must fall back to started_at
 # (issue #216 — same definition as the dispatch watchdog).
-out="$(LEAD_TEST_INBOX_WIDTH=130 LEAD_TEST_INBOX_HEIGHT=30 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,j,q "$tmp/lead" 2>&1)" || fail "lead exited non-zero: $out"
+out="$(LEAD_TEST_INBOX_WIDTH=130 LEAD_TEST_INBOX_HEIGHT=30 LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,j,j,q "$tmp/lead" 2>&1)" || fail "lead exited non-zero: $out"
 printf '%s\n' "$out" > "$tmp/screen-144.log"
 case "$out" in
   *"Active: 2h ago"*) ;;
@@ -166,7 +166,7 @@ esac
 
 # 2. Peek with 'p' opens the agent log via $PAGER (herdr removed, issue #225)
 : > "$herdr_log"; : > "$pager_log"
-HERDR_ENV=1 PAGER=less LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,p,q "$tmp/lead" >/dev/null 2>&1 || fail "peek keypress failed"
+HERDR_ENV=1 PAGER=less LEAD_TEST_INBOX_KEYS=z,j,j,j,j,j,j,p,q "$tmp/lead" >/dev/null 2>&1 || fail "peek keypress failed"
 grep -qxF "<$log_file>" "$pager_log" || fail "p did not open the log via pager: $(cat "$pager_log")"
 [ ! -s "$herdr_log" ] || fail "p must not invoke herdr: $(cat "$herdr_log")"
 

@@ -46,6 +46,10 @@ type Options struct {
 	// Stop terminates the running agent for an issue and returns a human
 	// summary (`lead stop`, issue #185). Nil disables d.
 	Stop func(ctx context.Context, number int) (string, error)
+	// Approve runs the morning approval for an awaiting-human issue
+	// (`lead approve`, issue #255): CI wait, squash merge, close. Nil
+	// disables A.
+	Approve func(ctx context.Context, number int) (string, error)
 	// Parallel is the dispatcher's parallel limit for the header.
 	// 0 means dispatch.DefaultParallel.
 	Parallel int
@@ -245,6 +249,7 @@ func New(opts Options) Model {
 				OpenNumbers: openNums,
 				OpenIssues:  cache.OpenIssues,
 				Ready:       cache.Ready,
+				Awaiting:    cache.Awaiting,
 			})
 			initialStatus = "cached"
 		}
@@ -400,12 +405,17 @@ func (m Model) loadCmd() tea.Cmd {
 			return loadedMsg{err: err}
 		}
 		orderedReady := dispatch.OrderReady(ready, m.cachedSubIssues(ctx))
+		awaitingList, err := opts.Gh.ListByLabel(ctx, state.AwaitingHumanLabel)
+		if err != nil {
+			return loadedMsg{err: err}
+		}
 		var wfs []state.Workflow
 		if opts.Store != nil {
 			if wfs, err = opts.Store.List(); err != nil {
 				return loadedMsg{err: err}
 			}
 		}
+		awaiting := m.loadAwaiting(ctx, opts.Gh, awaitingList, wfs)
 
 		// Build uses the sessionSince (not the updated last_seen_at) so the
 		// current session keeps seeing merges that happened at or after the
@@ -455,6 +465,7 @@ func (m Model) loadCmd() tea.Cmd {
 			OpenNumbers: openNumbers,
 			OpenIssues:  openIssuesList,
 			Ready:       orderedReady,
+			Awaiting:    awaiting,
 		})
 		if loadErr == nil && opts.Cache != nil {
 			var openList []int
@@ -470,6 +481,7 @@ func (m Model) loadCmd() tea.Cmd {
 				OpenNumbers: openList,
 				OpenIssues:  openIssuesList,
 				Ready:       orderedReady,
+				Awaiting:    awaiting,
 			})
 		}
 		return loadedMsg{sections: sections, sessionSince: sessionSince, err: loadErr, repoOpenCount: openCount}
@@ -493,6 +505,39 @@ func (m Model) cachedSubIssues(ctx context.Context) func(parent int) (ports.SubI
 		}
 		return l, nil
 	}
+}
+
+// loadAwaiting enriches the awaiting-human list with the PR number, review
+// verdict, and CI bucket its rows show (issue #255). PR lookup failures are
+// display-only: the row falls back to "-" and the approval command still
+// resolves the PR itself.
+func (m Model) loadAwaiting(ctx context.Context, gh ports.GhClient, list []ports.IssueSummary, wfs []state.Workflow) []AwaitingIssue {
+	out := make([]AwaitingIssue, 0, len(list))
+	for _, s := range list {
+		a := AwaitingIssue{Number: s.Number, Title: s.Title, UpdatedAt: s.UpdatedAt}
+		for _, w := range wfs {
+			if w.Issue != s.Number || w.Part != "" {
+				continue
+			}
+			a.PRNumber = firstPRNumber(w.PullRequests)
+			if a.PRNumber == 0 && w.Branch != "" {
+				if n, err := gh.PrNumberForBranch(ctx, w.Branch); err == nil {
+					a.PRNumber = n
+				}
+			}
+			break
+		}
+		if a.PRNumber > 0 {
+			if labels, err := gh.PrLabels(ctx, a.PRNumber); err == nil {
+				a.Verdict = ReviewVerdict(labels)
+			}
+			if checks, err := gh.PrChecks(ctx, a.PRNumber); err == nil {
+				a.CI = CIBucket(checks)
+			}
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // Row is one selectable line in the inbox: either a section header or an issue.
@@ -611,7 +656,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !msg.sessionSince.IsZero() && m.sessionSince.IsZero() {
 			m.sessionSince = msg.sessionSince
 		}
-		var reviewCount, blockedCount, readyCount int
+		var reviewCount, blockedCount, readyCount, awaitingCount int
 		for _, s := range msg.sections {
 			switch s.Kind {
 			case KindNeedsReview:
@@ -620,9 +665,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				blockedCount = len(s.Items)
 			case KindReady:
 				readyCount = len(s.Items)
+			case KindAwaitingApproval:
+				awaitingCount = len(s.Items)
 			}
 		}
-		totalActive := reviewCount + blockedCount + readyCount
+		totalActive := reviewCount + blockedCount + readyCount + awaitingCount
 		var statusText string
 		if totalActive == 0 {
 			if msg.repoOpenCount > 0 {
@@ -631,7 +678,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				statusText = "Loaded: 0 open issues in repo"
 			}
 		} else {
-			statusText = fmt.Sprintf("Loaded: %d needs-review, %d blocked, %d ready (%d open in repo)", reviewCount, blockedCount, readyCount, msg.repoOpenCount)
+			statusText = fmt.Sprintf("Loaded: %d needs-review, %d blocked, %d ready, %d awaiting approval (%d open in repo)", reviewCount, blockedCount, readyCount, awaitingCount, msg.repoOpenCount)
 		}
 		m.addLog(statusText)
 		var statusCmd tea.Cmd
@@ -918,6 +965,37 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.pendingOps[it.Number] = true
 		return m, m.startApproveCmd(it.Number)
+	case "A":
+		if it.Kind != KindAwaitingApproval {
+			return m, m.setStatus(fmt.Sprintf("#%d is not awaiting approval (A only merges awaiting-human issues)", it.Number))
+		}
+		approve := m.opts.Approve
+		if approve == nil {
+			return m, m.setStatus("A is not configured (run `lead approve <n>` from a terminal)")
+		}
+		if m.pendingOps[it.Number] {
+			return m, m.setStatus(fmt.Sprintf("Already processing #%d", it.Number))
+		}
+		number := it.Number
+		m.mode = modeInput
+		m.input = inputState{
+			action:       "approve",
+			targetNumber: number,
+			prompt:       fmt.Sprintf("Approve and merge #%d? CI wait → squash merge → close [y/N] > ", number),
+			cursor:       0,
+			submit: func(text string) tea.Cmd {
+				if !strings.EqualFold(strings.TrimSpace(text), "y") {
+					return func() tea.Msg {
+						return doneMsg{status: fmt.Sprintf("Canceled approval of #%d", number), number: number}
+					}
+				}
+				return func() tea.Msg {
+					status, err := approve(context.Background(), number)
+					return doneMsg{status: status, err: err, number: number, refresh: err == nil}
+				}
+			},
+		}
+		return m, tea.ShowCursor
 	case "e":
 		if it.Kind != KindNeedsReview {
 			return m, m.setStatus(fmt.Sprintf("#%d cannot be edited (e is only for needs-review issues)", it.Number))
@@ -1249,6 +1327,8 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.pendingOps[targetNumber] = true
 			if action == "reject" {
 				m.status = fmt.Sprintf("Rejecting #%d...", targetNumber)
+			} else if action == "approve" {
+				m.status = fmt.Sprintf("Approving #%d...", targetNumber)
 			} else {
 				m.status = fmt.Sprintf("Replying to #%d...", targetNumber)
 			}
@@ -1738,6 +1818,9 @@ func (m Model) footerTokens() []string {
 		if m.input.action == "reject" {
 			return []string{"[Enter] Reject", "[Esc] Cancel"}
 		}
+		if m.input.action == "approve" {
+			return []string{"[y + Enter] Approve & merge", "[Esc] Cancel"}
+		}
 		return []string{"[Enter] Send", "[Esc] Cancel"}
 	case modeDetail:
 		return []string{"[↑/↓] Scroll", "[PgUp/PgDn] Page", "[o] Browser", "[?] Help", "[Esc] Back"}
@@ -1763,6 +1846,8 @@ func (m Model) footerTokens() []string {
 				tokens = []string{"[Enter] Open", "[t] Reply", "[p] Peek"}
 			case KindReady:
 				tokens = []string{"[Enter] Open", "[x] Reject", "[t] Reply", "[o] Browser"}
+			case KindAwaitingApproval:
+				tokens = []string{"[Enter] Open", "[A] Approve & merge", "[t] Reply", "[o] Browser"}
 			case KindMerged:
 				tokens = []string{"[Enter] Open", "[n] Report bug", "[c] Mark seen"}
 			case KindRunning:
@@ -1837,6 +1922,7 @@ func (m Model) viewHelp() string {
 		"",
 		"Issue actions",
 		"  [a] Approve           needs-review issues only",
+		"  [A] Approve & merge   awaiting-human issues only (asks y/N, then CI wait → merge → close)",
 		"  [e] Edit then approve needs-review issues only",
 		"  [t] Reply / comment   any issue",
 		"  [x] Reject / close    any issue with optional reason",

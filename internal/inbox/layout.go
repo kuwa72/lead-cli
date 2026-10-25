@@ -280,6 +280,11 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 			count = fmt.Sprintf("(%d+)", len(s.Items))
 		}
 		b.WriteString(mark + " " + s.Kind.Title() + " " + count)
+		if s.Kind == KindAwaitingApproval && len(s.Items) == 0 {
+			// The approval queue stays visible at zero so a forgotten
+			// morning approval cannot hide behind a missing box (issue #255).
+			b.WriteString(" — none")
+		}
 		plain := padRight(b.String(), leftW)
 		if m.theme == nil {
 			return plain
@@ -300,9 +305,10 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 			title += "  "
 		}
 		title += note
-	} else if it.AwaitingHuman {
-		// Awaiting-human rows show why dispatch left them alone (issue #245).
-		note := "awaiting human approval"
+	} else if it.Kind == KindAwaitingApproval {
+		// The row carries the facts the morning decision needs: which PR,
+		// the reviewer's verdict, and the CI state (issue #255).
+		note := awaitingNote(it)
 		title = truncTail(title, c.titleW-cellWidth(note)-2)
 		if title != "" {
 			title += "  "
@@ -344,6 +350,25 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 		return m.theme.ListRow(plain, false)
 	}
 	return plain
+}
+
+// awaitingNote is the Awaiting approval row annotation: PR, review verdict,
+// and CI state (issue #255). Unknown values read as "-" so the shape stays
+// stable while the facts load.
+func awaitingNote(it Item) string {
+	pr := "PR -"
+	if it.PRNumber > 0 {
+		pr = fmt.Sprintf("PR #%d", it.PRNumber)
+	}
+	verdict := it.ReviewVerdict
+	if verdict == "" {
+		verdict = "review:none"
+	}
+	ci := "CI -"
+	if it.CIState != "" {
+		ci = "CI " + it.CIState
+	}
+	return fmt.Sprintf("%s · %s · %s", pr, verdict, ci)
 }
 
 // headerRowIndex returns the index of the section-header row for the row at

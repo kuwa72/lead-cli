@@ -51,6 +51,7 @@ case "$1 $2" in
           printf '[]'
         fi ;;
       *"--state closed"*) printf '[]' ;;
+      *"--label awaiting-human"*) printf '[]' ;;
       *) printf '[{"number":7,"title":"spec: warn on zero stock"},{"number":8,"title":"spec: second"},{"number":9,"title":"impl: stuck on flaky test"}]' ;;
     esac ;;
   "issue view")
