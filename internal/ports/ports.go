@@ -69,6 +69,12 @@ type GhClient interface {
 	PrBody(ctx context.Context, pr int) (string, error)
 	// PrDiff mirrors `gh pr diff <pr>`.
 	PrDiff(ctx context.Context, pr int) (string, error)
+	// PrLabels mirrors `gh pr view <pr> --json labels --jq '.labels[].name'`
+	// (independent review gate, issue #246).
+	PrLabels(ctx context.Context, pr int) ([]string, error)
+	// PrComment mirrors `gh pr comment <pr> --body-file -` with body on
+	// stdin (independent review gate, issue #246).
+	PrComment(ctx context.Context, pr int, body string) error
 	// PrMerge mirrors `gh pr merge <pr> --squash --delete-branch`.
 	PrMerge(ctx context.Context, pr int) error
 	// RepoAllowsAutoMerge mirrors `gh api repos/<owner>/<repo> --jq .allow_auto_merge`.

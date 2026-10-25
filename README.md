@@ -50,6 +50,7 @@ Sections:
 | `lead status` | show active workflows |
 | `lead say <one-liner>` | create `needs-review` issues from a one-liner |
 | `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
+| `lead review <pr>` | run an independent headless review; label `review:pass` / `review:needs-work` |
 | `lead clean <n>` | remove the workflow worktree and state |
 | `lead peek <n>` | open the running agent log with `$PAGER` |
 | `lead stop <n>` | stop a running agent (kill, clean up, record interruption) |
@@ -122,6 +123,12 @@ lead finish <n> --merge --approve
 `--approve` is human-only and is never part of the headless dispatch prompt.
 It is separate from `--override-guardrail`, which lifts the protected-file
 guardrail. Mark a safe issue with `gh issue edit <n> --add-label risk:a`.
+
+An automatic (`risk:a`) merge also requires an independent review: run
+`lead review <pr>` (a separate headless agent reads the diff, the issue's
+acceptance criteria, and CI, then labels the PR `review:pass` or
+`review:needs-work`). `lead finish` pauses without `review:pass`; a human can
+skip the gate with `--no-review`.
 
 ## Conventions
 

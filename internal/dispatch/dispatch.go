@@ -949,11 +949,12 @@ func BuildPrompt(iss ports.Issue) string {
 3. リポジトリのテストをすべてパスさせる（./test/run-tests.sh、なければ go test ./... 等プロジェクト固有のコマンド）。
 4. git push -u origin <現在のブランチ> し、gh pr create --fill --base main で PR を作る。PR 本文に Issue の受入条件をチェックリストとして転記し、Closes #%d を含める。
 5. bin/ci-wait <PR番号>（なければ gh pr checks）で CI が全て pass するまで待つ。
-6. lead finish %d --merge でマージと Issue クローズまで行う。gh pr merge を直接実行しない（規約ファイル保護とリスク分級のガードレールを必ず通すため）。finish が規約ファイル保護または承認待ち（risk:b / ラベルなし）で停止したら、--override-guardrail や --approve を付けずにそのまま終了する。
-7. gh issue view %d --json state で closed になったことを確認する。closed でない場合は自分で close せず、原因と試したことを gh issue comment %d --body に書いて終了する（承認待ちで停止した場合は、その旨をコメントして終了する）。
+6. lead review <PR番号> を実行する。VERDICT: pass なら次へ進む。VERDICT: needs-work なら所見に従って修正し、最大2周まで再レビューする（3周目はしない）。2周で通らなければ、所見を gh issue comment %d --body に貼って終了する。
+7. lead finish %d --merge でマージと Issue クローズまで行う。gh pr merge を直接実行しない（規約ファイル保護とリスク分級のガードレールを必ず通すため）。レビューを省略するフラグは人間専用であり、付けてはならない。finish が規約ファイル保護・レビュー未実施・承認待ち（risk:b / ラベルなし）で停止したら、--override-guardrail や --approve を付けずにそのまま終了する。
+8. gh issue view %d --json state で closed になったことを確認する。closed でない場合は自分で close せず、原因と試したことを gh issue comment %d --body に書いて終了する（承認待ちで停止した場合は、その旨をコメントして終了する）。
 
 AGENTS.md、.claude/、.devin/ などプロジェクト規約ファイルは、この Issue で明示されていない限り編集しない。
-`, iss.Number, iss.Number, iss.Number, iss.Number)
+`, iss.Number, iss.Number, iss.Number, iss.Number, iss.Number)
 	return b.String()
 }
 

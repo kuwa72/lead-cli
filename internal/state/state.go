@@ -21,6 +21,14 @@ type Status string
 // the issue keeps `ready` so the inbox still lists it.
 const AwaitingHumanLabel = "awaiting-human"
 
+// Independent review verdict labels (issue #246). They are applied to the
+// PR (gh issue edit works on PRs); `lead finish` requires review:pass for
+// an automatic (risk:a) merge.
+const (
+	ReviewPassLabel      = "review:pass"
+	ReviewNeedsWorkLabel = "review:needs-work"
+)
+
 const (
 	StatusOpen           Status = "open"
 	StatusPlanned        Status = "planned"

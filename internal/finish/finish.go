@@ -37,7 +37,11 @@ type Options struct {
 	// Approve is the human-only confirmation that merges a risk:b issue
 	// (issue #245). Merge alone does not: unlabelled and risk:b issues
 	// stop for human approval by default. Unrelated to OverrideGuardrail.
-	Approve      bool
+	Approve bool
+	// NoReview is the human-only confirmation that lets a risk:a PR merge
+	// without the independent reviewer's review:pass label (issue #246).
+	// It is never part of the headless dispatch prompt.
+	NoReview     bool
 	Timeout      time.Duration
 	PollInterval time.Duration
 	// Git and WorkDir let finish remove the issue's worktree when it
@@ -243,6 +247,21 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 	// failure. The human merges with --approve.
 	if risk != RiskA && !opts.Approve {
 		return runAwaitingHuman(ctx, gh, store, w, prNumber, risk, opts)
+	}
+	// Independent review gate (issue #246): an unattended merge of a
+	// risk:a PR also needs the separate reviewer's verdict. Missing label
+	// (or an unreadable label list) stops before merging; --no-review is
+	// the human-only override.
+	if risk == RiskA && !opts.NoReview {
+		labels, err := gh.PrLabels(ctx, prNumber)
+		if err != nil {
+			return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: labels (review gate): %w", prNumber, err)
+		}
+		if !slices.Contains(labels, state.ReviewPassLabel) {
+			return Result{ChecksPassed: true,
+				Message: fmt.Sprintf("CI passed for PR #%d, but it has no %s label. Run `lead review %d` and merge after it passes; a human can override with `lead finish %d --merge --no-review`.",
+					prNumber, state.ReviewPassLabel, prNumber, issue)}, nil
+		}
 	}
 	if err := gh.PrMerge(ctx, prNumber); err != nil {
 		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: merge: %w", prNumber, err)

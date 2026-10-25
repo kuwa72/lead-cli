@@ -30,6 +30,7 @@ case "$1 $2" in
     printf '{"number":36,"title":"demo","body":"b","state":"OPEN","labels":[{"name":"risk:a"}]}' ;;
   "pr view")
     case "$*" in
+      *"--json labels"*) printf 'review:pass\n' ;;
       *"--json files"*) printf '%s\n' "${GH_FILES:-src/main.go}" ;;
       *) printf '{"number":7,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}' ;;
     esac ;;

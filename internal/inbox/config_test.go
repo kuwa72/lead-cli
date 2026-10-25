@@ -79,9 +79,26 @@ func TestConfig_RoleAgentsFallBackToSharedAgent(t *testing.T) {
 	}
 }
 
+// issue #246: agents.review is the independent reviewer. Unset roles fall
+// back to agents.impl and then the shared agent.
+func TestConfig_ReviewAgentResolution(t *testing.T) {
+	cfg := Config{Agent: "agy", Agents: &AgentRoles{Review: "codex", Impl: "devin"}}
+	if got := cfg.ReviewAgent(); got != "codex" {
+		t.Errorf("ReviewAgent = %q, want agents.review codex", got)
+	}
+	cfg = Config{Agent: "agy", Agents: &AgentRoles{Impl: "devin"}}
+	if got := cfg.ReviewAgent(); got != "devin" {
+		t.Errorf("ReviewAgent = %q, want agents.impl devin", got)
+	}
+	cfg = Config{Agent: "agy"}
+	if got := cfg.ReviewAgent(); got != "agy" {
+		t.Errorf("ReviewAgent = %q, want shared agent agy", got)
+	}
+}
+
 func TestLoadConfig_ReadsAgentRoles(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "inbox-config.json")
-	data := `{"agent":"claude","agents":{"spec":"codex","impl":"devin"}}`
+	data := `{"agent":"claude","agents":{"spec":"codex","impl":"devin","review":"gemini"}}`
 	if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -89,14 +106,17 @@ func TestLoadConfig_ReadsAgentRoles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Agents == nil || cfg.Agents.Spec != "codex" || cfg.Agents.Impl != "devin" {
-		t.Fatalf("cfg.Agents = %+v, want spec=codex impl=devin", cfg.Agents)
+	if cfg.Agents == nil || cfg.Agents.Spec != "codex" || cfg.Agents.Impl != "devin" || cfg.Agents.Review != "gemini" {
+		t.Fatalf("cfg.Agents = %+v, want spec=codex impl=devin review=gemini", cfg.Agents)
 	}
 	if got := cfg.SpecAgent(); got != "codex" {
 		t.Errorf("SpecAgent = %q, want codex", got)
 	}
 	if got := cfg.ImplAgent(); got != "devin" {
 		t.Errorf("ImplAgent = %q, want devin", got)
+	}
+	if got := cfg.ReviewAgent(); got != "gemini" {
+		t.Errorf("ReviewAgent = %q, want gemini", got)
 	}
 }
 

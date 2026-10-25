@@ -657,6 +657,52 @@ func TestPrDiff_CallsGhWithExpectedArgs(t *testing.T) {
 	}
 }
 
+func TestPrLabels_ReturnsNames(t *testing.T) {
+	body := "if [ \"$1 $2\" = \"pr view\" ]; then printf 'review:pass\\nreview:needs-work\\n'\n" +
+		"else echo \"unexpected: $@\" >&2; exit 3\nfi"
+	logPath := testutil.InstallDummy(t, "gh", body)
+	testutil.ClearLog(t, logPath)
+
+	got, err := New().PrLabels(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("PrLabels: %v", err)
+	}
+	if want := []string{"review:pass", "review:needs-work"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("PrLabels = %q, want %q", got, want)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, wantArg := range []string{"<pr>", "<view>", "<7>", "<--json>", "<labels>", "<--jq>", "<.labels[].name>"} {
+		if !strings.Contains(log, wantArg) {
+			t.Errorf("gh args log missing %q, got:\n%s", wantArg, log)
+		}
+	}
+}
+
+func TestPrComment_FeedsBodyOnStdin(t *testing.T) {
+	stdinFile := filepath.Join(t.TempDir(), "comment.md")
+	t.Setenv("STDIN_FILE", stdinFile)
+	logPath := testutil.InstallDummy(t, "gh", `cat > "$STDIN_FILE"`)
+	testutil.ClearLog(t, logPath)
+
+	const body = "## findings\nVERDICT: needs-work"
+	if err := New().PrComment(context.Background(), 7, body); err != nil {
+		t.Fatalf("PrComment: %v", err)
+	}
+	raw, err := os.ReadFile(stdinFile)
+	if err != nil {
+		t.Fatalf("read stdin capture: %v", err)
+	}
+	if string(raw) != body {
+		t.Errorf("stdin body = %q, want %q", raw, body)
+	}
+	log := testutil.LogText(t, logPath)
+	for _, wantArg := range []string{"<pr>", "<comment>", "<7>", "<--body-file>", "<->"} {
+		if !strings.Contains(log, wantArg) {
+			t.Errorf("gh args log missing %q, got:\n%s", wantArg, log)
+		}
+	}
+}
+
 func TestRepoLabels_ListsNamesScopedToRepo(t *testing.T) {
 	body := "if [ \"$1 $2\" = \"label list\" ]; then printf '[{\"name\":\"needs-review\"},{\"name\":\"ready\"},{\"name\":\"blocked\"}]'\n" +
 		"else echo \"unexpected: $@\" >&2; exit 3\nfi"
