@@ -1,7 +1,6 @@
 package issuecheck
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -88,9 +87,8 @@ nothing here.
 - none
 `
 	missing := Check(body, []string{"risk:b"})
-	want := []string{"`## 受入条件` セクションがありません"}
-	if !reflect.DeepEqual(missing, want) {
-		t.Fatalf("Check(no acceptance) = %v, want %v", missing, want)
+	if len(missing) != 1 || !strings.Contains(missing[0], "受入条件") || !strings.Contains(missing[0], "Acceptance criteria") {
+		t.Fatalf("Check(no acceptance) = %v, want an acceptance-section finding", missing)
 	}
 }
 
@@ -119,9 +117,8 @@ func TestCheck_RejectsMissingScopeSection(t *testing.T) {
 - [ ] ` + "`./test/run-tests.sh`" + ` が pass する
 `
 	missing := Check(body, []string{"risk:b"})
-	want := []string{"`## スコープ外` セクションがありません"}
-	if !reflect.DeepEqual(missing, want) {
-		t.Fatalf("Check(no scope) = %v, want %v", missing, want)
+	if len(missing) != 1 || !strings.Contains(missing[0], "スコープ外") {
+		t.Fatalf("Check(no scope) = %v, want a scope finding", missing)
 	}
 }
 
@@ -182,5 +179,41 @@ func TestTemplate_HasRequiredSections(t *testing.T) {
 		if !strings.Contains(Template, want) {
 			t.Errorf("Template missing %q:\n%s", want, Template)
 		}
+	}
+}
+
+// issue #264: English headings and a bold **対象外** marker are accepted.
+func TestCheck_AcceptsEnglishHeadingsAndBoldScope(t *testing.T) {
+	body := `# title
+
+## Acceptance criteria
+
+- [ ] ` + "`./test/run-tests.sh`" + ` passes
+
+## Scope
+
+**変更対象**
+- preview cache
+
+**対象外**
+- list cache
+`
+	if missing := Check(body, []string{"risk:b"}); len(missing) != 0 {
+		t.Fatalf("Check(english body) = %v, want no missing items", missing)
+	}
+}
+
+// issue #264: an English body still needs somewhere to state what is out of
+// scope; acceptance criteria alone is not enough.
+func TestCheck_RejectsEnglishBodyWithoutScope(t *testing.T) {
+	body := `# title
+
+## Acceptance criteria
+
+- [ ] ` + "`go test ./...`" + ` passes
+`
+	missing := Check(body, []string{"risk:b"})
+	if len(missing) != 1 || !strings.Contains(missing[0], "スコープ外") {
+		t.Fatalf("Check(no scope) = %v, want a single scope complaint", missing)
 	}
 }
