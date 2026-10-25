@@ -1609,6 +1609,9 @@ func (m Model) statusLine(w int) string {
 		}
 	default:
 		s = "j/k move  Enter open  ? help  q quit"
+		if m.previewOverflows() {
+			s += "  J/K scroll preview"
+		}
 	}
 	plain := padRight(truncTail(s, w), w)
 	if m.theme == nil {

@@ -368,6 +368,60 @@ func TestPreview_ScrollWithShiftJK(t *testing.T) {
 	}
 }
 
+func TestPreview_ScrollHintWhenContentOverflows(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: strings.Repeat("line\n", 60), State: "OPEN"}
+	m = press(t, m, "j")
+	m.status = "" // headless fixtures keep the load status; show the default hint
+
+	if v := m.View(); !strings.Contains(v, "J/K") {
+		t.Errorf("long preview should advertise J/K scrolling, got:\n%s", v)
+	}
+
+	// A body that fits the pane must not advertise scrolling.
+	m = press(t, m, "k")
+	if v := m.View(); strings.Contains(v, "J/K") {
+		t.Errorf("short preview should not advertise scrolling, got:\n%s", v)
+	}
+}
+
+func TestPreview_ScrollPositionIndicator(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: strings.Repeat("line\n", 60), State: "OPEN"}
+	m = press(t, m, "j")
+	m = press(t, m, "J", "J", "J")
+
+	if v := m.View(); !strings.Contains(v, "↑ 3") {
+		t.Errorf("preview header should show scroll offset after J x3, got:\n%s", v)
+	}
+
+	m = press(t, m, "K", "K", "K")
+	if v := m.View(); strings.Contains(v, "↑ 3") {
+		t.Errorf("scroll indicator should clear at offset 0, got:\n%s", v)
+	}
+}
+
+func TestPreview_NoScrollHintInNarrowLayout(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 80
+	m.height = 30
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: strings.Repeat("line\n", 60), State: "OPEN"}
+	m = press(t, m, "j", "J", "J", "J")
+	m.status = "" // headless fixtures keep the load status; show the default hint
+
+	v := m.View()
+	if strings.Contains(v, "J/K") {
+		t.Errorf("narrow layout should not advertise preview scrolling, got:\n%s", v)
+	}
+	if strings.Contains(v, "↑ 3") {
+		t.Errorf("narrow layout has no preview header for the offset, got:\n%s", v)
+	}
+}
+
 func TestDetail_NeedsReview_ShowsDiff(t *testing.T) {
 	gh, _, m := newFixture(t)
 	m.width = 130
