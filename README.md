@@ -11,7 +11,7 @@ Without a subcommand, `lead` opens the inbox (docs/rfc-inbox-ux.md §5). The inb
 Sections:
 
 - レビュー待ち (`needs-review`): issues waiting for human approval
-- 止まってる (`blocked`): agents that failed or are stuck
+- 止まってる (`blocked`): agents that failed or are stuck; `lead resume <issue>` reconnects to the existing branch and worktree
 - 最近マージ (`merged`, collapsible): recently merged issues for staging verification
 - 実行中 (`running`, collapsible): currently running agents
 
@@ -43,6 +43,7 @@ Sections:
 | Command | Purpose |
 |---|---|
 | `lead run [n]` | start an issue with an interactive agent (`--mode implement/review`, interactive picker without `n`) |
+| `lead resume <issue\|branch\|pr>` | reconnect to existing work without creating a new branch or PR |
 | `lead lgtm <n>` | add `lgtm` label and post LGTM comment |
 | `lead unlgtm <n>` | remove `lgtm` label |
 | `lead dispatch` | hand `ready` issues to headless agents |
@@ -52,10 +53,14 @@ Sections:
 | `lead clean <n>` | remove the workflow worktree and state |
 | `lead peek <n>` | open the running agent log with `$PAGER` |
 | `lead stop <n>` | stop a running agent (kill, clean up, record interruption) |
+| `lead server` | run the headless socket API daemon |
+| `lead api <schema\|snapshot\|call>` | query the socket API |
 | `lead enable` | enable this repository (`AGENTS.md` management block, lead-flow skill to `.agents/skills` + detected agents' skills dirs, generated-path ignores in `.git/info/exclude`) |
 | `lead disable` | disable this repository (remove lead-flow skill from all known skills dirs and the managed ignore block) |
 | `lead setup` | set up your user environment (shell completions, keybinding) |
+| `lead completion <shell>` | print a completion script (bash, zsh, fish, powershell) |
 | `lead doctor` | diagnose `gh`, agents, and branch protection |
+| `lead update` | replace this binary with the latest release (direct installs only) |
 | `lead version` | show version |
 
 ## Install and setup
@@ -71,6 +76,7 @@ lead enable                 # this repository (skill + AGENTS.md block)
 
 `lead setup --write` sets up your user environment (shell completion and a keybinding, `$HOME` only); `lead enable` enables this repository (the `AGENTS.md` rule block and the lead-flow skill, written to `.agents/skills/lead-flow` plus the skills directory of each agent detected on `PATH` or configured in `inbox-config.json`).
 
+<<<<<<< HEAD
 ### Generated files and `git status`
 
 `lead enable` offers to add the paths it generates to the repository's local git exclude file (`.git/info/exclude`, resolved with `git rev-parse --git-path info/exclude`):
@@ -83,6 +89,17 @@ lead enable                 # this repository (skill + AGENTS.md block)
 ```
 
 This keeps `git status` clean after enabling: `.worktrees/` (used by `lead run --worktree` and `lead dispatch`) and the lead-flow skill copies no longer appear as untracked. The prompt defaults to yes and `--yes` applies it without asking. Decline if the project wants to commit its skills; the command prints the entries and a hint so the choice is explicit. `lead disable` removes the managed block and leaves foreign exclude entries untouched.
+=======
+## Configuration
+
+Settings are stored in `inbox-config.json` next to the state file
+(`~/.local/state/lead/inbox-config.json` by default; `$XDG_STATE_HOME` and
+`$LEAD_STATE_FILE` move it). The file is normally written by the inbox
+Settings view (`,` / `S`), but can be edited by hand.
+
+Keys, types, defaults, and the environment variables that override them are
+documented in [docs/config.md](docs/config.md).
+>>>>>>> 1c9d489 (docs(readme): サブコマンド表を lead --help と一致させ、設定リファレンスを追加 (fixes #233))
 
 ## Conventions
 
