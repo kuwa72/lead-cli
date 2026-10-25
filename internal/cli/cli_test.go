@@ -576,7 +576,7 @@ func TestEnableCheckFailsWhenLabelsMissing(t *testing.T) {
 	if err == nil {
 		t.Fatalf("enable --check with missing labels = nil error, want non-zero exit\n%s", out)
 	}
-	for _, want := range []string{"label/needs-review: ok", "label/ready: missing", "label/blocked: missing"} {
+	for _, want := range []string{"label/needs-review: ok", "label/ready: missing", "label/blocked: missing", "label/awaiting-human: missing"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("enable --check missing %q, got:\n%s", want, out)
 		}
@@ -591,7 +591,7 @@ func TestEnableCheckFailsWhenLabelsMissing(t *testing.T) {
 
 func TestEnableCheckPassesWhenLabelsPresent(t *testing.T) {
 	gh := &testutil.FakeGhClient{
-		RepoLabelNames:   []string{"needs-review", "ready", "blocked"},
+		RepoLabelNames:   []string{"needs-review", "ready", "blocked", "awaiting-human"},
 		Protection:       ports.BranchProtection{Protected: true, RequiresPR: true, RequiredChecks: []string{"test"}},
 		AutoMergeAllowed: true,
 	}
@@ -603,7 +603,7 @@ func TestEnableCheckPassesWhenLabelsPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enable --check with all labels: %v\n%s", err, out)
 	}
-	for _, want := range []string{"label/needs-review: ok", "label/ready: ok", "label/blocked: ok"} {
+	for _, want := range []string{"label/needs-review: ok", "label/ready: ok", "label/blocked: ok", "label/awaiting-human: ok"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("enable --check missing %q, got:\n%s", want, out)
 		}
@@ -618,7 +618,7 @@ func TestEnableCheckPassesWhenLabelsPresent(t *testing.T) {
 func TestEnableCheckPassesWithoutProtection(t *testing.T) {
 	// Issue #200: labels present but no branch protection: --check must
 	// pass with protection guidance since missing protection only warns.
-	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review", "ready", "blocked"}}
+	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review", "ready", "blocked", "awaiting-human"}}
 	deps := enableFixture(t, gh, "https://github.com/o/r.git")
 	if out, err := runEnableCmd(t, deps, "--yes"); err != nil {
 		t.Fatalf("enable --yes: %v\n%s", err, out)
@@ -663,11 +663,11 @@ func TestEnableApplyCreatesMissingLabels(t *testing.T) {
 	for _, l := range gh.CreatedLabels {
 		got = append(got, l.Name)
 	}
-	want := []string{"ready", "blocked"}
+	want := []string{"ready", "blocked", "awaiting-human"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("created labels = %v, want %v (present labels must not be recreated)", got, want)
 	}
-	for _, wantLine := range []string{"label/ready: created", "label/blocked: created", "label/needs-review: ok"} {
+	for _, wantLine := range []string{"label/ready: created", "label/blocked: created", "label/awaiting-human: created", "label/needs-review: ok"} {
 		if !strings.Contains(out, wantLine) {
 			t.Errorf("enable --yes missing %q, got:\n%s", wantLine, out)
 		}
@@ -739,7 +739,7 @@ func TestEnableDistributesToConfiguredAgent(t *testing.T) {
 }
 
 func TestDisableRemovesManagedFiles(t *testing.T) {
-	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review", "ready", "blocked"}}
+	gh := &testutil.FakeGhClient{RepoLabelNames: []string{"needs-review", "ready", "blocked", "awaiting-human"}}
 	deps := enableFixture(t, gh, "https://github.com/o/r.git")
 	if out, err := runEnableCmd(t, deps, "--yes"); err != nil {
 		t.Fatalf("enable --yes: %v\n%s", err, out)

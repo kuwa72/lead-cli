@@ -31,6 +31,7 @@ func seedFinishRecord(t *testing.T, stateFile string, mutate func(*state.Workflo
 		Checks:           []ports.PRCheck{{Name: "test", Bucket: "pass", State: "SUCCESS"}},
 		PR:               ports.PRInfo{Number: 7, State: "OPEN", Mergeable: "MERGEABLE"},
 		AutoMergeAllowed: true,
+		Issues:           map[int]ports.Issue{36: {Number: 36, Title: "x", Labels: []string{"risk:a"}}},
 	}
 }
 
@@ -91,6 +92,46 @@ func TestFinish_NoRecordViaCLI(t *testing.T) {
 	_, err := executeWith(t, Deps{Gh: fake, StateFile: stateFile}, "finish", "36", "--merge")
 	if err == nil {
 		t.Error("finish without record = nil, want failure")
+	}
+}
+
+// issue #245: --merge alone does not merge an unlabelled (risk:b) issue;
+// the CLI reports awaiting-human and exits 0.
+func TestFinish_DefaultRiskBWaitsViaCLI(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "wf.json")
+	fake := seedFinishRecord(t, stateFile, nil)
+	fake.Issues[36] = ports.Issue{Number: 36, Title: "x"}
+
+	out, err := executeWith(t, Deps{Gh: fake, StateFile: stateFile}, "finish", "36", "--merge")
+	if err != nil {
+		t.Fatalf("awaiting-human pause = %v, want exit 0\n%s", err, out)
+	}
+	if len(fake.MergeCalls) != 0 {
+		t.Errorf("merges = %v, want none without --approve", fake.MergeCalls)
+	}
+	if !strings.Contains(out, "awaiting") || !strings.Contains(out, "--approve") {
+		t.Errorf("output = %q, want awaiting-human + --approve guidance", out)
+	}
+	if len(fake.AddedLabels) != 1 || fake.AddedLabels[0].Label != state.AwaitingHumanLabel {
+		t.Errorf("added labels = %+v, want awaiting-human", fake.AddedLabels)
+	}
+}
+
+// issue #245: --approve is the human confirmation that merges risk:b.
+func TestFinish_ApproveMergesViaCLI(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "wf.json")
+	fake := seedFinishRecord(t, stateFile, nil)
+	fake.Issues[36] = ports.Issue{Number: 36, Title: "x", Labels: []string{"risk:b", state.AwaitingHumanLabel}}
+
+	out, err := executeWith(t, Deps{Gh: fake, StateFile: stateFile}, "finish", "36", "--merge", "--approve", "--close")
+	if err != nil {
+		t.Fatalf("approved finish: %v\n%s", err, out)
+	}
+	if len(fake.MergeCalls) != 1 {
+		t.Errorf("merges = %v, want one", fake.MergeCalls)
+	}
+	if len(fake.RemovedLabels) != 1 || fake.RemovedLabels[0].Label != state.AwaitingHumanLabel {
+		t.Errorf("removed labels = %+v, want awaiting-human removed", fake.RemovedLabels)
 	}
 }
 

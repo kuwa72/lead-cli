@@ -125,7 +125,7 @@ case "$out" in *"[dry-run] would create issue 1/2"*"labels: needs-review"*"docs:
 : > "$GH_LOG"; : > "$AGENT_LOG"
 echo '[{"title":"fix(dispatch): handle NG","body":"## Purpose\nno explicit ref"}]' > "$AGENT_OUT"
 (cd "$repo" && "$tmp/lead" say "実機で NG" --agent claude --follow-up 42 >/dev/null 2>&1) || fail "follow-up exited non-zero"
-grep -q '^GH issue view 42 --json number,title,body,state$' "$GH_LOG" || fail "parent issue not fetched: $(cat "$GH_LOG")"
+grep -q '^GH issue view 42 --json number,title,body,state,labels$' "$GH_LOG" || fail "parent issue not fetched: $(cat "$GH_LOG")"
 grep -q 'parent body' "$AGENT_LOG" || fail "prompt lacks parent issue body"
 grep -q '^GH issue create --title fix(dispatch): handle NG --body .*#42.* --label needs-review$' "$GH_LOG" || fail "follow-up body lacks #42: $(cat "$GH_LOG")"
 grep -q '^GH issue edit' "$GH_LOG" && fail "single follow-up issue should not be edited"

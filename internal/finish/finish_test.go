@@ -51,8 +51,16 @@ func baseFake() *testutil.FakeGhClient {
 		Checks:           []ports.PRCheck{{Name: "test", Bucket: "pass", State: "SUCCESS"}},
 		PR:               ports.PRInfo{Number: 7, State: "OPEN", Mergeable: "MERGEABLE"},
 		AutoMergeAllowed: true,
-		Issues:           map[int]ports.Issue{36: {Number: 36, Title: "x"}},
+		// risk:a keeps the pre-#245 merge fixtures merging; the risk-gate
+		// tests below opt into other label sets explicitly.
+		Issues: map[int]ports.Issue{36: {Number: 36, Title: "x", Labels: []string{"risk:a"}}},
 	}
+}
+
+func riskFake(labels ...string) *testutil.FakeGhClient {
+	f := baseFake()
+	f.Issues[36] = ports.Issue{Number: 36, Title: "x", Labels: labels}
+	return f
 }
 
 func noSleep(d time.Duration) {}
@@ -497,5 +505,114 @@ func TestRun_RepoURLIsReducedToSlugForAPI(t *testing.T) {
 	}
 	if !reflect.DeepEqual(fake.AutoMergeRepos, []string{"o/r"}) {
 		t.Errorf("repo passed to gh api = %v, want [o/r]", fake.AutoMergeRepos)
+	}
+}
+
+// issue #245: an unlabelled issue is risk:b — CI passes, but the merge
+// waits for a human. This is not a failure: exit cleanly, label the issue,
+// record awaiting_review, and leave it open.
+func TestRun_UnlabelledDefaultsToAwaitingHuman(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := riskFake() // no labels
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil {
+		t.Fatalf("awaiting-human pause = %v, want clean pause", err)
+	}
+	if !res.ChecksPassed || res.Merged || res.Closed || !res.AwaitingHuman {
+		t.Errorf("Result = %+v, want checks passed + awaiting human, no merge/close", res)
+	}
+	if len(fake.MergeCalls) != 0 || len(fake.Closed) != 0 {
+		t.Errorf("merges = %v closed = %v; risk:b must not merge or close", fake.MergeCalls, fake.Closed)
+	}
+	if !reflect.DeepEqual(fake.AddedLabels, []testutil.LabelCall{{Number: 36, Label: state.AwaitingHumanLabel}}) {
+		t.Errorf("added labels = %+v, want awaiting-human on #36", fake.AddedLabels)
+	}
+	if !strings.Contains(res.Message, "awaiting") || !strings.Contains(res.Message, "--approve") {
+		t.Errorf("message = %q, want awaiting-human + --approve guidance", res.Message)
+	}
+	got := loadOne(t, path)
+	if got.Status != state.StatusAwaitingReview {
+		t.Errorf("recorded status = %q, want awaiting_review", got.Status)
+	}
+}
+
+// issue #245: risk:b behaves like unlabelled — no merge without --approve.
+func TestRun_RiskBWaitsForHuman(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := riskFake("risk:b")
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || res.Merged || !res.AwaitingHuman {
+		t.Fatalf("Result = %+v, %v; want awaiting human without merge", res, err)
+	}
+	if len(fake.MergeCalls) != 0 {
+		t.Errorf("merges = %v, want none for risk:b", fake.MergeCalls)
+	}
+}
+
+// issue #245: risk:a merges without human approval (the protected-file
+// guardrail still applies separately).
+func TestRun_RiskAMerges(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := riskFake("risk:a")
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || !res.Merged || res.AwaitingHuman {
+		t.Fatalf("Result = %+v, %v; want risk:a merge", res, err)
+	}
+	if !reflect.DeepEqual(fake.MergeCalls, []int{7}) || !reflect.DeepEqual(fake.Closed, []int{36}) {
+		t.Errorf("merges = %v closed = %v; want PR 7 merged and issue 36 closed", fake.MergeCalls, fake.Closed)
+	}
+}
+
+// issue #245: a human approval merges a risk:b PR and clears awaiting-human.
+func TestRun_ApproveMergesAndClearsAwaitingLabel(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{Status: state.StatusAwaitingReview})
+	fake := riskFake("risk:b", state.AwaitingHumanLabel)
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Approve: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || !res.Merged || res.AwaitingHuman {
+		t.Fatalf("Result = %+v, %v; want approved merge", res, err)
+	}
+	if !reflect.DeepEqual(fake.MergeCalls, []int{7}) {
+		t.Errorf("merges = %v, want PR 7", fake.MergeCalls)
+	}
+	if !reflect.DeepEqual(fake.RemovedLabels, []testutil.LabelCall{{Number: 36, Label: state.AwaitingHumanLabel}}) {
+		t.Errorf("removed labels = %+v, want awaiting-human removed", fake.RemovedLabels)
+	}
+	if got := loadOne(t, path); got.Status != state.StatusClosed {
+		t.Errorf("recorded status = %q, want closed", got.Status)
+	}
+}
+
+// issue #245: labels come from `gh issue view`; a failure there must stop
+// before merging (fail closed on unknown risk).
+func TestRun_LabelLookupFailureStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.ViewErr = errors.New("gh boom")
+
+	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err == nil || !strings.Contains(err.Error(), "gh boom") {
+		t.Fatalf("err = %v, want label lookup failure surfaced", err)
+	}
+	if len(fake.MergeCalls) != 0 {
+		t.Errorf("merged despite unknown risk class")
 	}
 }

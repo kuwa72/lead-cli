@@ -50,6 +50,27 @@
 | `LEAD_THEME` | `terminal` | inbox の配色。`terminal` / `dark` / `light`。`NO_COLOR` / `TERM=dumb` が優先 |
 | `LEAD_ISSUE_LIMIT` | `300` | `gh issue list` 1 回あたりの取得件数 |
 
+## `lead finish` のリスク分級（Issue ラベル）
+
+`lead finish <n> --merge` は、設定ファイルではなく Issue のラベルで
+マージ可否を分級する（issue #245）。
+
+| Issue のラベル | `lead finish <n> --merge` の挙動 |
+|---|---|
+| `risk:a` | CI 成功後にマージする（規約ファイル保護のガードレールは別途適用） |
+| `risk:b` | マージせず、人間の承認待ちにする |
+| ラベルなし | `risk:b` と同じ（**既定は人間承認**） |
+
+承認待ちは失敗ではない。CI 成功後に `awaiting-human` ラベルが付き、
+workflow status が `awaiting_review` になり、exit 0 で終了する。
+`lead dispatch` はこれを attempt に数えず `blocked` ラベルも付けない。
+人間は `lead finish <n> --merge --approve` でマージする（`--approve` は
+人間専用で、ヘッドレス dispatch の完了定義には含めない）。
+`--override-guardrail`（規約ファイル保護の解除）とは別のフラグである。
+
+`awaiting-human` ラベルは `lead enable` が作成する必須ラベルの一つ。
+`risk:a` は当面 `gh issue edit <n> --add-label risk:a` で付ける。
+
 ## 関連
 
 - 設定画面と inbox の仕様: [rfc-inbox-ux.md](rfc-inbox-ux.md)

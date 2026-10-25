@@ -118,10 +118,10 @@ func (c *Client) ListOpen(ctx context.Context) ([]ports.IssueSummary, error) {
 	return summaries, nil
 }
 
-// View runs `gh issue view <n> --json number,title,body,state`.
+// View runs `gh issue view <n> --json number,title,body,state,labels`.
 func (c *Client) View(ctx context.Context, number int) (ports.Issue, error) {
 	out, err := c.run(ctx, "issue", "view", strconv.Itoa(number),
-		"--json", "number,title,body,state")
+		"--json", "number,title,body,state,labels")
 	if err != nil {
 		return ports.Issue{}, err
 	}
@@ -130,16 +130,23 @@ func (c *Client) View(ctx context.Context, number int) (ports.Issue, error) {
 		Title  string `json:"title"`
 		Body   string `json:"body"`
 		State  string `json:"state"`
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
 		return ports.Issue{}, fmt.Errorf("gh issue view %d: decode JSON: %w", number, err)
 	}
-	return ports.Issue{
+	iss := ports.Issue{
 		Number: raw.Number,
 		Title:  raw.Title,
 		Body:   raw.Body,
 		State:  raw.State,
-	}, nil
+	}
+	for _, l := range raw.Labels {
+		iss.Labels = append(iss.Labels, l.Name)
+	}
+	return iss, nil
 }
 
 // PrChecks runs `gh pr checks <pr> --json bucket,name,state`.

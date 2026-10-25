@@ -197,6 +197,21 @@ func TestBuild_ReadyExcludedFromBacklog(t *testing.T) {
 	}
 }
 
+// Issue #245: an awaiting-human workflow stays in Ready (the issue keeps
+// its ready label) and is annotated so the inbox shows why it is waiting.
+func TestBuild_ReadyAnnotatesAwaitingHuman(t *testing.T) {
+	ready := []ports.IssueSummary{{Number: 7, Title: "risky change"}}
+	wfs := []state.Workflow{{Issue: 7, Status: state.StatusAwaitingReview}}
+	sections := Build(nil, nil, nil, nil, wfs, BuildOptions{Ready: ready})
+	sec := sections[2]
+	if sec.Kind != KindReady || len(sec.Items) != 1 {
+		t.Fatalf("ready section = %+v, want one item", sec)
+	}
+	if !sec.Items[0].AwaitingHuman {
+		t.Errorf("AwaitingHuman = false, want true for awaiting_review")
+	}
+}
+
 func TestBuild_RunningCarriesStartedAt(t *testing.T) {
 	started := time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
 	wfs := []state.Workflow{

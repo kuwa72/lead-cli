@@ -49,6 +49,9 @@ type Issue struct {
 	State         string
 	UpdatedAt     time.Time
 	BlockedReason string
+	// Labels are the issue's label names (risk classification and
+	// awaiting-human detection, issue #245).
+	Labels []string
 }
 
 // GhClient abstracts `gh issue list/view` (transparent auth via gh CLI)

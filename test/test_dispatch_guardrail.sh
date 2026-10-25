@@ -38,7 +38,9 @@ export MERGED_MARK="$tmp/merged" CLOSED_MARK="$tmp/closed"
 : > "$GH_LOG"; : > "$PROMPT_LOG"; : > "$FINISH_LOG"
 
 # ISSUE selects the ready issue; FILES is the PR's changed-file list.
-export ISSUE=7 FILES="internal/x.go"
+# LABELS is the issue's risk class JSON (risk:a keeps these fixtures merging;
+# the risk gate itself is covered by test_risk_gate.sh, issue #245).
+export ISSUE=7 FILES="internal/x.go" LABELS='[{"name":"risk:a"}]'
 
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/gh" <<'EOF'
@@ -49,7 +51,7 @@ case "$1 $2" in
     case "$*" in *"--label ready"*) printf '[{"number":%s,"title":"dispatch me"}]' "$ISSUE" ;; *) printf '[]' ;; esac ;;
   "issue view")
     if [ -f "$MERGED_MARK" ] || [ -f "$CLOSED_MARK" ]; then st=CLOSED; else st=OPEN; fi
-    printf '{"number":%s,"title":"dispatch me","body":"do the thing","state":"%s"}' "$ISSUE" "$st" ;;
+    printf '{"number":%s,"title":"dispatch me","body":"do the thing","state":"%s","labels":%s}' "$ISSUE" "$st" "${LABELS:-[]}" ;;
   "issue edit"|"issue comment"|"auth status") : ;;
   "issue close") touch "$CLOSED_MARK" ;;
   "api user") printf 'octocat\n' ;;

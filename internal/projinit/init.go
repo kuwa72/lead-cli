@@ -21,6 +21,7 @@ import (
 
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/state"
 )
 
 //go:embed skill.md
@@ -66,6 +67,7 @@ var RequiredIssueLabels = []ports.LabelDefinition{
 	{Name: "needs-review", Color: "FBCA04", Description: "Waiting for review"},
 	{Name: "ready", Color: "0E8A16", Description: "Ready to be worked on"},
 	{Name: "blocked", Color: "D93F0B", Description: "Blocked by another issue"},
+	{Name: state.AwaitingHumanLabel, Color: "5319E7", Description: "CI passed; waiting for human approval to merge"},
 }
 
 // LabelClient lists and creates a repository's labels
