@@ -163,6 +163,9 @@ type Dispatcher struct {
 	// Kill terminates the agent process group (Stop, issue #185).
 	// Nil means killProcessGroup (SIGKILL the group, ESRCH counts as gone).
 	Kill func(pid int) error
+	// LookPath resolves the `lead` binary headless agents call for their
+	// merge step (`lead finish`, issue #230). Nil means exec.LookPath.
+	LookPath func(name string) (string, error)
 	// Notify receives blocked and all-done milestones (issue #189).
 	// Nil means silent.
 	Notify notify.Notifier
@@ -197,7 +200,19 @@ func (d *Dispatcher) Preflight(ctx context.Context) error {
 			fmt.Fprintln(d.Out, "  - "+m)
 		}
 	}
+	// Headless agents merge through `lead finish` (issue #230), so the
+	// binary must be reachable from the worktree.
+	if _, err := d.lookPath()("lead"); err != nil && d.Out != nil {
+		fmt.Fprintln(d.Out, "dispatch: WARNING: `lead` is not on PATH; headless agents merge through `lead finish` and will fail (install lead or add it to PATH)")
+	}
 	return nil
+}
+
+func (d *Dispatcher) lookPath() func(string) (string, error) {
+	if d.LookPath != nil {
+		return d.LookPath
+	}
+	return exec.LookPath
 }
 
 // Once runs a single dispatch pass: reconnect to agents left running by an
@@ -875,6 +890,12 @@ func (d *Dispatcher) print(rep Report) {
 // completion definition the agent must satisfy alone (AGENTS.md flow,
 // through merge and close). Project rules files are read by the agent CLI
 // itself and are not inlined.
+//
+// The merge step goes through `lead finish --merge` (issue #230): a direct
+// `gh pr merge` would skip the protected-file guardrail
+// (internal/finish, docs/rfc-inbox-ux.md §7). The agent must not close the
+// issue itself either — an open issue is how dispatch sees a guardrail stop
+// and retries/blocks instead of treating the run as completed.
 func BuildPrompt(iss ports.Issue) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Issue #%d: %s\n", iss.Number, iss.Title)
@@ -892,9 +913,8 @@ func BuildPrompt(iss ports.Issue) string {
 3. リポジトリのテストをすべてパスさせる（./test/run-tests.sh、なければ go test ./... 等プロジェクト固有のコマンド）。
 4. git push -u origin <現在のブランチ> し、gh pr create --fill --base main で PR を作る。PR 本文に Issue の受入条件をチェックリストとして転記し、Closes #%d を含める。
 5. bin/ci-wait <PR番号>（なければ gh pr checks）で CI が全て pass するまで待つ。
-6. gh pr merge --squash --delete-branch でマージする。
-7. gh issue view %d --json state で closed になったことを確認する。closed でなければ gh issue close %d する。
-8. 進められない場合は原因と試したことを gh issue comment %d --body に書いて終了する。
+6. lead finish %d --merge でマージと Issue クローズまで行う。gh pr merge を直接実行しない（規約ファイル保護のガードレールを必ず通すため）。finish が規約ファイル保護で停止したら、--override-guardrail を付けずにそのまま終了する。
+7. gh issue view %d --json state で closed になったことを確認する。closed でない場合は自分で close せず、原因と試したことを gh issue comment %d --body に書いて終了する。
 
 AGENTS.md、.claude/、.devin/ などプロジェクト規約ファイルは、この Issue で明示されていない限り編集しない。
 `, iss.Number, iss.Number, iss.Number, iss.Number)

@@ -263,7 +263,8 @@ lead finish <issue> [flags]
 
 | Flag | 意味 |
 | :--- | :--- |
-| `--merge` | CI成功後にマージする。設定に関係なくこの操作で明示する |
+| `--merge` | CI成功後にマージする。設定に関係なくこの操作で明示する（規約ファイル保護のガードレールは解除しない） |
+| `--override-guardrail` | 規約ファイル（`AGENTS.md`・`.github/` 等）を含むPRでもマージする。人間の明示確認専用で、ヘッドレスエージェントは付けない |
 | `--close` | Issueをクローズする |
 | `--no-close` | Issueをクローズしない |
 | `--comment <text\|file>` | 完了報告コメントを投稿する |

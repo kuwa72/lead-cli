@@ -174,6 +174,12 @@ type FakeGhClient struct {
 	FilesErr   error
 	FilesCalls []int
 
+	// PRByBranch feeds PrNumberForBranch: branch → open PR number
+	// (issue #230; missing entry means no open PR).
+	PRByBranch      map[string]int
+	PRByBranchErr   error
+	PRByBranchCalls []string
+
 	// DefaultBranch feeds RepoDefaultBranch ("" means "main").
 	DefaultBranch    string
 	DefaultBranchErr error
@@ -316,6 +322,16 @@ func (f *FakeGhClient) PrFiles(ctx context.Context, pr int) ([]string, error) {
 		return nil, f.FilesErr
 	}
 	return f.Files, nil
+}
+
+// PrNumberForBranch returns PRByBranch[branch] (0 = no open PR) or
+// PRByBranchErr and records the lookup.
+func (f *FakeGhClient) PrNumberForBranch(ctx context.Context, branch string) (int, error) {
+	f.PRByBranchCalls = append(f.PRByBranchCalls, branch)
+	if f.PRByBranchErr != nil {
+		return 0, f.PRByBranchErr
+	}
+	return f.PRByBranch[branch], nil
 }
 
 // RepoDefaultBranch returns DefaultBranch ("main" when empty) or DefaultBranchErr.

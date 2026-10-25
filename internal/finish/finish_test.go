@@ -378,7 +378,10 @@ func TestRun_GuardrailLowersAutoToConfirm(t *testing.T) {
 	}
 }
 
-func TestRun_GuardrailStillMergesWhenHumanPassesMerge(t *testing.T) {
+// issue #230: the headless completion definition merges through
+// `lead finish --merge`, so --merge alone must NOT count as the human
+// confirmation that lifts the guardrail. Only --override-guardrail does.
+func TestRun_GuardrailMergeFlagDoesNotOverride(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	seedWithPR(t, path, state.Workflow{})
 	fake := baseFake()
@@ -390,11 +393,59 @@ func TestRun_GuardrailStillMergesWhenHumanPassesMerge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.Merged || len(fake.MergeCalls) != 1 {
-		t.Errorf("Result = %+v merges=%v; explicit --merge is the human confirmation", res, fake.MergeCalls)
+	if res.Merged || len(fake.MergeCalls) != 0 || len(fake.Closed) != 0 {
+		t.Errorf("Result = %+v merges=%v closed=%v; --merge alone must not merge a guarded PR", res, fake.MergeCalls, fake.Closed)
+	}
+	if !strings.Contains(res.Message, "--override-guardrail") {
+		t.Errorf("message %q lacks the human override hint", res.Message)
 	}
 	if got := loadOne(t, path); !strings.Contains(got.PolicyReason, ".claude/settings.json") {
 		t.Errorf("policy_reason = %q, want the guardrail reason kept for audit", got.PolicyReason)
+	}
+}
+
+func TestRun_GuardrailOverrideMerges(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.Files = []string{".claude/settings.json"}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, OverrideGuardrail: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Merged || len(fake.MergeCalls) != 1 {
+		t.Errorf("Result = %+v merges=%v; explicit --override-guardrail is the human confirmation", res, fake.MergeCalls)
+	}
+	if got := loadOne(t, path); !strings.Contains(got.PolicyReason, ".claude/settings.json") {
+		t.Errorf("policy_reason = %q, want the guardrail reason kept for audit", got.PolicyReason)
+	}
+}
+
+// issue #230: dispatch's state record has no PR number, so the headless
+// `lead finish <issue> --merge` looks it up from the recorded branch.
+func TestRun_NoRecordedPRDiscoversByBranch(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedRecord(t, path, state.Workflow{Branch: "issue/36-x"})
+	fake := baseFake()
+	fake.PRByBranch = map[string]int{"issue/36-x": 7}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Merged {
+		t.Errorf("Result = %+v, want merge after discovering PR 7", res)
+	}
+	if !reflect.DeepEqual(fake.PRByBranchCalls, []string{"issue/36-x"}) {
+		t.Errorf("branch lookups = %v, want the recorded branch", fake.PRByBranchCalls)
+	}
+	if !reflect.DeepEqual(fake.MergeCalls, []int{7}) {
+		t.Errorf("merges = %v, want PR 7", fake.MergeCalls)
 	}
 }
 

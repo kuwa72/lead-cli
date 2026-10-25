@@ -391,6 +391,25 @@ func (c *Client) PrFiles(ctx context.Context, pr int) ([]string, error) {
 	return files, nil
 }
 
+// PrNumberForBranch runs `gh pr list --head <branch> --state open --json
+// number --jq '.[0].number'` (issue #230). No open PR returns 0.
+func (c *Client) PrNumberForBranch(ctx context.Context, branch string) (int, error) {
+	out, err := c.run(ctx, "pr", "list", "--head", branch, "--state", "open",
+		"--json", "number", "--jq", ".[0].number")
+	if err != nil {
+		return 0, err
+	}
+	s := strings.TrimSpace(string(out))
+	if s == "" || s == "null" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("gh pr list --head %s: unexpected number %q", branch, s)
+	}
+	return n, nil
+}
+
 // RepoDefaultBranch runs `gh api repos/<repo> --jq .default_branch`.
 func (c *Client) RepoDefaultBranch(ctx context.Context, repo string) (string, error) {
 	out, err := c.run(ctx, "api", "repos/"+repo, "--jq", ".default_branch")

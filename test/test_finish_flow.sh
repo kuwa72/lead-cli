@@ -125,15 +125,20 @@ cd "$repo_d"
 "$tmp/lead" run 36 >/dev/null || fail "scenario D: work failed"
 guard_out="$("$tmp/lead" finish 36 --pr 7 --timeout 60s --poll-interval 1s)" \
   || fail "scenario D: guardrail pause exited non-zero: $guard_out"
-case "$guard_out" in *AGENTS.md*".github/workflows/ci.yml"*confirm*"--merge"*) ;; *) fail "scenario D: message must name files and point to --merge: $guard_out";; esac
+case "$guard_out" in *AGENTS.md*".github/workflows/ci.yml"*confirm*"--override-guardrail"*) ;; *) fail "scenario D: message must name files and point to --override-guardrail: $guard_out";; esac
 grep -q "GHLOG pr view 7 --json files --jq .files\[\].path" "$GH_ARGS_LOG" || fail "scenario D: PR files not listed via gh: $(cat "$GH_ARGS_LOG")"
 grep -q "GHLOG pr merge" "$GH_ARGS_LOG" && fail "scenario D: merged despite protected files"
 python3 -c "import json;d=json.load(open('$LEAD_STATE_FILE'));w=d['workflows'][0];assert w['merge_policy']=='confirm',w;assert 'AGENTS.md' in w['policy_reason'],w;assert w['status']=='in_progress',w" \
   || fail "scenario D: state lacks confirm policy + reason"
-# The human confirms with --merge: now it merges and closes.
+# issue #230: the headless path merges with --merge, so --merge alone must
+# still not lift the guardrail.
 : > "$GH_ARGS_LOG"; rm -f "$GH_COUNT"
-"$tmp/lead" finish 36 --pr 7 --merge --close --timeout 60s --poll-interval 1s >/dev/null || fail "scenario D: explicit --merge failed"
-grep -q "GHLOG pr merge 7 --squash --delete-branch" "$GH_ARGS_LOG" || fail "scenario D: explicit --merge did not merge"
+"$tmp/lead" finish 36 --pr 7 --merge --close --timeout 60s --poll-interval 1s >/dev/null || fail "scenario D: --merge run failed"
+grep -q "GHLOG pr merge" "$GH_ARGS_LOG" && fail "scenario D: --merge alone merged a guarded PR"
+# The human confirms with --override-guardrail: now it merges and closes.
+: > "$GH_ARGS_LOG"; rm -f "$GH_COUNT"
+"$tmp/lead" finish 36 --pr 7 --merge --close --override-guardrail --timeout 60s --poll-interval 1s >/dev/null || fail "scenario D: explicit --override-guardrail failed"
+grep -q "GHLOG pr merge 7 --squash --delete-branch" "$GH_ARGS_LOG" || fail "scenario D: explicit --override-guardrail did not merge"
 unset GH_FILES
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"

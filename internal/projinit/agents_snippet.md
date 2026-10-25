@@ -8,8 +8,8 @@
 4. `git push -u origin $(git branch --show-current)` でブランチを push する。
 5. `gh pr create --fill` で PR を作成する。
 6. `bin/ci-wait <pr-number>`（または `gh pr checks`）で CI が pass するまで待つ。
-7. `gh pr merge --squash`（または `lead finish <issue-number> --merge`）でマージする。
-8. 関連 Issue が closed になったことを確認する。
+7. `lead finish <issue-number> --merge` で CI 待機・マージ・Issue クローズまで行う（`gh pr merge` を直接実行しない。規約ファイル保護のガードレールを通すため）。
+8. 関連 Issue が closed になったことを確認する。規約ファイル保護で停止した場合は `--override-guardrail` を付けず、人間に確認を求める。
 
 ルール：
 - `main` には直接 push しない。`issue/<number>-<slug>` ブランチで作業する。

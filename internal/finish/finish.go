@@ -19,17 +19,21 @@ const (
 
 // Options controls one finish run (flags of `lead finish`, RFC §6.3).
 type Options struct {
-	PR           int // attach/override PR number (0 = from state record)
-	Part         string
-	Merge        bool
-	Close        bool
-	NoClose      bool
-	Comment      string
-	Outcome      string
-	MergePolicy  string // CLI flag override (auto|confirm|never)
-	RepoPolicy   string // repository setting (reserved; empty = unset)
-	Timeout      time.Duration
-	PollInterval time.Duration
+	PR          int // attach/override PR number (0 = from state record)
+	Part        string
+	Merge       bool
+	Close       bool
+	NoClose     bool
+	Comment     string
+	Outcome     string
+	MergePolicy string // CLI flag override (auto|confirm|never)
+	RepoPolicy  string // repository setting (reserved; empty = unset)
+	// OverrideGuardrail is the human-only confirmation that lifts the
+	// protected-file guardrail (issue #230). Merge alone does not: the
+	// headless completion definition merges with --merge.
+	OverrideGuardrail bool
+	Timeout           time.Duration
+	PollInterval      time.Duration
 	// Sleep waits between polls; defaults to time.Sleep (tests inject no-op).
 	Sleep func(time.Duration)
 }
@@ -128,6 +132,15 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		prNumber = prRef.Number
 	}
 
+	// Discovery (issue #230): a headless `lead finish <issue> --merge`
+	// runs against a dispatch record that never learned the PR number.
+	// Look it up from the recorded branch before asking for --pr.
+	if prNumber == 0 && w.Branch != "" {
+		if n, err := gh.PrNumberForBranch(ctx, w.Branch); err == nil && n > 0 {
+			prNumber = n
+		}
+	}
+
 	// No-PR path (research/docs without PR): require an explicit outcome.
 	if prNumber == 0 {
 		if opts.Outcome == "" {
@@ -175,16 +188,19 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return Result{}, err
 	}
 
-	// Gate: never stops, confirm pauses without --merge, auto checks the
-	// repository auto-merge setting and falls back to a manual pointer.
+	// Gate: never stops, the protected-file guardrail stops unless a human
+	// passed --override-guardrail (--merge is not enough: the headless
+	// completion definition uses it, issue #230), confirm pauses without
+	// --merge, auto checks the repository auto-merge setting and falls back
+	// to a manual pointer.
 	repo := git.RepoSlug(w.Repository)
 	switch {
 	case policy == PolicyNever:
 		return Result{ChecksPassed: true,
 			Message: fmt.Sprintf("CI passed for PR #%d; merge policy is never, stopping.", prNumber)}, nil
-	case policy == PolicyConfirm && !opts.Merge && len(guarded) > 0:
+	case len(guarded) > 0 && !opts.OverrideGuardrail:
 		return Result{ChecksPassed: true, Guarded: guarded,
-			Message: fmt.Sprintf("CI passed for PR #%d, but it touches protected files (%s); merge policy lowered to confirm. Review the PR, then run `lead finish %d --merge`.",
+			Message: fmt.Sprintf("CI passed for PR #%d, but it touches protected files (%s); merge policy lowered to confirm. Review the PR, then run `lead finish %d --merge --override-guardrail` to merge.",
 				prNumber, strings.Join(guarded, ", "), issue)}, nil
 	case policy == PolicyConfirm && !opts.Merge:
 		return Result{ChecksPassed: true,

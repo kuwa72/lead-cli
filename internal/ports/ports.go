@@ -105,6 +105,10 @@ type GhClient interface {
 	// PrFiles mirrors `gh pr view <pr> --json files --jq '.files[].path'`
 	// (guardrail: docs/rfc-inbox-ux.md §7).
 	PrFiles(ctx context.Context, pr int) ([]string, error)
+	// PrNumberForBranch mirrors `gh pr list --head <branch> --state open
+	// --json number --jq '.[0].number'` and returns 0 when no open PR
+	// exists (finish discovery for dispatch records, issue #230).
+	PrNumberForBranch(ctx context.Context, branch string) (int, error)
 	// RepoDefaultBranch mirrors `gh api repos/<repo> --jq .default_branch`.
 	RepoDefaultBranch(ctx context.Context, repo string) (string, error)
 	// BranchProtection mirrors `gh api repos/<repo>/branches/<branch>/protection`
