@@ -199,7 +199,7 @@ AGENTS.md テスト品質ルールに従う。
 | 項目 | 決定 |
 |---|---|
 | ディスパッチャの起動形態 | **受信箱を開いている間だけ動く前景ループ**。人間は受信箱を開きっぱなしにする運用。常駐 `daemon` は作らない（design.md §7.2 と整合）。§6 の `lead daemon` は削除し、`lead --parallel N` の受信箱オプションにする |
-| 仕様 AI と実装 AI のエージェント | **分けられるようにする**（#231 で実装）。`inbox-config.json` の `agents.spec` / `agents.impl`。未設定の役割は共有 `agent` にフォールバックする。`say` は `--agent` → `$LEAD_SPEC_AGENT` → `agents.spec` → `agent`、dispatch/run/resume は `--agent` → `agents.impl` → `agent` の順で解決する |
+| 仕様 AI と実装 AI のエージェント | **分けられるようにする**（#231 / #246 で実装）。`inbox-config.json` の `agents.spec` / `agents.impl` / `agents.review`。未設定の役割は共有 `agent` にフォールバックする。`say` は `--agent` → `$LEAD_SPEC_AGENT` → `agents.spec` → `agent`、dispatch/run/resume は `--agent` → `agents.impl` → `agent`、`lead review` は `--agent` → `agents.review` → `agents.impl` → `agent` の順で解決する |
 | ラベル名 | `needs-review` / `ready` / `blocked` で**固定**。設定化は必要になってから |
 
 ### 13.1 Issue の区画分け（フォルダ表示）の手段
@@ -252,5 +252,6 @@ Milestone・Issue Type・Projects v2 は採用しない。Projects v2 は GitHub
 |---|---|---|
 | `lead peek <issue>`（§6） | **実装する**。受信箱 `p` と同じく、記録済みエージェントログを `$PAGER` で開く。`--part` で複数 PR の作業単位を指定できる | `internal/cli`（`runPeek`） |
 | `agents.spec` / `agents.impl`（§13） | **実装する**。`inbox-config.json` の `agents` オブジェクトで役割別に指定する。未設定は共有 `agent`、両方未設定は `agy`。設定画面の Agent は共有既定を編集する | `internal/inbox`（`Config.SpecAgent` / `ImplAgent`）、`internal/cli` |
+| `agents.review` / `lead review`（§13） | **実装する**（#246）。`lead review <pr>` が実装とは別プロセスのヘッドレスエージェントで PR を審査し、`review:pass` / `review:needs-work` を付ける。`agents.review` は `agents.impl` → `agent` にフォールバックする | `internal/review`、`internal/cli`（`runReview`）、`internal/finish` |
 | `/lead-flow` スキル（§10） | **RFC を更新**（方針転換）。#224 で廃止を取り消し、`lead enable` が `.agents/skills` と検出した各エージェントの skills dir に配布する。人間が `/lead-flow <issue>` で起動して `lead run` を呼ぶ入口であり、エージェント起動時の循環はない | §10・§11 |
 | 起動プロンプトへの AGENTS.md 注入（§7） | **RFC を更新**（実装に合わせる）。プロンプトは Issue と完了定義のみ。AGENTS.md は worktree 内のものをエージェント CLI が読む。規約を二重管理せず、プロンプトを肥大させない | §7 |

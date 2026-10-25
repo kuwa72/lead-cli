@@ -234,6 +234,27 @@ func (c *Client) PrDiff(ctx context.Context, pr int) (string, error) {
 	return string(out), nil
 }
 
+// PrLabels runs `gh pr view <pr> --json labels --jq .labels[].name`.
+func (c *Client) PrLabels(ctx context.Context, pr int) ([]string, error) {
+	out, err := c.run(ctx, "pr", "view", strconv.Itoa(pr), "--json", "labels", "--jq", ".labels[].name")
+	if err != nil {
+		return nil, err
+	}
+	var labels []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			labels = append(labels, line)
+		}
+	}
+	return labels, nil
+}
+
+// PrComment runs `gh pr comment <pr> --body-file -` feeding body on stdin.
+func (c *Client) PrComment(ctx context.Context, pr int, body string) error {
+	_, err := c.runStdin(ctx, strings.NewReader(body), "pr", "comment", strconv.Itoa(pr), "--body-file", "-")
+	return err
+}
+
 // PrMerge runs `gh pr merge <pr> --squash --delete-branch` (squash default).
 func (c *Client) PrMerge(ctx context.Context, pr int) error {
 	_, err := c.run(ctx, "pr", "merge", strconv.Itoa(pr), "--squash", "--delete-branch")

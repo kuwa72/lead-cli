@@ -41,6 +41,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/projinit"
 	"github.com/kuwa72/lead-cli/internal/prompter"
+	"github.com/kuwa72/lead-cli/internal/review"
 	"github.com/kuwa72/lead-cli/internal/server"
 	"github.com/kuwa72/lead-cli/internal/setup"
 	"github.com/kuwa72/lead-cli/internal/spec"
@@ -587,8 +588,12 @@ A risk:b issue is labelled ` + "`awaiting-human`" + `, recorded as awaiting_revi
 and left open; this is not a failure. A human merges it with --approve:
   lead finish <n> --merge --approve
 
-Pauses — confirm policy, never policy, auto-merge-disabled repos, and
-awaiting human approval — exit 0 with the next step, not an error.`,
+An automatic (risk:a) merge also requires the independent reviewer's
+` + "`review:pass`" + ` label (issue #246). Without it finish pauses and points at
+` + "`lead review <pr>`" + `. --no-review is the human-only override.
+
+Pauses — confirm policy, never policy, auto-merge-disabled repos, missing
+review, and awaiting human approval — exit 0 with the next step, not an error.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFinish(cmd, deps, args[0])
@@ -598,6 +603,7 @@ awaiting human approval — exit 0 with the next step, not an error.`,
 	finishCmd.Flags().String("part", "", "work unit within a multi-PR issue")
 	finishCmd.Flags().Bool("merge", false, "merge after CI passes (overrides confirm pause)")
 	finishCmd.Flags().Bool("approve", false, "human-only: approve merging a risk:b issue (default risk class)")
+	finishCmd.Flags().Bool("no-review", false, "human-only: merge a risk:a PR without the independent review's review:pass")
 	finishCmd.Flags().Bool("override-guardrail", false, "merge even though the PR touches protected convention files (human confirmation; never pass this from an unattended agent)")
 	finishCmd.Flags().Bool("close", false, "close the issue")
 	finishCmd.Flags().Bool("no-close", false, "never close the issue")
@@ -606,6 +612,31 @@ awaiting human approval — exit 0 with the next step, not an error.`,
 	finishCmd.Flags().String("merge-policy", "", "policy override (auto|confirm|never)")
 	finishCmd.Flags().Duration("timeout", 0, "CI wait cap (default 30m)")
 	finishCmd.Flags().Duration("poll-interval", 0, "CI poll interval (default 10s)")
+
+	reviewCmd := &cobra.Command{
+		Use:   "review <pr-number>",
+		Short: "Run an independent headless review of a PR",
+		Long: `Run a separate headless agent over the PR diff, the linked issue's
+acceptance criteria, and the CI results (issue #246). The reviewer's full
+output is posted to the PR and its final line must be one of:
+
+  VERDICT: pass
+  VERDICT: needs-work
+
+The PR gets review:pass or review:needs-work. Exit status is 0 for pass and
+1 for needs-work (or a missing/unrecognized verdict, which never passes).
+` + "`lead finish`" + ` requires review:pass for an automatic (risk:a) merge.
+
+The issue number is read from a closing keyword in the PR body (Closes #n)
+or from an issue/<n>-<slug> branch; --issue overrides it. The reviewer is
+read-only. Agent: --agent, else agents.review, else agents.impl, else agent.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runReview(cmd, deps, args[0])
+		},
+	}
+	reviewCmd.Flags().Int("issue", 0, "issue number the PR implements (default: derive from the PR)")
+	reviewCmd.Flags().String("agent", "", "headless reviewer (default: agents.review, agents.impl, then agent)")
 
 	serverCmd := &cobra.Command{
 		Use:   "server",
@@ -673,7 +704,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, cleanCmd, peekCmd, stopCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, cleanCmd, peekCmd, stopCmd, finishCmd, reviewCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	return root
 }
@@ -1691,6 +1722,7 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 	part, _ := flags.GetString("part")
 	merge, _ := flags.GetBool("merge")
 	approve, _ := flags.GetBool("approve")
+	noReview, _ := flags.GetBool("no-review")
 	overrideGuardrail, _ := flags.GetBool("override-guardrail")
 	closeIssue, _ := flags.GetBool("close")
 	noClose, _ := flags.GetBool("no-close")
@@ -1708,6 +1740,7 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 		PR: pr, Part: part, Merge: merge, Close: closeIssue, NoClose: noClose,
 		Comment: comment, Outcome: outcome, MergePolicy: policy,
 		Approve:           approve,
+		NoReview:          noReview,
 		OverrideGuardrail: overrideGuardrail,
 		Git:               deps.gitRunner(), WorkDir: workDir,
 		Timeout: timeout, PollInterval: interval,
@@ -1716,6 +1749,62 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 		fmt.Fprintln(cmd.OutOrStdout(), res.Message)
 	}
 	return err
+}
+
+// runReview implements `lead review <pr>` (issue #246): resolve the reviewer
+// agent from the shared config, run the read-only review, publish the
+// verdict, and exit 1 for needs-work (or an unusable verdict).
+func runReview(cmd *cobra.Command, deps Deps, raw string) error {
+	pr, err := strconv.Atoi(raw)
+	if err != nil || pr <= 0 {
+		return fmt.Errorf("invalid PR number %q", raw)
+	}
+	issueNumber, _ := cmd.Flags().GetInt("issue")
+	agentName, _ := cmd.Flags().GetString("agent")
+
+	cfg, err := deps.headlessConfig()
+	if err != nil {
+		return err
+	}
+	if agentName == "" {
+		agentName = cfg.ReviewAgent()
+	}
+	stallTimeout, err := cfg.StallTimeoutOr(dispatch.DefaultStuckAfter)
+	if err != nil {
+		return err
+	}
+	maxRuntime, err := cfg.MaxRuntimeOr(dispatch.DefaultMaxRuntime)
+	if err != nil {
+		return err
+	}
+	workDir, err := deps.workDir()
+	if err != nil {
+		return err
+	}
+
+	r := &review.Runner{
+		Gh:    deps.gh(),
+		Agent: deps.specAgent(stallTimeout, maxRuntime),
+		Opts: review.Options{
+			PR:         pr,
+			Issue:      issueNumber,
+			Agent:      agentName,
+			LogDir:     filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
+			WorkDir:    workDir,
+			Repository: deps.gitRunner().OriginURL(workDir),
+		},
+	}
+	res, err := r.Review(cmd.Context())
+	if res.Message != "" {
+		fmt.Fprintln(cmd.OutOrStdout(), res.Message)
+	}
+	if err != nil {
+		return err
+	}
+	if !res.Passed {
+		return fmt.Errorf("%w (PR #%d; see the PR comment)", review.ErrNeedsWork, pr)
+	}
+	return nil
 }
 
 // runClean implements `lead clean <number>`: safely remove the recorded

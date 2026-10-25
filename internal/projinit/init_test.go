@@ -649,7 +649,7 @@ func TestRunCheckFailsWhenLabelsMissing(t *testing.T) {
 func TestRunCheckPassesWhenLabelsPresent(t *testing.T) {
 	root := t.TempDir()
 	installLocal(t, root)
-	gh := &stubLabelClient{labels: []string{"needs-review", "ready", "blocked", "awaiting-human", "extra"}}
+	gh := &stubLabelClient{labels: []string{"needs-review", "ready", "blocked", "awaiting-human", "review:pass", "review:needs-work", "extra"}}
 	rep, err := Run(Options{Root: root, Check: true, SkillContent: testSkill, AgentsBlock: testAgents, LookPath: missingLookPath, Gh: gh, Repo: "o/r"})
 	if err != nil {
 		t.Fatalf("check: %v", err)
@@ -784,12 +784,12 @@ func TestRunApplyCreatesMissingLabels(t *testing.T) {
 	if !rep.Changed {
 		t.Error("Changed = false, want true after writes")
 	}
-	wantCreated := []string{"needs-review", "blocked", "awaiting-human"}
+	wantCreated := []string{"needs-review", "blocked", "awaiting-human", "review:pass", "review:needs-work"}
 	if !reflect.DeepEqual(gh.created, wantCreated) {
 		t.Errorf("created = %v, want %v (present labels must not be recreated)", gh.created, wantCreated)
 	}
 	got := joinLines(rep)
-	for _, want := range []string{"label/needs-review: created", "label/ready: ok", "label/blocked: created", "label/awaiting-human: created"} {
+	for _, want := range []string{"label/needs-review: created", "label/ready: ok", "label/blocked: created", "label/awaiting-human: created", "label/review:pass: created", "label/review:needs-work: created"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("write missing %q:\n%s", want, got)
 		}
@@ -798,7 +798,7 @@ func TestRunApplyCreatesMissingLabels(t *testing.T) {
 
 func TestRunApplySkipsCreationWhenLabelsExist(t *testing.T) {
 	root := t.TempDir()
-	gh := &stubLabelClient{labels: []string{"needs-review", "ready", "blocked", "awaiting-human"}}
+	gh := &stubLabelClient{labels: []string{"needs-review", "ready", "blocked", "awaiting-human", "review:pass", "review:needs-work"}}
 	rep, err := Run(Options{Root: root, Yes: true, SkillContent: testSkill, AgentsBlock: testAgents, Gh: gh, Repo: "o/r"})
 	if err != nil {
 		t.Fatalf("write: %v", err)

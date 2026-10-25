@@ -564,6 +564,26 @@ func TestBuildPrompt_Golden(t *testing.T) {
 	testutil.AssertGoldenString(t, "testdata/prompt.golden", got)
 }
 
+// issue #246: the completion definition routes through the independent
+// review and never teaches the agent the human-only skip flag.
+func TestBuildPrompt_IncludesReviewStep(t *testing.T) {
+	got := BuildPrompt(ports.Issue{Number: 42, Title: "feat: thing", Body: "b"})
+	for _, want := range []string{
+		"lead review <PR番号>",
+		"VERDICT: pass",
+		"VERDICT: needs-work",
+		"最大2周",
+		"gh issue comment 42 --body",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "--no-review") {
+		t.Errorf("prompt must not mention the human-only --no-review flag:\n%s", got)
+	}
+}
+
 func TestExecLauncher_RunsInDirAndLogs(t *testing.T) {
 	argLog := testutil.InstallDummy(t, "claude", `pwd; echo "err-line" >&2`)
 	dir := t.TempDir()

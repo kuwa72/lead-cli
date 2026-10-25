@@ -120,6 +120,15 @@ type FakeGhClient struct {
 	PrDiffErr   error
 	PrDiffCalls []int
 
+	// PRLabels feeds PrLabels (independent review gate, issue #246);
+	// PRLabelsErr fails every call.
+	PRLabels     []string
+	PRLabelsErr  error
+	PRLabelCalls []int
+	// PRComments records PrComment calls; PRCommentErr fails every call.
+	PRComments   []IssueComment
+	PRCommentErr error
+
 	MergeErr error
 
 	// AutoMergeAllowed gates policy auto (repo setting).
@@ -452,6 +461,21 @@ func (f *FakeGhClient) PrDiff(ctx context.Context, pr int) (string, error) {
 		return diff, nil
 	}
 	return "", fmt.Errorf("fake gh: PR #%d diff not found", pr)
+}
+
+// PrLabels returns PRLabels (or PRLabelsErr) and records the call.
+func (f *FakeGhClient) PrLabels(ctx context.Context, pr int) ([]string, error) {
+	f.PRLabelCalls = append(f.PRLabelCalls, pr)
+	if f.PRLabelsErr != nil {
+		return nil, f.PRLabelsErr
+	}
+	return f.PRLabels, nil
+}
+
+// PrComment records the call (or returns PRCommentErr).
+func (f *FakeGhClient) PrComment(ctx context.Context, pr int, body string) error {
+	f.PRComments = append(f.PRComments, IssueComment{Number: pr, Body: body})
+	return f.PRCommentErr
 }
 
 // PrMerge records the call (or returns MergeErr).

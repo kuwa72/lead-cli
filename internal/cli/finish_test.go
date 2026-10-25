@@ -32,6 +32,7 @@ func seedFinishRecord(t *testing.T, stateFile string, mutate func(*state.Workflo
 		PR:               ports.PRInfo{Number: 7, State: "OPEN", Mergeable: "MERGEABLE"},
 		AutoMergeAllowed: true,
 		Issues:           map[int]ports.Issue{36: {Number: 36, Title: "x", Labels: []string{"risk:a"}}},
+		PRLabels:         []string{state.ReviewPassLabel},
 	}
 }
 

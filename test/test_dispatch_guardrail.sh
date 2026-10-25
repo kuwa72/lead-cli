@@ -67,6 +67,7 @@ case "$1 $2" in
   "pr list") printf '9\n' ;;
   "pr view")
     case "$*" in
+      *"--json labels"*) printf 'review:pass\n' ;;
       *"--json files"*) printf '%s\n' $FILES ;;
       *) printf '{"number":9,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}' ;;
     esac ;;

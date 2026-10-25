@@ -72,9 +72,18 @@ git push -u origin issue/<番号>-<slug>
 gh pr create --base main --fill
 ```
 
-### Step 4: `lead finish` による完了処理
+### Step 4: 独立レビューと `lead finish` による完了処理
 
-`lead finish` コマンドで CI のチェックを待機し、マージと Issue のクローズを自動実行します。
+CI が通ったら、まず独立レビューを実行します。実装セッションとは別の
+ヘッドレスエージェントが PR の diff・受入条件・CI 結果を審査し、PR に
+`review:pass` または `review:needs-work` を付けます。
+
+```sh
+lead review <PR番号>
+```
+
+`VERDICT: needs-work` なら所見に従って修正し、再レビューします（最大2周）。
+その後に `lead finish` で CI を待機し、マージと Issue のクローズを行います。
 
 ```sh
 lead finish <Issue番号> --pr <PR番号> --merge --close
@@ -82,6 +91,7 @@ lead finish <Issue番号> --pr <PR番号> --merge --close
 
 - **CI 監視**: `bin/ci-wait` と同様に GitHub Actions の完了を待機します。
 - **ポリシー判定**: ガードレール（重要規約ファイルの変更等）が検知された場合は安全のため一時停止します。
+- **リスク分級**: `risk:a` は `review:pass` がある場合のみ自動マージします。`risk:b` とラベルなしは `awaiting-human` になり、人間が `lead finish <Issue番号> --merge --approve` で承認します。`--no-review` / `--approve` / `--override-guardrail` は人間専用で、エージェントには使わせません。
 - **マージ & クローズ**: CI パス後に squash merge を行い、Issue を自動でクローズしてワークフロー状態を完了（completed）に更新します。
 
 ### Step 5: クリーンアップ

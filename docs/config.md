@@ -9,6 +9,7 @@
 ```json
 {
   "agent": "claude",
+  "agents": {"spec": "codex", "impl": "devin", "review": "gemini"},
   "agent_mode": "batch",
   "issue_creation": "direct",
   "notify_disabled": false,
@@ -22,6 +23,9 @@
 | キー | 型 | 既定値 | 説明 |
 |---|---|---|---|
 | `agent` | string | `agy` | 使用するコーディングエージェント。`agy` / `claude` / `codex` / `devin` / `opencode` / `gemini`。空文字は `agy` と同じ |
+| `agents.spec` | string | `agent` | 仕様 AI（`lead say`）のエージェント。未設定は `agent` |
+| `agents.impl` | string | `agent` | 実装 AI（dispatch）のエージェント。未設定は `agent` |
+| `agents.review` | string | `agents.impl` → `agent` | 独立レビュー（`lead review`）のエージェント。未設定は `agents.impl`、それも未設定なら `agent`（issue #246） |
 | `agent_mode` | string | `batch` | inbox / `lead dispatch` のエージェント実行モード。`interactive` / `batch` / `dangerous`。`lead run` は `--agent-mode`（既定 `interactive`）を使う |
 | `issue_creation` | string | `direct` | `s` キーの起票方法。`direct`（そのまま起票）/ `ai`（仕様エージェント経由） |
 | `notify_disabled` | bool | `false` | `true` でデスクトップ通知を止める |
@@ -35,8 +39,9 @@
 
 ## エージェント選択の優先順位
 
-- `lead say`: `--agent` → `$LEAD_SPEC_AGENT` → `agent` → `agy`
-- `lead run` / `lead dispatch` / 番号なし `run` のピッカー: `--agent` → `agent` → `agy`
+- `lead say`: `--agent` → `$LEAD_SPEC_AGENT` → `agents.spec` → `agent` → `agy`
+- `lead review`: `--agent` → `agents.review` → `agents.impl` → `agent` → `agy`
+- `lead run` / `lead dispatch` / 番号なし `run` のピッカー: `--agent` → `agents.impl` → `agent` → `agy`
 - `lead resume`: `--agent` → 状態ファイルに記録された前回のエージェント → `agent` → `agy`
 
 ## 環境変数
@@ -57,9 +62,20 @@
 
 | Issue のラベル | `lead finish <n> --merge` の挙動 |
 |---|---|
-| `risk:a` | CI 成功後にマージする（規約ファイル保護のガードレールは別途適用） |
+| `risk:a` | CI 成功かつ PR に `review:pass` があればマージする（規約ファイル保護のガードレールは別途適用） |
 | `risk:b` | マージせず、人間の承認待ちにする |
 | ラベルなし | `risk:b` と同じ（**既定は人間承認**） |
+
+`risk:a` の自動マージは独立レビューを必須にする（issue #246）。
+`lead review <pr>` が PR の diff・Issue の受入条件・CI 結果を別プロセスの
+ヘッドレスエージェントに審査させ、最終行の `VERDICT: pass` /
+`VERDICT: needs-work` に応じて `review:pass` / `review:needs-work` を付ける。
+`review:pass` が無い場合はマージせず exit 0 で `lead review` を案内する。
+PR のラベルを取得できない場合は fail closed で exit 1（マージしない）。
+`--no-review` は人間専用の回避フラグで、ヘッドレス dispatch の完了定義には
+含めない。
+`review:pass` / `review:needs-work` は `lead enable` が作成する必須ラベルの
+一部（`lead enable --yes` で既存リポジトリにも追加できる）。
 
 承認待ちは失敗ではない。CI 成功後に `awaiting-human` ラベルが付き、
 workflow status が `awaiting_review` になり、exit 0 で終了する。

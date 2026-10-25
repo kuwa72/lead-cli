@@ -14,12 +14,13 @@ const (
 	IssueCreationAI     = "ai"
 )
 
-// AgentRoles splits the spec AI from the implementation AI
-// (docs/rfc-inbox-ux.md §13, issue #231). Empty fields fall back to the
-// shared Agent setting, so `agents` stays optional.
+// AgentRoles splits the spec AI, the implementation AI, and the independent
+// reviewer (docs/rfc-inbox-ux.md §13, issues #231, #246). Empty fields fall
+// back to the shared Agent setting, so `agents` stays optional.
 type AgentRoles struct {
-	Spec string `json:"spec,omitempty"`
-	Impl string `json:"impl,omitempty"`
+	Spec   string `json:"spec,omitempty"`
+	Impl   string `json:"impl,omitempty"`
+	Review string `json:"review,omitempty"`
 }
 
 // Config represents the persisted user configuration (inbox-config.json).
@@ -51,6 +52,15 @@ func (c Config) ImplAgent() string {
 		return c.Agents.Impl
 	}
 	return c.Agent
+}
+
+// ReviewAgent returns the independent reviewer's agent: agents.review, else
+// agents.impl, else the shared agent (issue #246).
+func (c Config) ReviewAgent() string {
+	if c.Agents != nil && c.Agents.Review != "" {
+		return c.Agents.Review
+	}
+	return c.ImplAgent()
 }
 
 // IssueCreation returns the current issue creation default ("direct" or "ai").

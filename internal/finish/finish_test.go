@@ -52,8 +52,10 @@ func baseFake() *testutil.FakeGhClient {
 		PR:               ports.PRInfo{Number: 7, State: "OPEN", Mergeable: "MERGEABLE"},
 		AutoMergeAllowed: true,
 		// risk:a keeps the pre-#245 merge fixtures merging; the risk-gate
-		// tests below opt into other label sets explicitly.
-		Issues: map[int]ports.Issue{36: {Number: 36, Title: "x", Labels: []string{"risk:a"}}},
+		// tests below opt into other label sets explicitly. issue #246:
+		// automatic merge also needs the independent review's pass label.
+		Issues:   map[int]ports.Issue{36: {Number: 36, Title: "x", Labels: []string{"risk:a"}}},
+		PRLabels: []string{state.ReviewPassLabel},
 	}
 }
 
@@ -572,6 +574,69 @@ func TestRun_RiskAMerges(t *testing.T) {
 	}
 	if !reflect.DeepEqual(fake.MergeCalls, []int{7}) || !reflect.DeepEqual(fake.Closed, []int{36}) {
 		t.Errorf("merges = %v closed = %v; want PR 7 merged and issue 36 closed", fake.MergeCalls, fake.Closed)
+	}
+}
+
+// issue #246: automatic merge (risk:a) also requires the independent
+// review's pass label. Without it finish pauses (not an error) and merges
+// nothing.
+func TestRun_RiskANeedsReviewPass(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := riskFake("risk:a")
+	fake.PRLabels = nil
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil {
+		t.Fatalf("review pause = %v, want a clean pause", err)
+	}
+	if res.Merged || len(fake.MergeCalls) != 0 {
+		t.Fatalf("Result = %+v merges = %v; want no merge without review:pass", res, fake.MergeCalls)
+	}
+	for _, want := range []string{state.ReviewPassLabel, "lead review"} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("pause message missing %q: %s", want, res.Message)
+		}
+	}
+}
+
+// --no-review is the human-only override that keeps a risk:a merge moving
+// without the independent review.
+func TestRun_RiskANoReviewFlagMerges(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := riskFake("risk:a")
+	fake.PRLabels = nil
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, NoReview: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || !res.Merged {
+		t.Fatalf("Result = %+v, %v; want --no-review to merge", res, err)
+	}
+	if !reflect.DeepEqual(fake.MergeCalls, []int{7}) {
+		t.Errorf("merges = %v, want PR 7", fake.MergeCalls)
+	}
+}
+
+// A failed PR-label lookup cannot prove a review pass, so finish must stop
+// (fail closed).
+func TestRun_ReviewLabelLookupFailureStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := riskFake("risk:a")
+	fake.PRLabelsErr = errors.New("labels boom")
+
+	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err == nil || !strings.Contains(err.Error(), "labels boom") {
+		t.Fatalf("err = %v, want the label lookup failure surfaced", err)
+	}
+	if len(fake.MergeCalls) != 0 {
+		t.Errorf("merged despite an unknown review verdict")
 	}
 }
 
