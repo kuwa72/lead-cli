@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
@@ -412,6 +414,120 @@ func TestDetail_NeedsReview_ShowsDiff(t *testing.T) {
 	m = press(t, m, "j")
 	if m.detailOffset != 1 {
 		t.Errorf("expected detailOffset == 1, got %d", m.detailOffset)
+	}
+}
+
+// splitPreviewPane returns the right-hand preview cells of the split view
+// with trailing padding removed.
+func splitPreviewPane(m Model) []string {
+	var out []string
+	for _, line := range strings.Split(m.View(), "\n") {
+		parts := strings.SplitN(line, "│", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		out = append(out, strings.TrimRight(strings.TrimPrefix(parts[1], " "), " "))
+	}
+	return out
+}
+
+// collectUntilBlank joins the preview lines from the one containing marker
+// until the first blank line or the "Enter: Full details" hint.
+func collectUntilBlank(lines []string, marker string) []string {
+	var out []string
+	started := false
+	for _, l := range lines {
+		if !started {
+			if strings.Contains(l, marker) {
+				started = true
+			} else {
+				continue
+			}
+		}
+		if l == "" || strings.HasPrefix(l, "Enter:") {
+			break
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+func TestPreview_WrapsLongBodyLines(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	body := "BODYSTART " + strings.Repeat("日本語の長い本文です。", 12) + "BODYEND"
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: body, State: "OPEN"}
+	m = press(t, m, "j") // load #8 preview
+
+	_, rightW := splitPaneWidths(m.width)
+	contentW := rightW - 1
+	lines := splitPreviewPane(m)
+	for _, l := range lines {
+		if w := lipgloss.Width(l); w > contentW {
+			t.Errorf("preview line exceeds content width %d: %q (%d cells)", contentW, l, w)
+		}
+	}
+
+	segments := collectUntilBlank(lines, "BODYSTART")
+	if len(segments) < 2 {
+		t.Fatalf("long body line should wrap into multiple preview lines, got %d: %q", len(segments), segments)
+	}
+	joined := strings.Join(segments, "")
+	if joined != body {
+		t.Errorf("wrapped preview lines must join back to the body line\n got: %q\nwant: %q", joined, body)
+	}
+	if strings.Contains(joined, "…") {
+		t.Errorf("wrapped body line must not be ellipsized: %q", joined)
+	}
+}
+
+func TestDetail_WrapsLongBodyLines(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 60 // tall enough to inspect every wrapped line at once
+	body := "BODYSTART " + strings.Repeat("日本語の長い本文です。", 100) + "本文の終端"
+	gh.Issues[7] = ports.Issue{Number: 7, Title: "spec: add warning", Body: body, State: "OPEN"}
+	m = press(t, m, "enter")
+	if m.mode != modeDetail {
+		t.Fatalf("expected modeDetail, got %v", m.mode)
+	}
+
+	v := m.View()
+	for _, l := range strings.Split(v, "\n") {
+		if w := lipgloss.Width(l); w > m.width {
+			t.Errorf("detail line exceeds terminal width %d: %q (%d cells)", m.width, l, w)
+		}
+	}
+
+	segments := collectUntilBlank(strings.Split(v, "\n"), "BODYSTART")
+	if len(segments) < 2 {
+		t.Fatalf("long body line should wrap into multiple detail lines, got %d", len(segments))
+	}
+	if joined := strings.Join(segments, ""); joined != body {
+		t.Errorf("wrapped detail lines must join back to the body line\n got: %q\nwant: %q", joined, body)
+	}
+
+	// The tail must be reachable by scrolling a short terminal.
+	tail := "本文の終端"
+	m.height = 24
+	m.detailOffset = 0
+	if strings.Contains(m.View(), tail) {
+		t.Fatalf("tail should be off screen before scrolling")
+	}
+	found := false
+	for i := 0; i < 20; i++ {
+		if strings.Contains(m.View(), tail) {
+			found = true
+			break
+		}
+		m = press(t, m, "j")
+	}
+	if !found {
+		t.Errorf("j scrolling should reach the end of the wrapped body, offset=%d", m.detailOffset)
+	}
+	if m.detailOffset == 0 {
+		t.Errorf("expected detailOffset > 0 after scrolling to the body tail")
 	}
 }
 
