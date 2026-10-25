@@ -16,8 +16,8 @@ import (
 
 // issue #214: inbox-config.json の agent を say/dispatch/run(work)/resume の
 // 既定エージェントとして使う。優先順位は --agent > ($LEAD_SPEC_AGENT は say のみ)
-// > inbox-config.json の agent > agy。resume だけは --agent の次に state 記録の
-// 前回エージェントが来る。
+// > 役割別の agents.spec / agents.impl (issue #231) > inbox-config.json の
+// 共有 agent > agy。resume だけは --agent の次に state 記録の前回エージェントが来る。
 
 // writeInboxConfig writes inbox-config.json beside the state file.
 func writeInboxConfig(t *testing.T, stateFile, content string) {
@@ -42,6 +42,62 @@ func TestSay_InboxConfigAgentIsDefault(t *testing.T) {
 	}
 	if len(ag.Argv) != 1 || ag.Argv[0][0] != "claude" {
 		t.Fatalf("argv = %q, want headless claude (inbox-config agent)", ag.Argv)
+	}
+}
+
+func TestSay_AgentsSpecOverridesSharedAgent(t *testing.T) {
+	fake := &testutil.FakeGhClient{}
+	ag := &recordingSpecAgent{Output: `[{"title":"t","body":"b"}]`}
+	stateFile := filepath.Join(t.TempDir(), "state", "workflows.json")
+	writeInboxConfig(t, stateFile, `{"agent":"claude","agents":{"spec":"codex"}}`)
+	deps := Deps{Gh: fake, SpecAgent: ag, StateFile: stateFile, WorkDir: t.TempDir()}
+
+	if _, err := executeSay(t, deps, "x", "--dry-run"); err != nil {
+		t.Fatal(err)
+	}
+	if len(ag.Argv) != 1 || ag.Argv[0][0] != "codex" {
+		t.Fatalf("argv = %q, want headless codex (agents.spec)", ag.Argv)
+	}
+}
+
+func TestSay_AgentFlagBeatsAgentsSpec(t *testing.T) {
+	fake := &testutil.FakeGhClient{}
+	ag := &recordingSpecAgent{Output: `[{"title":"t","body":"b"}]`}
+	stateFile := filepath.Join(t.TempDir(), "state", "workflows.json")
+	writeInboxConfig(t, stateFile, `{"agent":"claude","agents":{"spec":"codex"}}`)
+	deps := Deps{Gh: fake, SpecAgent: ag, StateFile: stateFile, WorkDir: t.TempDir()}
+
+	if _, err := executeSay(t, deps, "x", "--dry-run", "--agent", "devin"); err != nil {
+		t.Fatal(err)
+	}
+	if len(ag.Argv) != 1 || ag.Argv[0][0] != "devin" {
+		t.Fatalf("argv = %q, want --agent devin over agents.spec", ag.Argv)
+	}
+}
+
+func TestDispatch_AgentsImplOverridesSharedAgent(t *testing.T) {
+	deps, l := dispatchDeps(t)
+	writeInboxConfig(t, deps.StateFile, `{"agent":"claude","agents":{"impl":"codex"}}`)
+
+	out, err := executeWith(t, deps, "dispatch", "--once")
+	if err != nil {
+		t.Fatalf("dispatch --once: %v\n%s", err, out)
+	}
+	if len(l.argv) != 1 || l.argv[0][0] != "codex" {
+		t.Fatalf("launcher argv = %q, want headless codex (agents.impl)", l.argv)
+	}
+}
+
+func TestDispatch_AgentsSpecDoesNotSelectImpl(t *testing.T) {
+	deps, l := dispatchDeps(t)
+	writeInboxConfig(t, deps.StateFile, `{"agent":"claude","agents":{"spec":"codex"}}`)
+
+	out, err := executeWith(t, deps, "dispatch", "--once")
+	if err != nil {
+		t.Fatalf("dispatch --once: %v\n%s", err, out)
+	}
+	if len(l.argv) != 1 || l.argv[0][0] != "claude" {
+		t.Fatalf("launcher argv = %q, want shared claude (agents.spec is spec-only)", l.argv)
 	}
 }
 

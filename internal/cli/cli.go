@@ -158,6 +158,18 @@ func (d Deps) configuredAgent() string {
 	return d.loadInboxConfig().Agent
 }
 
+// configuredSpecAgent is the spec AI's agent: agents.spec, else the shared
+// agent (docs/rfc-inbox-ux.md §13, issue #231).
+func (d Deps) configuredSpecAgent() string {
+	return d.loadInboxConfig().SpecAgent()
+}
+
+// configuredImplAgent is the implementation AI's agent: agents.impl, else
+// the shared agent.
+func (d Deps) configuredImplAgent() string {
+	return d.loadInboxConfig().ImplAgent()
+}
+
 func (d Deps) workDir() (string, error) {
 	if d.WorkDir != "" {
 		return d.WorkDir, nil
@@ -530,6 +542,19 @@ repository and never touches $HOME. Repository issue labels are kept.`,
 	}
 	cleanCmd.Flags().String("part", "", "work unit within a multi-PR issue")
 
+	peekCmd := &cobra.Command{
+		Use:   "peek <issue-number>",
+		Short: "Open the recorded agent log in $PAGER",
+		Long: `Open the log of the headless agent recorded for the issue with $PAGER
+(default less). This is the CLI counterpart of the inbox p key
+(docs/rfc-inbox-ux.md §6).`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runPeek(cmd, deps, args[0])
+		},
+	}
+	peekCmd.Flags().String("part", "", "work unit within a multi-PR issue")
+
 	stopCmd := &cobra.Command{
 		Use:   "stop <issue-number>",
 		Short: "Stop a running agent (kill, clean up, record interruption)",
@@ -631,7 +656,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, cleanCmd, stopCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, cleanCmd, peekCmd, stopCmd, finishCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	return root
 }
@@ -705,13 +730,19 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		if isTerminal(os.Stdout) {
 			progressInterval = -1
 		}
+		// agents.spec (else the shared agent) is the spec AI's default;
+		// $LEAD_SPEC_AGENT still wins (issue #231).
+		specAgent := os.Getenv("LEAD_SPEC_AGENT")
+		if specAgent == "" {
+			specAgent = cfg.SpecAgent()
+		}
 		r := &spec.Runner{
 			Gh:     deps.gh(),
 			Agent:  deps.specAgent(stallTimeout, sayMaxRuntime),
 			Out:    cmd.OutOrStdout(),
 			Notify: notifier,
 			Opts: spec.Options{
-				Agent:            os.Getenv("LEAD_SPEC_AGENT"),
+				Agent:            specAgent,
 				LogDir:           filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
 				WorkDir:          root,
 				Repository:       deps.gitRunner().OriginURL(root),
@@ -735,8 +766,8 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		return errors.New("lead: the inbox needs an interactive terminal (stdin/stdout are not a TTY); run `lead --help` for subcommands")
 	}
 
-	if cfg.Agent != "" {
-		opts.Agent = cfg.Agent
+	if implAgent := cfg.ImplAgent(); implAgent != "" {
+		opts.Agent = implAgent
 	}
 	if cfg.AgentMode != "" {
 		opts.AgentMode = cfg.AgentMode
@@ -776,7 +807,9 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 			_ = os.MkdirAll(configDir, 0o755)
 			_ = os.WriteFile(configFile, raw, 0o644)
 		}
-		d.Opts.Agent = c.Agent
+		// agents.impl (when set in the file) still wins over the shared
+		// agent edited in the settings view (issue #231).
+		d.Opts.Agent = cfg.ImplAgent()
 		d.Opts.AgentMode = c.AgentMode
 		notifier.SetDisabled(c.NotifyDisabled)
 	}
@@ -858,7 +891,7 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 		agentName = os.Getenv("LEAD_SPEC_AGENT")
 	}
 	if agentName == "" {
-		agentName = deps.configuredAgent()
+		agentName = deps.configuredSpecAgent()
 	}
 	dryRun, _ := flags.GetBool("dry-run")
 	followUp, _ := flags.GetInt("follow-up")
@@ -983,7 +1016,7 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 	interval, _ := flags.GetDuration("interval")
 	agentName, _ := flags.GetString("agent")
 	if agentName == "" {
-		agentName = deps.configuredAgent()
+		agentName = deps.configuredImplAgent()
 	}
 
 	cwd, err := deps.workDir()
@@ -1086,7 +1119,7 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 	out := cmd.OutOrStdout()
 	agentName, _ := flags.GetString("agent")
 	if agentName == "" {
-		agentName = deps.configuredAgent()
+		agentName = deps.configuredImplAgent()
 	}
 	resolvedAgent := agent.Resolve(agentName)
 	launchDir := res.RepoRoot
@@ -1152,7 +1185,7 @@ func runResume(cmd *cobra.Command, deps Deps, target string) error {
 		agentName = res.Agent
 	}
 	if agentName == "" {
-		agentName = deps.configuredAgent()
+		agentName = deps.configuredImplAgent()
 	}
 	resolvedAgent := agent.Resolve(agentName)
 	launchDir := res.RepoRoot
@@ -1285,6 +1318,44 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 			}
 			fmt.Fprintf(out, "Next: resume with lead resume %s\n", target)
 		}
+	}
+	return nil
+}
+
+// runPeek implements `lead peek <issue>` (docs/rfc-inbox-ux.md §6): the
+// CLI counterpart of the inbox p key. It opens the log of the headless
+// agent recorded for the issue with $PAGER (default less).
+func runPeek(cmd *cobra.Command, deps Deps, raw string) error {
+	number, err := strconv.Atoi(raw)
+	if err != nil || number <= 0 {
+		return fmt.Errorf("invalid issue number %q", raw)
+	}
+	part, _ := cmd.Flags().GetString("part")
+	store := &state.Store{Path: deps.stateFile()}
+	w, ok, err := store.Get(number, part)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("no workflow for #%d", number)
+	}
+	if w.LogPath == "" {
+		return fmt.Errorf("#%d has no agent log", number)
+	}
+	if _, err := os.Stat(w.LogPath); err != nil {
+		return fmt.Errorf("#%d: agent log not found: %s", number, w.LogPath)
+	}
+	pager := strings.TrimSpace(os.Getenv("PAGER"))
+	if pager == "" {
+		pager = "less"
+	}
+	argv := append(strings.Fields(pager), w.LogPath)
+	c := exec.Command(argv[0], argv[1:]...)
+	c.Stdin = cmd.InOrStdin()
+	c.Stdout = cmd.OutOrStdout()
+	c.Stderr = cmd.ErrOrStderr()
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("peek #%d: pager: %w", number, err)
 	}
 	return nil
 }

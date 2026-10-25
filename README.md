@@ -50,6 +50,7 @@ Sections:
 | `lead say <one-liner>` | create `needs-review` issues from a one-liner |
 | `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
 | `lead clean <n>` | remove the workflow worktree and state |
+| `lead peek <n>` | open the running agent log with `$PAGER` |
 | `lead stop <n>` | stop a running agent (kill, clean up, record interruption) |
 | `lead enable` | enable this repository (`AGENTS.md` management block, lead-flow skill to `.agents/skills` + detected agents' skills dirs) |
 | `lead disable` | disable this repository (remove lead-flow skill from all known skills dirs) |
