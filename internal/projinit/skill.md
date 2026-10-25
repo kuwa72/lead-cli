@@ -52,19 +52,18 @@ If the issue number is omitted, ask the user for one or run `lead run` to open t
 
    If `bin/ci-wait` is not available, poll `gh pr checks` until all pass.
 
-6. Merge:
+6. Merge and close through `lead finish` (it enforces the protected-file guardrail):
 
    ```bash
-   gh pr merge --squash
+   lead finish <issue-number> --merge
    ```
 
-   Or use `lead finish <issue-number> --merge` if it is implemented and appropriate.
+   `gh pr merge --squash` bypasses that guardrail; use it only when `lead` is not
+   available. If `finish` stops because the PR touches protected convention files,
+   stop and ask the human — do not add `--override-guardrail` yourself.
 
-7. Confirm the related Issue is closed. If not, run:
-
-   ```bash
-   gh issue close <issue-number>
-   ```
+7. Confirm the related Issue is closed. If it is still open, report why (a guardrail
+   stop, failing checks) instead of closing it manually.
 
 8. Report the PR URL and merge commit to the user.
 

@@ -556,6 +556,7 @@ auto-merge-disabled repos — exit 0 with the next step, not an error.`,
 	finishCmd.Flags().Int("pr", 0, "use this PR number instead of the recorded one")
 	finishCmd.Flags().String("part", "", "work unit within a multi-PR issue")
 	finishCmd.Flags().Bool("merge", false, "merge after CI passes (overrides confirm pause)")
+	finishCmd.Flags().Bool("override-guardrail", false, "merge even though the PR touches protected convention files (human confirmation; never pass this from an unattended agent)")
 	finishCmd.Flags().Bool("close", false, "close the issue")
 	finishCmd.Flags().Bool("no-close", false, "never close the issue")
 	finishCmd.Flags().String("comment", "", "post a completion comment")
@@ -1601,6 +1602,7 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 	pr, _ := flags.GetInt("pr")
 	part, _ := flags.GetString("part")
 	merge, _ := flags.GetBool("merge")
+	overrideGuardrail, _ := flags.GetBool("override-guardrail")
 	closeIssue, _ := flags.GetBool("close")
 	noClose, _ := flags.GetBool("no-close")
 	comment, _ := flags.GetString("comment")
@@ -1612,7 +1614,8 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 	res, err := finish.Run(cmd.Context(), deps.gh(), &state.Store{Path: deps.stateFile()}, number, finish.Options{
 		PR: pr, Part: part, Merge: merge, Close: closeIssue, NoClose: noClose,
 		Comment: comment, Outcome: outcome, MergePolicy: policy,
-		Timeout: timeout, PollInterval: interval,
+		OverrideGuardrail: overrideGuardrail,
+		Timeout:           timeout, PollInterval: interval,
 	})
 	if res.Message != "" {
 		fmt.Fprintln(cmd.OutOrStdout(), res.Message)

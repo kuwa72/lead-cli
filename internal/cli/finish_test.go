@@ -93,3 +93,27 @@ func TestFinish_NoRecordViaCLI(t *testing.T) {
 		t.Error("finish without record = nil, want failure")
 	}
 }
+
+// issue #230: the headless path merges with --merge, so the guardrail must
+// only be lifted by the explicit human flag --override-guardrail.
+func TestFinish_GuardrailNeedsExplicitOverrideViaCLI(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "wf.json")
+	fake := seedFinishRecord(t, stateFile, nil)
+	fake.Files = []string{"AGENTS.md"}
+
+	out, err := executeWith(t, Deps{Gh: fake, StateFile: stateFile}, "finish", "36", "--merge")
+	if err != nil {
+		t.Fatalf("guardrail pause = %v, want clean pause\n%s", err, out)
+	}
+	if len(fake.MergeCalls) != 0 || !strings.Contains(out, "--override-guardrail") {
+		t.Errorf("merges = %v out = %q; want a pause with the override hint", fake.MergeCalls, out)
+	}
+
+	out, err = executeWith(t, Deps{Gh: fake, StateFile: stateFile}, "finish", "36", "--merge", "--override-guardrail")
+	if err != nil {
+		t.Fatalf("override merge: %v\n%s", err, out)
+	}
+	if len(fake.MergeCalls) != 1 {
+		t.Errorf("merges = %v, want the override to merge", fake.MergeCalls)
+	}
+}

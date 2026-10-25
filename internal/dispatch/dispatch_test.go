@@ -98,8 +98,9 @@ func newFixture(t *testing.T, ready ...int) (*Dispatcher, *testutil.FakeGhClient
 	l := &fakeLauncher{}
 	d := &Dispatcher{
 		Gh: gh, Git: git, Launcher: l,
-		Store: &state.Store{Path: filepath.Join(t.TempDir(), "workflows.json")},
-		Opts:  Options{Parallel: 2, Agent: "claude", LogDir: filepath.Join(t.TempDir(), "logs"), WorkDir: root},
+		Store:    &state.Store{Path: filepath.Join(t.TempDir(), "workflows.json")},
+		Opts:     Options{Parallel: 2, Agent: "claude", LogDir: filepath.Join(t.TempDir(), "logs"), WorkDir: root},
+		LookPath: func(string) (string, error) { return "/usr/local/bin/lead", nil },
 	}
 	return d, gh, git, l
 }
@@ -463,6 +464,22 @@ func TestPreflight_ProtectedRepoPasses(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Errorf("protected repo printed %q, want silence", out.String())
+	}
+}
+
+// issue #230: headless agents merge through `lead finish`, so a missing
+// lead binary is worth warning about before any agent starts.
+func TestPreflight_WarnsWhenLeadIsNotOnPath(t *testing.T) {
+	d, gh, _, _ := newFixture(t)
+	protectedFake(gh)
+	d.LookPath = func(string) (string, error) { return "", errors.New("not found") }
+	var out strings.Builder
+	d.Out = &out
+	if err := d.Preflight(context.Background()); err != nil {
+		t.Fatalf("Preflight = %v, want nil (warning only)", err)
+	}
+	if !strings.Contains(out.String(), "lead finish") {
+		t.Errorf("warning = %q, want the lead finish dependency named", out.String())
 	}
 }
 

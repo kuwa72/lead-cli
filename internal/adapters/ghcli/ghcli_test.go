@@ -388,6 +388,30 @@ func TestPrFiles_CallsGhPrViewFiles(t *testing.T) {
 	}
 }
 
+// issue #230: finish discovers the PR from the recorded branch when the
+// dispatch record has no PR number.
+func TestPrNumberForBranch_CallsGhPrList(t *testing.T) {
+	logPath := testutil.InstallDummy(t, "gh", `if [ "$1 $2" = "pr list" ]; then printf '9\n'; fi`)
+	got, err := New().PrNumberForBranch(context.Background(), "issue/7-x")
+	if err != nil || got != 9 {
+		t.Fatalf("PrNumberForBranch = %d, %v; want 9", got, err)
+	}
+	want := []string{"<pr>", "<list>", "<--head>", "<issue/7-x>", "<--state>", "<open>", "<--json>", "<number>", "<--jq>", "<.[0].number>"}
+	if lines := testutil.LogLines(t, logPath); !reflect.DeepEqual(lines, want) {
+		t.Errorf("gh argv = %q, want %q", lines, want)
+	}
+}
+
+func TestPrNumberForBranch_NoOpenPRIsZero(t *testing.T) {
+	for _, body := range []string{`:`, `printf 'null\n'`} {
+		testutil.InstallDummy(t, "gh", body)
+		got, err := New().PrNumberForBranch(context.Background(), "issue/7-x")
+		if err != nil || got != 0 {
+			t.Errorf("body %q: PrNumberForBranch = %d, %v; want 0, nil", body, got, err)
+		}
+	}
+}
+
 func TestRepoDefaultBranch_UsesRepoAPI(t *testing.T) {
 	logPath := testutil.InstallDummy(t, "gh", protectionServeBody)
 	got, err := New().RepoDefaultBranch(context.Background(), "o/r")
