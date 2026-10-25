@@ -189,8 +189,12 @@ out="$(cd "$repo" && AGENT_SLEEP=3 LEAD_SPEC_PROGRESS_INTERVAL=1s "$tmp/lead" sa
 case "$out" in *"running"*"last output"*) ;; *) fail "no elapsed/last-output progress lines: $out";; esac
 
 # --- 8. help ---------------------------------------------------------------------
-"$tmp/lead" say --help | grep -q -- '--follow-up' || fail "say --help lacks --follow-up"
-"$tmp/lead" say --help | grep -q -- '--timeout' && fail "say --help still lists --timeout"
-"$tmp/lead" --help | grep -q 'say' || fail "root help lacks say"
+# Capture first: `lead ... | grep -q` closes the pipe early and, under
+# pipefail, turns the producer's SIGPIPE into a spurious test failure.
+say_help="$("$tmp/lead" say --help)"
+case "$say_help" in *"--follow-up"*) ;; *) fail "say --help lacks --follow-up" ;; esac
+case "$say_help" in *"--timeout"*) fail "say --help still lists --timeout" ;; esac
+root_help="$("$tmp/lead" --help)"
+case "$root_help" in *"say"*) ;; *) fail "root help lacks say" ;; esac
 
 echo "PASS: test_say"
