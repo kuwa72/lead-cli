@@ -193,6 +193,26 @@ func (d Deps) repoSlug() string {
 	return git.RepoSlug(d.gitRunner().OriginURL(root))
 }
 
+// dispatchRepoKey is the repository-scoped key for dispatch locks and
+// workflow records: the origin slug of dir's repository, or "local"
+// (issue #262).
+func (d Deps) dispatchRepoKey(dir string) string {
+	root := dir
+	if r, err := d.gitRunner().RepoRoot(dir); err == nil && r != "" {
+		root = r
+	}
+	return dispatch.RepoKey(d.gitRunner().OriginURL(root))
+}
+
+// dispatchLock reports the repository lock holder for `lead status`.
+func (d Deps) dispatchLock() (dispatch.LockInfo, bool) {
+	cwd, err := d.workDir()
+	if err != nil {
+		return dispatch.LockInfo{}, false
+	}
+	return dispatch.LockHolder(filepath.Dir(d.stateFile()), d.dispatchRepoKey(cwd))
+}
+
 // repoRoot is the working directory's repository root, or "" when not
 // inside a git repository (doctor's project check is then skipped).
 func (d Deps) repoRoot() string {
@@ -955,11 +975,25 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		// warning in the log pane as well, then silence the loop.
 		opts.StartupNotice = strings.TrimSpace(preflightWarn.String())
 		d.Out = io.Discard
-		go func() {
-			if err := d.Loop(dctx, 30*time.Second); err != nil {
-				fmt.Fprintln(cmd.ErrOrStderr(), "dispatch:", err)
+		// The inbox holds the repository lock for its lifetime (issue #262).
+		// If another lead already dispatches this repository, the TUI still
+		// opens but the loop stays off so nothing runs in parallel.
+		lock, lockErr := dispatch.AcquireLock(configDir, dispatch.RepoKey(deps.gitRunner().OriginURL(root)))
+		if lockErr != nil {
+			notice := "dispatch disabled: " + lockErr.Error()
+			if opts.StartupNotice != "" {
+				opts.StartupNotice += "\n"
 			}
-		}()
+			opts.StartupNotice += notice
+			fmt.Fprintln(cmd.ErrOrStderr(), notice)
+		} else {
+			defer lock.Release()
+			go func() {
+				if err := d.Loop(dctx, 30*time.Second); err != nil {
+					fmt.Fprintln(cmd.ErrOrStderr(), "dispatch:", err)
+				}
+			}()
+		}
 	}
 	if w := configWarn.String(); w != "" {
 		opts.StartupNotice = strings.TrimSpace(opts.StartupNotice + "\n" + w)
@@ -1299,6 +1333,13 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 		return fmt.Errorf("dispatch: %w", err)
 	}
 	stateFile := deps.stateFile()
+	// One dispatcher per repository (issue #262): a second `lead dispatch`
+	// must not hand out the same ready issues (and worktrees) in parallel.
+	lock, err := dispatch.AcquireLock(filepath.Dir(stateFile), deps.dispatchRepoKey(cwd))
+	if err != nil {
+		return fmt.Errorf("dispatch: %w", err)
+	}
+	defer lock.Release()
 	d := &dispatch.Dispatcher{
 		Gh:       deps.gh(),
 		Git:      deps.gitRunner(),
@@ -1534,10 +1575,16 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 	}
 	out := cmd.OutOrStdout()
 	now := time.Now()
+	lockInfo, lockHeld := deps.dispatchLock()
 	if asJSON {
+		lock := statusLock{Held: lockHeld, PID: lockInfo.PID}
+		if lockHeld && !lockInfo.StartedAt.IsZero() {
+			lock.Since = lockInfo.StartedAt.Format(time.RFC3339)
+		}
 		raw, err := json.MarshalIndent(struct {
-			Workflows []statusWorkflow `json:"workflows"`
-		}{Workflows: statusRows(all, now)}, "", "  ")
+			Workflows    []statusWorkflow `json:"workflows"`
+			DispatchLock statusLock       `json:"dispatch_lock"`
+		}{Workflows: statusRows(all, now), DispatchLock: lock}, "", "  ")
 		if err != nil {
 			return err
 		}
@@ -1546,6 +1593,7 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 	}
 	if len(all) == 0 {
 		fmt.Fprintln(out, "no workflows recorded")
+		fmt.Fprintln(out, statusLockLine(lockInfo, lockHeld))
 		return nil
 	}
 	for _, w := range all {
@@ -1579,7 +1627,29 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 			fmt.Fprintf(out, "Next: resume with lead resume %s\n", target)
 		}
 	}
+	fmt.Fprintln(out, statusLockLine(lockInfo, lockHeld))
 	return nil
+}
+
+// statusLock is the `lead status --json` view of the repository dispatch
+// lock (issue #262).
+type statusLock struct {
+	Held  bool   `json:"held"`
+	PID   int    `json:"pid,omitempty"`
+	Since string `json:"since,omitempty"`
+}
+
+func statusLockLine(info dispatch.LockInfo, held bool) string {
+	if !held {
+		return "Dispatch lock: free"
+	}
+	if info.PID > 0 {
+		if info.StartedAt.IsZero() {
+			return fmt.Sprintf("Dispatch lock: held by pid %d", info.PID)
+		}
+		return fmt.Sprintf("Dispatch lock: held by pid %d since %s", info.PID, info.StartedAt.Format(time.RFC3339))
+	}
+	return "Dispatch lock: held by another process"
 }
 
 // runPeek implements `lead peek <issue>` (docs/rfc-inbox-ux.md §6): the
