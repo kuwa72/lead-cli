@@ -70,9 +70,10 @@
 `lead review <pr>` が PR の diff・Issue の受入条件・CI 結果を別プロセスの
 ヘッドレスエージェントに審査させ、最終行の `VERDICT: pass` /
 `VERDICT: needs-work` に応じて `review:pass` / `review:needs-work` を付ける。
-`review:pass` が無い（またはラベルを読めない）場合はマージせず exit 0 で
-`lead review` を案内する。`--no-review` は人間専用の回避フラグで、
-ヘッドレス dispatch の完了定義には含めない。
+`review:pass` が無い場合はマージせず exit 0 で `lead review` を案内する。
+PR のラベルを取得できない場合は fail closed で exit 1（マージしない）。
+`--no-review` は人間専用の回避フラグで、ヘッドレス dispatch の完了定義には
+含めない。
 `review:pass` / `review:needs-work` は `lead enable` が作成する必須ラベルの
 一部（`lead enable --yes` で既存リポジトリにも追加できる）。
 
