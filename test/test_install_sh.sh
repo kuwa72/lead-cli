@@ -165,8 +165,9 @@ NOREL_OUT="$tmp/norel.out"
 LEAD_RELEASE_BASE="http://127.0.0.1:$PORT2" \
   sh "$STANDALONE/install.sh" --prefix "$tmp/prefix6" --no-modify-path >"$NOREL_OUT" 2>&1 \
   && fail "no-release install exited 0"
-grep -q "no published release" "$NOREL_OUT" || fail "no-release error lacks explanation: $(cat "$NOREL_OUT")"
-grep -q "bin/install-local" "$NOREL_OUT" || fail "no-release error lacks local guidance: $(cat "$NOREL_OUT")"
+NOREL_MSG="$(cat "$NOREL_OUT")"
+case "$NOREL_MSG" in *"no published release"*) ;; *) fail "no-release error lacks explanation: $NOREL_MSG" ;; esac
+case "$NOREL_MSG" in *"bin/install-local"*) ;; *) fail "no-release error lacks local guidance: $NOREL_MSG" ;; esac
 [ ! -e "$tmp/prefix6/bin/lead" ] || fail "no-release install left a binary"
 kill "$NOREL_PID" 2>/dev/null || true
 
@@ -175,7 +176,8 @@ CHECKOUT_OUT="$tmp/checkout.out"
 LEAD_RELEASE_BASE="http://127.0.0.1:$PORT" \
   sh "$ROOT/install.sh" --prefix "$tmp/prefix7" --no-modify-path >"$CHECKOUT_OUT" 2>&1 \
   && fail "checkout install exited 0"
-grep -q "bin/install-local" "$CHECKOUT_OUT" || fail "checkout error lacks local guidance: $(cat "$CHECKOUT_OUT")"
+CHECKOUT_MSG="$(cat "$CHECKOUT_OUT")"
+case "$CHECKOUT_MSG" in *"bin/install-local"*) ;; *) fail "checkout error lacks local guidance: $CHECKOUT_MSG" ;; esac
 [ ! -e "$tmp/prefix7/bin/lead" ] || fail "checkout install left a binary"
 
 echo "install.sh behavioral checks passed"
