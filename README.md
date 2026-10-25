@@ -49,6 +49,8 @@ Sections:
 | `lead dispatch` | hand `ready` issues to headless agents |
 | `lead status` | show active workflows |
 | `lead say <one-liner>` | create `needs-review` issues from a one-liner |
+| `lead new` | create an issue from a validated template (`--ready` enqueues it directly) |
+| `lead ready <n>` | validate an existing issue body and move it to `ready` |
 | `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
 | `lead review <pr>` | run an independent headless review; label `review:pass` / `review:needs-work` |
 | `lead clean <n>` | remove the workflow worktree and state |
@@ -63,6 +65,35 @@ Sections:
 | `lead doctor` | diagnose `gh`, agents, and branch protection |
 | `lead update` | replace this binary with the latest release (direct installs only) |
 | `lead version` | show version |
+
+## Creating issues
+
+`lead new` opens `$EDITOR` with a template and validates the body before
+creating anything. `lead ready <n>` applies the same validation to an existing
+issue and then swaps `needs-review` for `ready`.
+
+A body passes when it has all of:
+
+- a `## 受入条件` section with at least one `- [ ]` item
+- at least one executable acceptance condition in that section: a
+  backtick-quoted command (`` `./test/run-tests.sh` ``) or a test path
+  (`test/`, `*_test.go`, `*.spec.*`, …)
+- a `## スコープ外` section
+- a risk label: `risk:a` or `risk:b` (`lead new --risk`, default `b`; for
+  `lead ready` the label must already be on the issue)
+
+On failure the command creates or relabels nothing, lists every missing item,
+and exits 1.
+
+```sh
+lead new                       # $EDITOR; labels risk:b + needs-review
+lead new --risk a --ready      # labels risk:a + ready (skips needs-review)
+lead new --body-file body.md   # non-interactive; title from the first heading
+lead ready 254                 # validate #254 and move it to ready
+```
+
+Without `--body-file`, `lead new` needs an interactive terminal; non-TTY runs
+fail with a hint (the same rule as the inbox).
 
 ## Install and setup
 
