@@ -5,7 +5,7 @@
 # (shell integration belongs to `lead setup`).
 #
 # Usage: install.sh [--version <vX.Y.Z|latest>] [--prefix <dir>]
-#                    [--no-modify-path] [--help]
+#                    [--no-modify-path] [--from-release] [--help]
 #
 # Test seams (env): LEAD_RELEASE_BASE (default upstream releases),
 # LEAD_UNAME_S / LEAD_UNAME_M (override uname -s/-m).
@@ -15,15 +15,18 @@ BASE="${LEAD_RELEASE_BASE:-https://github.com/kuwa72/lead-cli}"
 VERSION="latest"
 PREFIX=""
 NO_MODIFY_PATH=0
+FROM_RELEASE=0
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--version <vX.Y.Z|latest>] [--prefix <dir>] [--no-modify-path] [--help]
+Usage: install.sh [--version <vX.Y.Z|latest>] [--prefix <dir>] [--no-modify-path] [--from-release] [--help]
 
   --version <vX.Y.Z|latest>  Release to install (default: latest).
   --prefix <dir>             Install to <dir>/bin/lead
                              (default: /usr/local, or ~/.local when unwritable).
   --no-modify-path           Suppress PATH guidance (for CI / non-interactive use).
+  --from-release             In a source checkout, install the published release
+                             instead of refusing (normally use bin/install-local).
   --help                     Show this message.
 
 Recommended: download the script, inspect it, run --help, then install.
@@ -36,12 +39,23 @@ while [ $# -gt 0 ]; do
     --version) [ $# -ge 2 ] || { echo "error: --version needs a value" >&2; exit 1; }; VERSION="$2"; shift 2 ;;
     --prefix) [ $# -ge 2 ] || { echo "error: --prefix needs a value" >&2; exit 1; }; PREFIX="$2"; shift 2 ;;
     --no-modify-path) NO_MODIFY_PATH=1; shift ;;
+    --from-release) FROM_RELEASE=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# --- source checkout ------------------------------------------------------
+# `./install.sh` inside the repository is a local install: releases are for
+# end users. Refuse before any network call and name the local path.
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if [ "$VERSION" = "latest" ] && [ "$FROM_RELEASE" -eq 0 ] \
+   && [ -f "$SCRIPT_DIR/go.mod" ] && [ -d "$SCRIPT_DIR/cmd/lead" ]; then
+  echo "error: this is a source checkout; run bin/install-local to build from this tree, or pass --from-release to install the latest published release" >&2
+  exit 2
+fi
 
 # --- platform -----------------------------------------------------------
 OS_RAW="${LEAD_UNAME_S:-$(uname -s)}"
@@ -84,8 +98,17 @@ if [ "$VERSION" = "latest" ]; then
       | awk '/[Ll]ocation:/ {print $2}' | tr -d '\r' | head -n 1)"
     [ -n "$EFFECTIVE" ] || { echo "error: cannot resolve latest release" >&2; exit 2; }
   fi
+  case "$EFFECTIVE" in
+    */tag/*) ;;
+    *)
+      echo "error: no published release found (resolved to $EFFECTIVE); run bin/install-local in a source checkout or publish a release" >&2
+      exit 2 ;;
+  esac
   VERSION="$(printf '%s' "$EFFECTIVE" | sed 's|.*/tag/||; s|/$||')"
-  [ -n "$VERSION" ] || { echo "error: cannot parse tag from $EFFECTIVE" >&2; exit 2; }
+  case "$VERSION" in
+    v[0-9]*) ;;
+    *) echo "error: cannot parse tag from $EFFECTIVE" >&2; exit 2 ;;
+  esac
   echo "Resolved latest: $VERSION"
 fi
 
