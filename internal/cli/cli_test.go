@@ -29,6 +29,12 @@ func (g *fakeGitRunner) CreateBranch(repoDir, branch string) error { return nil 
 func (g *fakeGitRunner) WorktreeAdd(repoDir, path, branch string) error {
 	return os.MkdirAll(path, 0o755)
 }
+func (g *fakeGitRunner) WorktreeAddDetached(repoDir, path, commit string) error {
+	return os.MkdirAll(path, 0o755)
+}
+func (g *fakeGitRunner) HeadSHA(dir string) (string, error)                    { return "", nil }
+func (g *fakeGitRunner) MainWorktree(dir string) (string, error)               { return g.root, nil }
+func (g *fakeGitRunner) EnsureCommit(repoDir, sha string) error                { return nil }
 func (g *fakeGitRunner) WorktreeRemove(repoDir, path string, force bool) error { return nil }
 func (g *fakeGitRunner) OriginURL(repoDir string) string                       { return g.origin }
 func (g *fakeGitRunner) BranchExists(repoDir, branch string) (bool, error)     { return true, nil }

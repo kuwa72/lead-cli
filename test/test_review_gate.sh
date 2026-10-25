@@ -30,6 +30,8 @@ git -C "$repo" config user.name "t"
 echo x > "$repo/f.txt"
 git -C "$repo" add . && git -C "$repo" commit -qm init
 git -C "$repo" remote add origin https://github.com/o/r.git
+PR_SHA="$(git -C "$repo" rev-parse HEAD)"
+export PR_SHA
 
 export GH_LOG="$tmp/gh.log" PROMPT_LOG="$tmp/prompt.log"
 export COMMENT_FILE="$tmp/comment.md" LABELS_FILE="$tmp/pr-labels.txt"
@@ -47,7 +49,7 @@ case "$1 $2" in
       *"--json labels"*) cat "$LABELS_FILE" ;;
       *"--json body"*) printf '%s' '{"body":"Closes #246"}' ;;
       *"--json headRefName"*) printf '%s' '{"headRefName":"issue/246-feat-review"}' ;;
-      *"--json headRefOid"*) printf '%s' '{"headRefOid":"0123456789abcdef0123456789abcdef01234567"}' ;;
+      *"--json headRefOid"*) printf '{"headRefOid":"%s"}' "$PR_SHA" ;;
       *) printf '%s' '{"number":7,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}' ;;
     esac ;;
   "pr diff") printf '%s' 'diff --git a/internal/review/review.go b/internal/review/review.go
@@ -63,6 +65,8 @@ case "$1 $2" in
         mv "$LABELS_FILE.tmp" "$LABELS_FILE" ;;
       *) : ;;
     esac ;;
+  "label list") printf '%s' '[{"name":"review:pass"},{"name":"review:needs-work"}]' ;;
+  "label create") : ;;
   "auth status") : ;;
   "api user") printf 'octocat\n' ;;
   *) echo "unexpected gh call: $*" >&2; exit 3 ;;
@@ -71,6 +75,11 @@ EOF
 cat > "$tmp/bin/claude" <<'EOF'
 #!/bin/sh
 for a in "$@"; do printf '%s\n' "$a" >> "$PROMPT_LOG"; done
+last=""
+for a in "$@"; do last="$a"; done
+case "$last" in
+  *"file: "*) cat "${last##*file: }" >> "$PROMPT_LOG" ;;
+esac
 cat "$AGENT_REPLY_FILE"
 EOF
 chmod +x "$tmp/bin/gh" "$tmp/bin/claude"
@@ -97,7 +106,7 @@ out="$(cd "$repo" && "$tmp/lead" review 7 --agent claude 2>&1)" \
 case "$out" in *review:pass*) ;; *) fail "pass output missing review:pass: $out";; esac
 label_present 'review:pass' || fail "review:pass label was not added: $(cat "$LABELS_FILE")"
 grep -q 'VERDICT: pass' "$COMMENT_FILE" || fail "PR comment missing the review body: $(cat "$COMMENT_FILE")"
-grep -qF -- '<!-- lead-review sha=0123456789abcdef0123456789abcdef01234567 verdict=pass -->' "$COMMENT_FILE" \
+grep -qF -- "<!-- lead-review sha=$PR_SHA verdict=pass -->" "$COMMENT_FILE" \
   || fail "PR comment missing the head-SHA marker: $(cat "$COMMENT_FILE")"
 grep -q '受入条件を実行ログで確認した' "$COMMENT_FILE" || fail "PR comment missing the findings"
 grep -qx 'GH issue edit 7 --add-label review:pass' "$GH_LOG" \

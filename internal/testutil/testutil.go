@@ -165,9 +165,12 @@ type FakeGhClient struct {
 	ChecksCalls int
 	PRCalls     []int
 	MergeCalls  []int
-	Closed      []int
-	Browsed     []int
-	Comments    []IssueComment
+	// MergeHeads parallels MergeCalls with each --match-head-commit value
+	// (issue #250).
+	MergeHeads []string
+	Closed     []int
+	Browsed    []int
+	Comments   []IssueComment
 
 	// Labeled feeds ListByLabel: label → summaries.
 	Labeled        map[string][]ports.IssueSummary
@@ -512,9 +515,11 @@ func (f *FakeGhClient) PrComment(ctx context.Context, pr int, body string) error
 	return f.PRCommentErr
 }
 
-// PrMerge records the call (or returns MergeErr).
-func (f *FakeGhClient) PrMerge(ctx context.Context, pr int) error {
+// PrMerge records the call (or returns MergeErr). MergeHeads records the
+// --match-head-commit value for each merge (issue #250).
+func (f *FakeGhClient) PrMerge(ctx context.Context, pr int, headSHA string) error {
 	f.MergeCalls = append(f.MergeCalls, pr)
+	f.MergeHeads = append(f.MergeHeads, headSHA)
 	return f.MergeErr
 }
 

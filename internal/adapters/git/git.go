@@ -187,6 +187,54 @@ func (r *Runner) WorktreeAdd(repoDir, path, branch string) error {
 	return err
 }
 
+// HeadSHA returns the commit checked out in dir.
+func (r *Runner) HeadSHA(dir string) (string, error) {
+	out, err := r.run(context.Background(), dir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// MainWorktree returns the repository's main worktree (the first entry of
+// `git worktree list`), even when dir is itself a linked worktree. Review
+// worktrees live under its .worktrees/ directory (issue #250).
+func (r *Runner) MainWorktree(dir string) (string, error) {
+	list, err := r.WorktreeList(dir)
+	if err != nil {
+		return "", err
+	}
+	if len(list) == 0 {
+		return "", fmt.Errorf("git worktree list: no worktrees in %s", dir)
+	}
+	return list[0].Path, nil
+}
+
+// EnsureCommit makes sha available locally, fetching it from origin when
+// the checkout does not have it (a PR head pushed elsewhere, issue #250).
+func (r *Runner) EnsureCommit(repoDir, sha string) error {
+	if _, err := r.run(context.Background(), repoDir, "cat-file", "-e", sha+"^{commit}"); err == nil {
+		return nil
+	}
+	if _, err := r.run(context.Background(), repoDir, "fetch", "origin", sha); err != nil {
+		return err
+	}
+	_, err := r.run(context.Background(), repoDir, "cat-file", "-e", sha+"^{commit}")
+	return err
+}
+
+// WorktreeAddDetached creates a worktree at path with HEAD detached at
+// commit. Unlike WorktreeAdd it never creates or checks out a branch.
+func (r *Runner) WorktreeAddDetached(repoDir, path, commit string) error {
+	for _, w := range mustList(r, repoDir) {
+		if samePath(w.Path, path) {
+			return nil // already registered: idempotent success
+		}
+	}
+	_, err := r.run(context.Background(), repoDir, "worktree", "add", "--detach", path, commit)
+	return err
+}
+
 func mustList(r *Runner, repoDir string) []WorktreeInfo {
 	list, _ := r.WorktreeList(repoDir)
 	return list

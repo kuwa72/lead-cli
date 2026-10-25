@@ -95,7 +95,7 @@ out="$(cd "$tmp/repo-approved" && "$tmp/lead" finish 36 --pr 7 --merge --no-revi
   || fail "no-review --approve: finish failed: $out"
 [ -f "$MERGED_MARK" ] || fail "no-review --approve: PR was not merged"
 [ -f "$CLOSED_MARK" ] || fail "no-review --approve: issue was not closed"
-grep -qx 'GH pr merge 7 --squash --delete-branch' "$GH_LOG" \
+grep -qx 'GH pr merge 7 --squash --delete-branch --match-head-commit 0123456789abcdef0123456789abcdef01234567' "$GH_LOG" \
   || fail "no-review --approve: squash merge not invoked: $(cat "$GH_LOG")"
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"

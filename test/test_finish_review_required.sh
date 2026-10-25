@@ -67,7 +67,7 @@ case "$1 $2" in
       *allow_auto_merge*) printf 'true\n' ;;
       *) echo "unexpected gh api: $*" >&2; exit 3 ;;
     esac ;;
-  "api user") printf 'octocat\n' ;;
+  "api user") printf 'lead\n' ;;
   *) echo "unexpected gh call: $*" >&2; exit 3 ;;
 esac
 EOF
@@ -126,7 +126,7 @@ out="$(cd "$tmp/repo-pass" && "$tmp/lead" finish 36 --pr 7 --merge --close --tim
   || fail "pass: finish failed: $out"
 [ -f "$MERGED_MARK" ] || fail "pass: PR was not merged"
 [ -f "$CLOSED_MARK" ] || fail "pass: issue was not closed"
-grep -qx 'GH pr merge 7 --squash --delete-branch' "$GH_LOG" || fail "pass: squash merge not invoked: $(cat "$GH_LOG")"
+grep -qx "GH pr merge 7 --squash --delete-branch --match-head-commit $HEAD_A" "$GH_LOG" || fail "pass: squash merge not invoked: $(cat "$GH_LOG")"
 
 # --- 4. --no-review --approve（人間専用）→ コメントなしでもマージ ---
 seed no-review-flag ''

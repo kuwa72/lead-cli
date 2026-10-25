@@ -34,6 +34,13 @@ func (m *mockGitRunner) WorktreeAdd(repoDir, path, branch string) error {
 	m.worktrees = append(m.worktrees, git.WorktreeInfo{Path: path, Branch: branch})
 	return os.MkdirAll(path, 0o755)
 }
+func (m *mockGitRunner) WorktreeAddDetached(repoDir, path, commit string) error {
+	m.worktrees = append(m.worktrees, git.WorktreeInfo{Path: path})
+	return os.MkdirAll(path, 0o755)
+}
+func (m *mockGitRunner) HeadSHA(dir string) (string, error)      { return "", nil }
+func (m *mockGitRunner) MainWorktree(dir string) (string, error) { return m.root, nil }
+func (m *mockGitRunner) EnsureCommit(repoDir, sha string) error  { return nil }
 func (m *mockGitRunner) WorktreeRemove(repoDir, path string, force bool) error {
 	var kept []git.WorktreeInfo
 	for _, w := range m.worktrees {

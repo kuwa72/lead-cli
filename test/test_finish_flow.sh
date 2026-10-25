@@ -50,6 +50,7 @@ case "$1 $2" in
     fi ;;
   "pr merge")
     printf '{"number":7,"state":"MERGED"}' ;;
+  "api user") printf 'lead\n' ;;
   "issue close" | "issue comment")
     : ;;
   *)
@@ -86,7 +87,7 @@ cd "$repo_a"
 finish_out="$("$tmp/lead" finish 36 --pr 7 --merge --close --comment done \
   --timeout 60s --poll-interval 1s)" || fail "scenario A: finish failed: $finish_out"
 case "$finish_out" in *"merged"*closed*) ;; *) fail "scenario A: missing merge+close report: $finish_out";; esac
-grep -q "GHLOG pr merge 7 --squash --delete-branch" "$GH_ARGS_LOG" || fail "scenario A: squash merge not invoked"
+grep -q "GHLOG pr merge 7 --squash --delete-branch --match-head-commit 0123456789abcdef0123456789abcdef01234567" "$GH_ARGS_LOG" || fail "scenario A: squash merge not invoked"
 grep -q "GHLOG issue close 36" "$GH_ARGS_LOG" || fail "scenario A: issue close not invoked"
 grep -q "GHLOG issue comment 36 --body done" "$GH_ARGS_LOG" || fail "scenario A: comment not posted"
 polls=$(grep -c "GHLOG pr checks" "$GH_ARGS_LOG"); [ "$polls" -ge 3 ] || fail "scenario A: expected CI polling, got $polls checks calls"
@@ -141,7 +142,7 @@ grep -q "GHLOG pr merge" "$GH_ARGS_LOG" && fail "scenario D: --merge alone merge
 # The human confirms with --override-guardrail: now it merges and closes.
 : > "$GH_ARGS_LOG"; rm -f "$GH_COUNT"
 "$tmp/lead" finish 36 --pr 7 --merge --close --override-guardrail --timeout 60s --poll-interval 1s >/dev/null || fail "scenario D: explicit --override-guardrail failed"
-grep -q "GHLOG pr merge 7 --squash --delete-branch" "$GH_ARGS_LOG" || fail "scenario D: explicit --override-guardrail did not merge"
+grep -q "GHLOG pr merge 7 --squash --delete-branch --match-head-commit 0123456789abcdef0123456789abcdef01234567" "$GH_ARGS_LOG" || fail "scenario D: explicit --override-guardrail did not merge"
 unset GH_FILES
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"
