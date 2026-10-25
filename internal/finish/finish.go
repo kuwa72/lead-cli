@@ -259,17 +259,26 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 	// #249 that verdict is a PR comment marker bound to the head SHA the
 	// reviewer examined: the label alone is display only. A missing or
 	// stale marker stops before merging; --no-review --approve is the
-	// human-only override.
+	// human-only override. Issue #250 pins the merge to the same head
+	// (--match-head-commit) so a push between the check and the merge
+	// cannot slip in.
+	mergeHead := ""
 	if risk == RiskA && !opts.NoReview {
 		head, err := gh.PrHeadSHA(ctx, prNumber)
 		if err != nil {
 			return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: head SHA (review gate): %w", prNumber, err)
 		}
+		mergeHead = head
 		comments, err := gh.PrComments(ctx, prNumber)
 		if err != nil {
 			return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: comments (review gate): %w", prNumber, err)
 		}
-		marker, found := review.LatestMarker(comments)
+		// Best effort author check (#250): markers from another gh user
+		// are ignored when the login is known. The implementation session
+		// usually shares the account, so this is defense in depth, not the
+		// primary gate.
+		login, _ := gh.ApiUser(ctx)
+		marker, found := review.LatestMarkerFor(comments, login)
 		switch {
 		case !found:
 			return Result{ChecksPassed: true,
@@ -285,7 +294,14 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 					prNumber, shortSHA(marker.SHA), shortSHA(head), prNumber)}, nil
 		}
 	}
-	if err := gh.PrMerge(ctx, prNumber); err != nil {
+	if mergeHead == "" {
+		head, err := gh.PrHeadSHA(ctx, prNumber)
+		if err != nil {
+			return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: head SHA (merge): %w", prNumber, err)
+		}
+		mergeHead = head
+	}
+	if err := gh.PrMerge(ctx, prNumber, mergeHead); err != nil {
 		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: merge: %w", prNumber, err)
 	}
 	if hadAwaiting {

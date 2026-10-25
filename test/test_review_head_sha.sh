@@ -98,13 +98,15 @@ case "$1 $2" in
     printf '%s\n' "$body" >> "$COMMENT_FILE"
     printf '%s\n' "$body" | grep '^<!-- lead-review ' >> "$MARKER_FILE" || true ;;
   "pr merge") touch "$MERGED_MARK" ;;
+  "label list") printf '%s' '[{"name":"review:pass"},{"name":"review:needs-work"}]' ;;
+  "label create") : ;;
   "api repos/o/r")
     case "$*" in
       *default_branch*) printf 'main\n' ;;
       *allow_auto_merge*) printf 'true\n' ;;
       *) echo "unexpected gh api: $*" >&2; exit 3 ;;
     esac ;;
-  "api user") printf 'octocat\n' ;;
+  "api user") printf 'lead\n' ;;
   *) echo "unexpected gh call: $*" >&2; exit 3 ;;
 esac
 EOF
@@ -117,11 +119,12 @@ export PATH="$tmp/bin:$PATH"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 
-HEAD_A="0123456789abcdef0123456789abcdef01234567"
-HEAD_B="fedcba9876543210fedcba9876543210fedcba98"
-printf '%s' "$HEAD_A" > "$HEAD_SHA_FILE"
+HEAD_A=""
+HEAD_B=""
 
 (cd "$repo" && "$tmp/lead" run 36 >/dev/null) || fail "lead run failed"
+HEAD_A="$(git -C "$repo" rev-parse HEAD)"
+printf '%s' "$HEAD_A" > "$HEAD_SHA_FILE"
 
 # --- 1. HEAD_A でレビュー → pass マーカーが HEAD_A に束縛される ---
 out="$(cd "$repo" && "$tmp/lead" review 7 --agent claude 2>&1)" \
@@ -130,6 +133,10 @@ grep -qF -- "<!-- lead-review sha=$HEAD_A verdict=pass -->" "$COMMENT_FILE" \
   || fail "review comment missing the HEAD_A marker: $(cat "$COMMENT_FILE")"
 
 # --- 2. レビュー後にコミットが push される（head が HEAD_B に進む） ---
+echo y >> "$repo/f.txt"
+git -C "$repo" commit -qam head-b
+HEAD_B="$(git -C "$repo" rev-parse HEAD)"
+[ "$HEAD_A" != "$HEAD_B" ] || fail "fixture: HEAD_B equals HEAD_A"
 printf '%s' "$HEAD_B" > "$HEAD_SHA_FILE"
 : > "$GH_LOG"
 out="$(cd "$repo" && "$tmp/lead" finish 36 --pr 7 --merge --close --timeout 60s --poll-interval 1s)" \
@@ -150,7 +157,7 @@ out="$(cd "$repo" && "$tmp/lead" finish 36 --pr 7 --merge --close --timeout 60s 
   || fail "matching-review finish failed: $out"
 [ -f "$MERGED_MARK" ] || fail "matching-review: PR was not merged"
 [ -f "$CLOSED_MARK" ] || fail "matching-review: issue was not closed"
-grep -qx 'GH pr merge 7 --squash --delete-branch' "$GH_LOG" \
+grep -qx "GH pr merge 7 --squash --delete-branch --match-head-commit $HEAD_B" "$GH_LOG" \
   || fail "matching-review: squash merge not invoked: $(cat "$GH_LOG")"
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"

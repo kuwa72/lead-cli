@@ -77,7 +77,7 @@ case "$1 $2" in
       *allow_auto_merge*) printf 'true\n' ;;
       *) echo "unexpected gh api: $*" >&2; exit 3 ;;
     esac ;;
-  "api user") printf 'octocat\n' ;;
+  "api user") printf 'lead\n' ;;
   "auth status") : ;;
   *) echo "unexpected gh call: $*" >&2; exit 3 ;;
 esac
@@ -133,7 +133,7 @@ out="$(cd "$tmp/repo-risk-a" && "$tmp/lead" finish 36 --pr 7 --merge --close --t
   || fail "risk-a: finish failed: $out"
 [ -f "$MERGED_MARK" ] || fail "risk-a: PR was not merged"
 [ -f "$CLOSED_MARK" ] || fail "risk-a: issue was not closed"
-grep -qx 'GH pr merge 7 --squash --delete-branch' "$GH_LOG" || fail "risk-a: squash merge not invoked: $(cat "$GH_LOG")"
+grep -qx 'GH pr merge 7 --squash --delete-branch --match-head-commit 0123456789abcdef0123456789abcdef01234567' "$GH_LOG" || fail "risk-a: squash merge not invoked: $(cat "$GH_LOG")"
 grep -q -- '--add-label awaiting-human' "$GH_LOG" && fail "risk-a: awaiting-human added to a risk:a merge"
 state_has status closed risk-a
 

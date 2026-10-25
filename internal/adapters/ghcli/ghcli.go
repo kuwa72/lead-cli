@@ -300,9 +300,15 @@ func (c *Client) PrComment(ctx context.Context, pr int, body string) error {
 	return err
 }
 
-// PrMerge runs `gh pr merge <pr> --squash --delete-branch` (squash default).
-func (c *Client) PrMerge(ctx context.Context, pr int) error {
-	_, err := c.run(ctx, "pr", "merge", strconv.Itoa(pr), "--squash", "--delete-branch")
+// PrMerge runs `gh pr merge <pr> --squash --delete-branch`. A non-empty
+// headSHA pins the merge to the commit the review examined
+// (--match-head-commit, issue #250).
+func (c *Client) PrMerge(ctx context.Context, pr int, headSHA string) error {
+	args := []string{"pr", "merge", strconv.Itoa(pr), "--squash", "--delete-branch"}
+	if headSHA != "" {
+		args = append(args, "--match-head-commit", headSHA)
+	}
+	_, err := c.run(ctx, args...)
 	return err
 }
 

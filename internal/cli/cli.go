@@ -591,7 +591,9 @@ and left open; this is not a failure. A human merges it with --approve:
 An automatic (risk:a) merge also requires the independent reviewer's
 ` + "`review:pass`" + ` verdict (issue #246), recorded as a PR comment bound to the
 head SHA the reviewer examined (issue #249). A pass for an older commit does
-not count: finish pauses and points at ` + "`lead review <pr>`" + `.
+not count: finish pauses and points at ` + "`lead review <pr>`" + `. The merge is
+pinned with ` + "`--match-head-commit`" + ` so a push after the check cannot slip in
+(issue #250).
 ` + "`--no-review --approve`" + ` is the human-only override; --no-review alone is
 rejected.
 
@@ -627,10 +629,16 @@ output is posted to the PR and its final line must be one of:
   VERDICT: pass
   VERDICT: needs-work
 
-The PR gets review:pass or review:needs-work. Exit status is 0 for pass and
+The PR gets review:pass or review:needs-work (created first when the
+repository does not have them yet). Exit status is 0 for pass and
 1 for needs-work (or a missing/unrecognized verdict, which never passes).
 The comment also records the reviewed head SHA; ` + "`lead finish`" + ` merges an
 automatic (risk:a) PR only while its head still matches that SHA (issue #249).
+
+The reviewer runs in the PR head's worktree: a checkout already at that
+commit is reused, otherwise a temporary worktree is created under
+<repo>/.worktrees/ and removed afterwards (issue #250). The prompt is
+passed through a file, so diffs larger than MAX_ARG_STRLEN still work.
 
 The issue number is read from a closing keyword in the PR body (Closes #n)
 or from an issue/<n>-<slug> branch; --issue overrides it. The reviewer is
@@ -1790,6 +1798,7 @@ func runReview(cmd *cobra.Command, deps Deps, raw string) error {
 	r := &review.Runner{
 		Gh:    deps.gh(),
 		Agent: deps.specAgent(stallTimeout, maxRuntime),
+		Git:   deps.gitRunner(),
 		Opts: review.Options{
 			PR:         pr,
 			Issue:      issueNumber,
@@ -1797,6 +1806,7 @@ func runReview(cmd *cobra.Command, deps Deps, raw string) error {
 			LogDir:     filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
 			WorkDir:    workDir,
 			Repository: deps.gitRunner().OriginURL(workDir),
+			RepoSlug:   git.RepoSlug(deps.gitRunner().OriginURL(workDir)),
 		},
 	}
 	res, err := r.Review(cmd.Context())

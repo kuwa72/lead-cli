@@ -81,8 +81,10 @@ type GhClient interface {
 	// PrComment mirrors `gh pr comment <pr> --body-file -` with body on
 	// stdin (independent review gate, issue #246).
 	PrComment(ctx context.Context, pr int, body string) error
-	// PrMerge mirrors `gh pr merge <pr> --squash --delete-branch`.
-	PrMerge(ctx context.Context, pr int) error
+	// PrMerge mirrors `gh pr merge <pr> --squash --delete-branch` and pins
+	// the head with --match-head-commit when headSHA is non-empty (TOCTOU
+	// between the review gate and the merge, issue #250).
+	PrMerge(ctx context.Context, pr int, headSHA string) error
 	// RepoAllowsAutoMerge mirrors `gh api repos/<owner>/<repo> --jq .allow_auto_merge`.
 	RepoAllowsAutoMerge(ctx context.Context, repo string) (bool, error)
 	// IssueClose mirrors `gh issue close <n>`.

@@ -19,12 +19,18 @@ type GitRunner interface {
 	RepoRoot(dir string) (string, error)
 	CreateBranch(repoDir, branch string) error
 	WorktreeAdd(repoDir, path, branch string) error
+	WorktreeAddDetached(repoDir, path, commit string) error
 	WorktreeRemove(repoDir, path string, force bool) error
 	OriginURL(repoDir string) string
 	BranchExists(repoDir, branch string) (bool, error)
 	WorktreeList(repoDir string) ([]git.WorktreeInfo, error)
 	ListBranches(repoDir string) ([]string, error)
 	CheckoutBranch(repoDir, branch string) error
+	// Review worktrees (issue #250): locate the PR head, make it local,
+	// and pin the main worktree that owns .worktrees/.
+	HeadSHA(dir string) (string, error)
+	MainWorktree(dir string) (string, error)
+	EnsureCommit(repoDir, sha string) error
 }
 
 // StartOptions controls one Start call.

@@ -331,11 +331,13 @@ func TestPrBody_DecodesBody(t *testing.T) {
 func TestPrMerge_UsesSquashAndDeleteBranch(t *testing.T) {
 	logPath := testutil.InstallDummy(t, "gh", prServeBody)
 
-	if err := New().PrMerge(context.Background(), 7); err != nil {
+	head := "0123456789abcdef0123456789abcdef01234567"
+	if err := New().PrMerge(context.Background(), 7, head); err != nil {
 		t.Fatalf("PrMerge: %v", err)
 	}
 	log := testutil.LogText(t, logPath)
-	for _, want := range []string{"<pr>", "<merge>", "<7>", "<--squash>", "<--delete-branch>"} {
+	for _, want := range []string{"<pr>", "<merge>", "<7>", "<--squash>", "<--delete-branch>",
+		"<--match-head-commit>", "<" + head + ">"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("gh args log missing %q, got:\n%s", want, log)
 		}

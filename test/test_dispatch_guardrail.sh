@@ -54,7 +54,7 @@ case "$1 $2" in
     printf '{"number":%s,"title":"dispatch me","body":"do the thing","state":"%s","labels":%s}' "$ISSUE" "$st" "${LABELS:-[]}" ;;
   "issue edit"|"issue comment"|"auth status") : ;;
   "issue close") touch "$CLOSED_MARK" ;;
-  "api user") printf 'octocat\n' ;;
+  "api user") printf 'lead\n' ;;
   "api repos/o/r")
     case "$*" in
       *default_branch*) printf 'main\n' ;;
@@ -118,7 +118,7 @@ rm -f "$MERGED_MARK" "$CLOSED_MARK"
 : > "$GH_LOG"; : > "$PROMPT_LOG"; : > "$FINISH_LOG"
 out="$(cd "$repo" && "$tmp/lead" dispatch --once --parallel 1 --agent claude 2>&1)" || fail "dispatch exited non-zero: $out"
 
-grep -qxF 'GH pr merge 9 --squash --delete-branch' "$GH_LOG" || fail "clean PR was not merged through finish: $(cat "$GH_LOG")"
+grep -qxF 'GH pr merge 9 --squash --delete-branch --match-head-commit 0123456789abcdef0123456789abcdef01234567' "$GH_LOG" || fail "clean PR was not merged through finish: $(cat "$GH_LOG")"
 grep -qxF 'GH issue close 8' "$GH_LOG" || fail "issue was not closed through finish: $(cat "$GH_LOG")"
 [ -f "$CLOSED_MARK" ] || fail "clean PR's issue was not closed"
 case "$out" in *"#8 completed"*) ;; *) fail "clean issue should be completed, got: $out";; esac

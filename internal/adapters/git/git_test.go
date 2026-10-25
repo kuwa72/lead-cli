@@ -163,6 +163,40 @@ func TestWorktreeAddListRemoveRoundTrip(t *testing.T) {
 	}
 }
 
+// issue #250: review worktrees are detached at the PR head, and the main
+// worktree is reported even when asked from a linked worktree.
+func TestHeadSHA_MainWorktreeAndDetachedAdd(t *testing.T) {
+	repo := initRepo(t)
+	r := New()
+
+	head, err := r.HeadSHA(repo)
+	if err != nil || len(head) != 40 {
+		t.Fatalf("HeadSHA = %q, %v; want a 40-char commit", head, err)
+	}
+	if err := r.EnsureCommit(repo, head); err != nil {
+		t.Errorf("EnsureCommit(local head): %v", err)
+	}
+	if err := r.EnsureCommit(repo, strings.Repeat("0", 40)); err == nil {
+		t.Error("EnsureCommit(unknown commit) = nil, want an error")
+	}
+
+	wt := filepath.Join(repo, ".worktrees", "review-pr7")
+	if err := r.WorktreeAddDetached(repo, wt, head); err != nil {
+		t.Fatalf("WorktreeAddDetached: %v", err)
+	}
+	got, err := r.HeadSHA(wt)
+	if err != nil || got != head {
+		t.Errorf("worktree HEAD = %q, %v; want %q", got, err, head)
+	}
+	main, err := r.MainWorktree(wt)
+	if err != nil || !samePath(main, repo) {
+		t.Errorf("MainWorktree = %q, %v; want %q", main, err, repo)
+	}
+	if err := r.WorktreeRemove(repo, wt, true); err != nil {
+		t.Fatalf("WorktreeRemove: %v", err)
+	}
+}
+
 func TestWorktreeRemoveRefusesNonWorktree(t *testing.T) {
 	repo := initRepo(t)
 	r := New()

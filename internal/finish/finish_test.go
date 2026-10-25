@@ -99,6 +99,10 @@ func TestRun_FullChainWaitMergeClose(t *testing.T) {
 	if len(fake.MergeCalls) != 1 || fake.MergeCalls[0] != 7 {
 		t.Errorf("merges = %v, want one merge of PR 7", fake.MergeCalls)
 	}
+	// issue #250: the merge is pinned to the reviewed head.
+	if want := []string{testSHA}; !reflect.DeepEqual(fake.MergeHeads, want) {
+		t.Errorf("merge heads = %v, want %v", fake.MergeHeads, want)
+	}
 	if len(fake.Closed) != 1 || fake.Closed[0] != 36 {
 		t.Errorf("closed = %v, want issue 36", fake.Closed)
 	}
@@ -601,6 +605,33 @@ func TestRun_RiskANeedsReviewPass(t *testing.T) {
 	}
 	if res.Merged || len(fake.MergeCalls) != 0 {
 		t.Fatalf("Result = %+v merges = %v; want no merge without a review pass", res, fake.MergeCalls)
+	}
+	for _, want := range []string{"no review pass", "lead review"} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("pause message missing %q: %s", want, res.Message)
+		}
+	}
+}
+
+// issue #250: a pass marker posted by another gh user is not accepted when
+// the current login is known.
+func TestRun_ForeignReviewMarkerDoesNotMerge(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := riskFake("risk:a")
+	fake.ApiUserLogin = "octocat"
+	fake.PRThread = []ports.Comment{
+		{Author: "mallory", Body: "<!-- lead-review sha=" + testSHA + " verdict=pass -->"},
+	}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil {
+		t.Fatalf("review pause = %v, want a clean pause", err)
+	}
+	if res.Merged || len(fake.MergeCalls) != 0 {
+		t.Fatalf("Result = %+v merges = %v; want no merge from another author's marker", res, fake.MergeCalls)
 	}
 	for _, want := range []string{"no review pass", "lead review"} {
 		if !strings.Contains(res.Message, want) {
