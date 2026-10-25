@@ -51,8 +51,8 @@ Sections:
 | `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
 | `lead clean <n>` | remove the workflow worktree and state |
 | `lead stop <n>` | stop a running agent (kill, clean up, record interruption) |
-| `lead enable` | enable this repository (`AGENTS.md` management block, lead-flow skill to `.agents/skills` + detected agents' skills dirs) |
-| `lead disable` | disable this repository (remove lead-flow skill from all known skills dirs) |
+| `lead enable` | enable this repository (`AGENTS.md` management block, lead-flow skill to `.agents/skills` + detected agents' skills dirs, generated-path ignores in `.git/info/exclude`) |
+| `lead disable` | disable this repository (remove lead-flow skill from all known skills dirs and the managed ignore block) |
 | `lead setup` | set up your user environment (shell completions, keybinding) |
 | `lead doctor` | diagnose `gh`, agents, and branch protection |
 | `lead version` | show version |
@@ -69,6 +69,19 @@ lead enable                 # this repository (skill + AGENTS.md block)
 ```
 
 `lead setup --write` sets up your user environment (shell completion and a keybinding, `$HOME` only); `lead enable` enables this repository (the `AGENTS.md` rule block and the lead-flow skill, written to `.agents/skills/lead-flow` plus the skills directory of each agent detected on `PATH` or configured in `inbox-config.json`).
+
+### Generated files and `git status`
+
+`lead enable` offers to add the paths it generates to the repository's local git exclude file (`.git/info/exclude`, resolved with `git rev-parse --git-path info/exclude`):
+
+```
+.worktrees/
+.agents/skills/lead-flow/
+.claude/skills/lead-flow/
+...
+```
+
+This keeps `git status` clean after enabling: `.worktrees/` (used by `lead run --worktree` and `lead dispatch`) and the lead-flow skill copies no longer appear as untracked. The prompt defaults to yes and `--yes` applies it without asking. Decline if the project wants to commit its skills; the command prints the entries and a hint so the choice is explicit. `lead disable` removes the managed block and leaves foreign exclude entries untouched.
 
 ## Conventions
 

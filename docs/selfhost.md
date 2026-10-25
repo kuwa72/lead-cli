@@ -49,6 +49,7 @@ lead run <Issue番号> --mode review
 ```
 
 - **インライン起動**: `cd <dir> && <agent cmd>` と Issue から生成されたプロンプトが標準出力に表示されます。herdr ペイン連携は issue #225 で削除されました。
+- **Worktree の ignore**: `--worktree` は `<repo>/.worktrees/` に作成されます。`lead enable` が `.worktrees/` と lead-flow skill dir を `.git/info/exclude` に登録するため、`git status` に untracked として現れません。skills をコミットしたい場合は enable の ignore 確認で拒否してください。
 
 ### Step 2: TDD 実装とローカルテスト
 
