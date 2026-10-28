@@ -821,3 +821,24 @@ func TestRun_LabelLookupFailureStops(t *testing.T) {
 		t.Errorf("merged despite unknown risk class")
 	}
 }
+
+// issue #273: a skipped check is not a pass. GitHub reports skipped/neutral
+// checks as mergeable, so a path-filtered job could let an untested PR merge.
+func TestWaitChecks_SkippingIsNotPass(t *testing.T) {
+	fake := &testutil.FakeGhClient{
+		Checks: []ports.PRCheck{{Name: "test", Bucket: "skipping", State: "SKIPPED"}},
+	}
+	err := WaitChecks(context.Background(), fake, 7, time.Minute, time.Millisecond, noSleep)
+	if err == nil || !strings.Contains(err.Error(), "skipped") {
+		t.Fatalf("err = %v, want skipped-check failure", err)
+	}
+}
+
+func TestWaitChecks_PassStillSucceeds(t *testing.T) {
+	fake := &testutil.FakeGhClient{
+		Checks: []ports.PRCheck{{Name: "test", Bucket: "pass", State: "SUCCESS"}},
+	}
+	if err := WaitChecks(context.Background(), fake, 7, time.Minute, time.Millisecond, noSleep); err != nil {
+		t.Fatalf("err = %v, want pass", err)
+	}
+}
