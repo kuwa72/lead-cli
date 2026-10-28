@@ -424,6 +424,34 @@ func (m Model) hasAnyItems() bool {
 	return false
 }
 
+// previewPaneHeight is the body height the preview pane gets in split mode.
+func (m Model) previewPaneHeight() int {
+	return m.bodyHeightFor(strings.Count(m.footer(), "\n") + 1 + logPaneHeight)
+}
+
+// previewOverflows reports whether the selected issue's preview is taller than
+// the pane, so J/K can reveal more content. Pane height and content budget are
+// resolved here so the scroll hint and previewLines agree on what overflows.
+func (m Model) previewOverflows() bool {
+	if !m.isSplit() {
+		return false
+	}
+	row, ok := m.current()
+	if !ok || row.IsHeader() || m.detail.Number == 0 {
+		return false
+	}
+	h := m.previewPaneHeight()
+	content, more := m.previewContent(h + m.previewOffset + 20)
+	if more {
+		return true
+	}
+	visible := len(content) - m.previewOffset
+	if visible < 0 {
+		visible = 0
+	}
+	return visible+1 > h // +1 for the title line
+}
+
 // previewHeader is the column-header cell above the right preview pane.
 func (m Model) previewHeader() string {
 	row, ok := m.current()
@@ -433,7 +461,11 @@ func (m Model) previewHeader() string {
 		}
 		return ""
 	}
-	return Sanitize(fmt.Sprintf("#%d  %s", m.detail.Number, row.Section.Kind.Title()))
+	header := Sanitize(fmt.Sprintf("#%d  %s", m.detail.Number, row.Section.Kind.Title()))
+	if m.previewOffset > 0 {
+		header += fmt.Sprintf("  ↑ %d", m.previewOffset)
+	}
+	return header
 }
 
 // previewLines renders the selected issue's detail into at most h lines of
