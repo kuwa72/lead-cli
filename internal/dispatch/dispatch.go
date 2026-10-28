@@ -542,7 +542,7 @@ func (d *Dispatcher) reconnect(ctx context.Context, opts Options) ([]Running, []
 	if err != nil {
 		return nil, nil, fmt.Errorf("dispatch: %w", err)
 	}
-	key := repoKey(d.Git.OriginURL(repoRoot))
+	key := RepoKey(d.Git.OriginURL(repoRoot))
 	d.mu.Lock()
 	all, err := d.Store.List()
 	d.mu.Unlock()
@@ -552,7 +552,7 @@ func (d *Dispatcher) reconnect(ctx context.Context, opts Options) ([]Running, []
 	var running []Running
 	var settled []Result
 	for _, w := range all {
-		if w.PID <= 0 || w.Part != "" || repoKey(w.Repository) != key {
+		if w.PID <= 0 || w.Part != "" || RepoKey(w.Repository) != key {
 			continue
 		}
 		if d.alive(w.PID) {
@@ -595,9 +595,10 @@ func processAlive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-// repoKey normalizes what workflow.Start stores in Workflow.Repository so
+// RepoKey normalizes what workflow.Start stores in Workflow.Repository so
 // records of this repository can be matched whatever URL form origin had.
-func repoKey(origin string) string {
+// It is also the key of the repository-scoped dispatch lock (issue #262).
+func RepoKey(origin string) string {
 	if s := git.RepoSlug(origin); s != "" {
 		return s
 	}
@@ -634,7 +635,7 @@ func (d *Dispatcher) RunningCount() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	key := repoKey(d.Git.OriginURL(repoRoot))
+	key := RepoKey(d.Git.OriginURL(repoRoot))
 	d.mu.Lock()
 	all, err := d.Store.List()
 	d.mu.Unlock()
@@ -646,7 +647,7 @@ func (d *Dispatcher) RunningCount() (int, error) {
 		if w.Status != state.StatusInProgress || w.Part != "" {
 			continue
 		}
-		if repoKey(w.Repository) != key {
+		if RepoKey(w.Repository) != key {
 			continue
 		}
 		count++
@@ -843,14 +844,14 @@ func (d *Dispatcher) Stop(ctx context.Context, number int) error {
 	if err != nil {
 		return fmt.Errorf("stop: %w", err)
 	}
-	key := repoKey(d.Git.OriginURL(repoRoot))
+	key := RepoKey(d.Git.OriginURL(repoRoot))
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	w, ok, err := d.Store.Get(number, "")
 	if err != nil {
 		return fmt.Errorf("stop: %w", err)
 	}
-	if !ok || repoKey(w.Repository) != key || w.PID <= 0 {
+	if !ok || RepoKey(w.Repository) != key || w.PID <= 0 {
 		return fmt.Errorf("stop: no running agent for #%d", number)
 	}
 	kill := d.Kill
