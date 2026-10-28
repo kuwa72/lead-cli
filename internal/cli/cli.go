@@ -615,7 +615,8 @@ touches $HOME. Repository issue labels are kept.`,
 dispatch appends one line per run to ` + "`runs.jsonl`" + ` next to the state
 file; workflows.json only holds live work. stats reports runs, completed,
 failed, success rate, median duration, reverts, and scenario pass counts.
---json prints the same numbers for scripts.`,
+--json prints the same numbers for scripts (success_rate is a ratio,
+median_duration_seconds is a number).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStats(cmd, deps)
 		},
@@ -1582,8 +1583,7 @@ func launchAgent(out io.Writer, res workflow.StartResult, agentName string, iss 
 	return err
 }
 
-// runStatus implements `lead status`: local workflow records (RFC §5.3).
-// Live GitHub/Git enrichment lands with #41; corrupt files surface an error.
+// runStats implements `lead stats`: aggregate the run history (issue #274).
 func runStats(cmd *cobra.Command, deps Deps) error {
 	asJSON, _ := cmd.Flags().GetBool("json")
 	recs, err := ledger.Read(ledger.Path(deps.stateFile()))
@@ -1608,6 +1608,8 @@ func runStats(cmd *cobra.Command, deps Deps) error {
 	return nil
 }
 
+// runStatus implements `lead status`: local workflow records (RFC §5.3).
+// Live GitHub/Git enrichment lands with #41; corrupt files surface an error.
 func runStatus(cmd *cobra.Command, deps Deps) error {
 	asJSON, _ := cmd.Flags().GetBool("json")
 	all, err := (&state.Store{Path: deps.stateFile()}).List()
@@ -2063,6 +2065,7 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 		PR: pr, Part: part, Merge: merge, Close: closeIssue, NoClose: noClose,
 		Comment: comment, Outcome: outcome, MergePolicy: policy,
 		Approve:           approve,
+		LedgerPath:        ledger.Path(deps.stateFile()),
 		NoReview:          noReview,
 		OverrideGuardrail: overrideGuardrail,
 		Git:               deps.gitRunner(), WorkDir: workDir,

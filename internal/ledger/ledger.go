@@ -18,6 +18,13 @@ import (
 	"time"
 )
 
+// Phases of a record. Runs are attempts; merge events describe what finish
+// did with the PR and never count as another attempt.
+const (
+	PhaseRun   = "run"
+	PhaseMerge = "merge"
+)
+
 // Outcomes recorded by dispatch and finish.
 const (
 	OutcomeCompleted       = "completed"
@@ -26,12 +33,17 @@ const (
 	OutcomeGuardrail       = "guardrail"
 	OutcomeAwaitingHuman   = "awaiting_human"
 	OutcomePostMergeFailed = "postmerge-failed"
+	OutcomeError           = "error"
+	OutcomePaused          = "paused"
 )
 
 // Record is one run. Fields that a caller cannot know stay empty.
 type Record struct {
 	Repo      string    `json:"repo,omitempty"`
 	Issue     int       `json:"issue"`
+	// Phase separates the dispatch run ("run", default) from the merge
+	// event ("merge"): both are appended, but only runs count as attempts.
+	Phase     string    `json:"phase,omitempty"`
 	Agent     string    `json:"agent,omitempty"`
 	Mode      string    `json:"mode,omitempty"`
 	StartedAt time.Time `json:"started_at"`
@@ -127,13 +139,23 @@ func Aggregate(recs []Record) Stats {
 	var s Stats
 	var durations []time.Duration
 	for _, r := range recs {
+		if r.Phase != "" && r.Phase != PhaseRun {
+			// A merge event: contributes scenarios/reverts, not attempts.
+			if pass, total, ok := parseScenarios(r.Scenarios); ok {
+				s.Scenarios += pass
+				s.ScenarioAll += total
+			}
+			if r.Outcome == OutcomePostMergeFailed {
+				s.Reverts++
+			}
+			continue
+		}
 		s.Runs++
 		switch r.Outcome {
 		case OutcomeCompleted:
 			s.Completed++
 		case OutcomeAwaitingHuman:
 			s.Awaiting++
-			s.Failed++
 		case OutcomePostMergeFailed:
 			s.Failed++
 			s.Reverts++
@@ -178,11 +200,16 @@ func (s Stats) String() string {
 	fmt.Fprintf(&b, "runs: %d\n", s.Runs)
 	fmt.Fprintf(&b, "completed: %d\n", s.Completed)
 	fmt.Fprintf(&b, "failed: %d\n", s.Failed)
+	if s.Awaiting > 0 {
+		fmt.Fprintf(&b, "awaiting human: %d\n", s.Awaiting)
+	}
 	fmt.Fprintf(&b, "success rate: %.1f%%\n", s.SuccessRate*100)
 	if s.MedianTime > 0 {
 		fmt.Fprintf(&b, "median duration: %s\n", s.MedianTime.Round(time.Second))
 	}
-	fmt.Fprintf(&b, "reverts: %d\n", s.Reverts)
+	if s.Reverts > 0 {
+		fmt.Fprintf(&b, "reverts: %d\n", s.Reverts)
+	}
 	if s.ScenarioAll > 0 {
 		fmt.Fprintf(&b, "scenarios: %d/%d\n", s.Scenarios, s.ScenarioAll)
 	}

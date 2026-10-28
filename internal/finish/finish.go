@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
+	"github.com/kuwa72/lead-cli/internal/ledger"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/review"
 	"github.com/kuwa72/lead-cli/internal/state"
@@ -47,6 +48,9 @@ type Options struct {
 	NoReview     bool
 	Timeout      time.Duration
 	PollInterval time.Duration
+	// LedgerPath receives one line per merge attempt (issue #274). Empty
+	// disables recording.
+	LedgerPath string
 	// Git and WorkDir let finish remove the issue's worktree when it
 	// defers the merge to a human (issue #245). Nil Git skips cleanup.
 	Git     workflow.GitRunner
@@ -135,9 +139,41 @@ func WaitChecks(ctx context.Context, gh ports.GhClient, pr int, timeout, interva
 	}
 }
 
+// mergeOutcome maps a finished merge attempt to a ledger outcome.
+func mergeOutcome(res Result, err error, opts Options) string {
+	switch {
+	case err != nil:
+		return ledger.OutcomeError
+	case res.Merged:
+		return ledger.OutcomeCompleted
+	case res.AwaitingHuman:
+		return ledger.OutcomeAwaitingHuman
+	case len(res.Guarded) > 0:
+		return ledger.OutcomeGuardrail
+	case opts.Outcome != "":
+		return ledger.OutcomeCompleted
+	default:
+		return ledger.OutcomePaused
+	}
+}
+
 // Run executes finish for one issue: re-verify PR, wait CI, policy-gated
 // merge, optional comment/close, and state recording.
-func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, opts Options) (Result, error) {
+func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, opts Options) (res Result, err error) {
+	started := time.Now()
+	var mode string
+	var prNumber int
+	defer func() {
+		if opts.LedgerPath == "" {
+			return
+		}
+		_ = ledger.Append(opts.LedgerPath, ledger.Record{
+			Issue: issue, Phase: ledger.PhaseMerge, Mode: mode, PR: prNumber,
+			StartedAt: started, EndedAt: time.Now(),
+			Outcome: mergeOutcome(res, err, opts),
+		})
+	}()
+
 	if opts.NoReview && !opts.Approve {
 		return Result{}, errors.New("finish: --no-review requires --approve (both are human-only confirmations)")
 	}
@@ -149,7 +185,8 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return Result{}, fmt.Errorf("no workflow for #%d; run `lead run %d` first", issue, issue)
 	}
 
-	prNumber := opts.PR
+	mode = w.Mode
+	prNumber = opts.PR
 	var prRef *state.PRRef
 	if prNumber != 0 {
 		for i := range w.PullRequests {

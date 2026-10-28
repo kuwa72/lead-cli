@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kuwa72/lead-cli/internal/ledger"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
@@ -840,5 +841,29 @@ func TestWaitChecks_PassStillSucceeds(t *testing.T) {
 	}
 	if err := WaitChecks(context.Background(), fake, 7, time.Minute, time.Millisecond, noSleep); err != nil {
 		t.Fatalf("err = %v, want pass", err)
+	}
+}
+
+// issue #274: finish appends a merge record; it must not count as another run.
+func TestRun_RecordsMergeInLedger(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	ledgerPath := t.TempDir() + "/runs.jsonl"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+
+	if _, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep, LedgerPath: ledgerPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := ledger.Read(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("records = %d, want 1", len(recs))
+	}
+	if recs[0].Phase != ledger.PhaseMerge || recs[0].Outcome != ledger.OutcomeCompleted {
+		t.Fatalf("record = %+v", recs[0])
 	}
 }

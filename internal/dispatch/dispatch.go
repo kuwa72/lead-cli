@@ -119,11 +119,11 @@ type Launcher interface {
 type Outcome string
 
 const (
-	OutcomeCompleted     Outcome = "completed"      // issue closed on GitHub; cleaned up
-	OutcomeRetry         Outcome = "retry"          // failed; stays ready for the next pass
-	OutcomeBlocked       Outcome = "blocked"        // failed MaxAttempts times; labelled blocked
-	OutcomeAwaitingHuman Outcome = "awaiting_human" // CI passed; waiting for human approval (issue #245)
-	OutcomeError         Outcome = "error"          // dispatch itself failed before/around launch
+	OutcomeCompleted     Outcome = ledger.OutcomeCompleted     // issue closed on GitHub; cleaned up
+	OutcomeRetry         Outcome = ledger.OutcomeRetry         // failed; stays ready for the next pass
+	OutcomeBlocked       Outcome = ledger.OutcomeBlocked       // failed MaxAttempts times; labelled blocked
+	OutcomeAwaitingHuman Outcome = ledger.OutcomeAwaitingHuman // CI passed; waiting for human approval (issue #245)
+	OutcomeError         Outcome = ledger.OutcomeError         // dispatch itself failed before/around launch
 )
 
 // Result describes one issue handled in a pass.
@@ -724,6 +724,7 @@ func (d *Dispatcher) recordRun(opts Options, number int, started time.Time, res 
 	}
 	_ = ledger.Append(opts.LedgerPath, ledger.Record{
 		Issue:     number,
+		Phase:     ledger.PhaseRun,
 		Agent:     opts.Agent,
 		Mode:      state.ModeImplement,
 		StartedAt: started,

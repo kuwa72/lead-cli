@@ -108,3 +108,29 @@ func TestPathIsNextToStateFile(t *testing.T) {
 		t.Fatalf("Path = %q", got)
 	}
 }
+
+func TestAggregateAwaitingIsNotFailed(t *testing.T) {
+	s := Aggregate([]Record{
+		{Outcome: OutcomeCompleted},
+		{Outcome: OutcomeAwaitingHuman},
+	})
+	if s.Failed != 0 || s.Awaiting != 1 {
+		t.Fatalf("stats = %+v, want failed=0 awaiting=1", s)
+	}
+	if !strings.Contains(s.String(), "awaiting human: 1") {
+		t.Fatalf("String() = %q", s.String())
+	}
+}
+
+func TestAggregateMergePhaseIsNotARun(t *testing.T) {
+	s := Aggregate([]Record{
+		{Phase: PhaseRun, Outcome: OutcomeCompleted},
+		{Phase: PhaseMerge, Outcome: OutcomeCompleted, Scenarios: "2/2"},
+	})
+	if s.Runs != 1 || s.Completed != 1 {
+		t.Fatalf("stats = %+v, want one run", s)
+	}
+	if s.Scenarios != 2 || s.ScenarioAll != 2 {
+		t.Fatalf("scenarios = %d/%d, want 2/2 from the merge record", s.Scenarios, s.ScenarioAll)
+	}
+}
