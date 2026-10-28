@@ -829,16 +829,17 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	notifier := notify.New(notify.Options{Disabled: cfg.NotifyDisabled})
 
 	opts := inbox.Options{
-		Gh:         deps.gh(),
-		Store:      store,
-		Seen:       &inbox.SeenStore{Path: inbox.ResolveSeenPath()},
-		Cache:      &inbox.CacheStore{Path: inbox.ResolveCachePath(repoSlug)},
-		Editor:     os.Getenv("EDITOR"),
-		AgentsPath: filepath.Join(root, "AGENTS.md"),
-		InRepo:     inRepo,
-		Repo:       repoSlug,
-		Parallel:   parallel,
-		Theme:      os.Getenv("LEAD_THEME"),
+		Gh:           deps.gh(),
+		Store:        store,
+		Seen:         &inbox.SeenStore{Path: inbox.ResolveSeenPath()},
+		Cache:        &inbox.CacheStore{Path: inbox.ResolveCachePath(repoSlug)},
+		PreviewCache: &inbox.PreviewCacheStore{Dir: inbox.ResolvePreviewCacheDir(repoSlug), Repo: repoSlug},
+		Editor:       os.Getenv("EDITOR"),
+		AgentsPath:   filepath.Join(root, "AGENTS.md"),
+		InRepo:       inRepo,
+		Repo:         repoSlug,
+		Parallel:     parallel,
+		Theme:        os.Getenv("LEAD_THEME"),
 	}
 	opts.Stop = func(ctx context.Context, number int) (string, error) {
 		d := &dispatch.Dispatcher{
