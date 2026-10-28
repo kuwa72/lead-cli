@@ -91,9 +91,12 @@ func (o *Options) sleep(d time.Duration) {
 	time.Sleep(d)
 }
 
-// WaitChecks polls `gh pr checks` until all checks pass (pass/skipping),
-// a check fails/cancels, the context ends, or the timeout hits. Empty
-// check lists keep waiting (checks not registered yet, like bin/ci-wait).
+// WaitChecks polls `gh pr checks` until all checks pass, a check
+// fails/cancels/skips, the context ends, or the timeout hits. A skipped
+// check is not a pass: GitHub treats skipped and neutral as mergeable, so
+// a path-filtered job could otherwise let an untested PR through
+// (issue #273). Empty check lists keep waiting (checks not registered yet,
+// like bin/ci-wait).
 func WaitChecks(ctx context.Context, gh ports.GhClient, pr int, timeout, interval time.Duration, sleep func(time.Duration)) error {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -104,10 +107,12 @@ func WaitChecks(ctx context.Context, gh ports.GhClient, pr int, timeout, interva
 		if err != nil {
 			return fmt.Errorf("PR #%d: checks: %w", pr, err)
 		}
-		var failed, pending []string
+		var failed, skipped, pending []string
 		for _, c := range checks {
 			switch c.Bucket {
-			case "pass", "skipping":
+			case "pass":
+			case "skipping":
+				skipped = append(skipped, c.Name)
 			case "fail", "cancel":
 				failed = append(failed, c.Name)
 			default:
@@ -116,6 +121,9 @@ func WaitChecks(ctx context.Context, gh ports.GhClient, pr int, timeout, interva
 		}
 		if len(failed) > 0 {
 			return fmt.Errorf("PR #%d: failing checks: %s", pr, strings.Join(failed, ", "))
+		}
+		if len(skipped) > 0 {
+			return fmt.Errorf("PR #%d: skipped checks are not a pass: %s", pr, strings.Join(skipped, ", "))
 		}
 		if len(checks) > 0 && len(pending) == 0 {
 			return nil
