@@ -1815,7 +1815,11 @@ func (m Model) viewDetail() string {
 	if content == "" {
 		content = "No issue selected."
 	}
-	lines := strings.Split(content, "\n")
+	w := m.screenWidth()
+	var lines []string
+	for _, l := range strings.Split(content, "\n") {
+		lines = append(lines, wrapCells(l, w)...)
+	}
 	off := m.detailOffset
 	if off > len(lines)-1 {
 		off = max(0, len(lines)-1)

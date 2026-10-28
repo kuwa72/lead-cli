@@ -99,6 +99,35 @@ func truncTail(s string, w int) string {
 	return b.String() + "…"
 }
 
+// wrapCells breaks s into lines of at most w display cells without dropping
+// characters. Full-width runes count as two cells (go-runewidth), so CJK text
+// wraps at the pane width instead of being cut off.
+func wrapCells(s string, w int) []string {
+	if w <= 0 || cellWidth(s) <= w {
+		return []string{s}
+	}
+	var lines []string
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if used > 0 && used+rw > w {
+			lines = append(lines, b.String())
+			b.Reset()
+			used = 0
+		}
+		b.WriteRune(r)
+		used += rw
+	}
+	if b.Len() > 0 {
+		lines = append(lines, b.String())
+	}
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
 func padRight(s string, w int) string {
 	if d := w - cellWidth(s); d > 0 {
 		return s + strings.Repeat(" ", d)
@@ -459,9 +488,16 @@ func (m Model) previewLines(w, h int) []string {
 	}
 	for _, l := range content {
 		if len(lines) >= h {
+			more = true
 			break
 		}
-		lines = append(lines, truncTail(Sanitize(l), w))
+		for _, wrapped := range wrapCells(Sanitize(l), w) {
+			if len(lines) >= h {
+				more = true
+				break
+			}
+			lines = append(lines, wrapped)
+		}
 	}
 	if (more || m.previewOffset > 0) && len(lines) < h {
 		lines = append(lines, "Enter: Full details")
