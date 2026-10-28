@@ -107,6 +107,15 @@ case "$out" in *"#7"*"completed"*) ;; *) fail "output lacks completed report: $o
 if [ -f "$LEAD_STATE_FILE" ] && grep -q '"issue": 7' "$LEAD_STATE_FILE"; then fail "state record for #7 left behind"; fi
 ls "$tmp/state/logs"/issue-7*.log >/dev/null 2>&1 || fail "agent log file not written under state dir"
 
+# issue #274: one ledger line per run, next to the state file.
+ledger_file="$(dirname "$LEAD_STATE_FILE")/runs.jsonl"
+[ -f "$ledger_file" ] || fail "ledger not written: $ledger_file"
+python3 - "$ledger_file" <<'PY' || fail "ledger lacks a completed run for #7"
+import json, sys
+recs = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+assert any(r["issue"] == 7 and r["outcome"] == "completed" for r in recs), recs
+PY
+
 # --- 2. failure path: 3 attempts → blocked, then no re-dispatch ---------------
 rm -f "$CLOSED_MARK"; : > "$AGENT_LOG"; : > "$GH_LOG"
 export AGENT_FAIL=1

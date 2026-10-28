@@ -33,6 +33,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/doctor"
+	"github.com/kuwa72/lead-cli/internal/ledger"
 	"github.com/kuwa72/lead-cli/internal/logtail"
 	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
@@ -74,6 +75,9 @@ type Options struct {
 	// (issue #186). Zero means DefaultMaxRuntime; negative disables the
 	// wall-clock check.
 	MaxRuntime time.Duration
+	// LedgerPath receives one line per run (issue #274). Empty means
+	// runs.jsonl next to the state file.
+	LedgerPath string
 }
 
 func (o Options) withDefaults() Options {
@@ -222,6 +226,9 @@ func (d *Dispatcher) lookPath() func(string) (string, error) {
 // return once the picked issues are all settled.
 func (d *Dispatcher) Once(ctx context.Context) (Report, error) {
 	opts := d.Opts.withDefaults()
+	if opts.LedgerPath == "" {
+		opts.LedgerPath = ledger.Path(d.Store.Path)
+	}
 	running, settled, err := d.reconnect(ctx, opts)
 	if err != nil {
 		return Report{}, err
@@ -655,8 +662,11 @@ func (d *Dispatcher) RunningCount() (int, error) {
 	return count, nil
 }
 
-func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) Result {
-	res := Result{Issue: number}
+func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res Result) {
+	res = Result{Issue: number}
+	started := time.Now()
+	defer func() { d.recordRun(opts, number, started, res) }()
+
 	iss, err := d.Gh.View(ctx, number)
 	if err != nil {
 		res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: view: %w", number, err)
@@ -700,6 +710,27 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) Resul
 		return Result{Issue: number, Worktree: start.Worktree, LogPath: logPath, Outcome: OutcomeRetry}
 	}
 	return d.evaluate(ctx, opts, number, start.RepoRoot, start.Worktree, logPath, waitErr)
+}
+
+// recordRun appends one ledger line for a finished run (issue #274). The
+// history workflows.json deletes on completion lives here.
+func (d *Dispatcher) recordRun(opts Options, number int, started time.Time, res Result) {
+	if opts.LedgerPath == "" {
+		return
+	}
+	attempts := 0
+	if w, ok, err := d.Store.Get(number, ""); err == nil && ok {
+		attempts = w.Attempts
+	}
+	_ = ledger.Append(opts.LedgerPath, ledger.Record{
+		Issue:     number,
+		Agent:     opts.Agent,
+		Mode:      state.ModeImplement,
+		StartedAt: started,
+		EndedAt:   time.Now(),
+		Outcome:   string(res.Outcome),
+		Attempts:  attempts,
+	})
 }
 
 // evaluate settles an issue whose agent is no longer running: closed on
