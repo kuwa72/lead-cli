@@ -240,7 +240,13 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return Result{}, fmt.Errorf("PR #%d: %w", prNumber, err)
 	}
 	if info.State == "MERGED" {
-		// Retry path: merge already done, skip to comment/close.
+		// Retry path: merge already done, skip to comment/close. A
+		// postmerge failure left the record blocked; closing here would
+		// report the reverted change as done (issue #275).
+		if w.Status == state.StatusBlocked {
+			return Result{ChecksPassed: true, Merged: true, PostMergeFailed: true,
+				Message: fmt.Sprintf("PR #%d is merged, but the post-merge smoke failed and the merge was reverted; resolve the incident before re-running the work.", prNumber)}, nil
+		}
 		return runClosePhase(ctx, gh, store, w, prRef, prNumber, opts, false)
 	}
 	if info.State != "OPEN" {
@@ -380,6 +386,9 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		}
 		if pm.Git == nil {
 			pm.Git = opts.Git
+		}
+		if pm.Repo == "" {
+			pm.Repo = repo
 		}
 		pmRes, pmErr := PostMerge(ctx, gh, pm)
 		if pmErr != nil {

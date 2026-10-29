@@ -719,7 +719,9 @@ Run it manually to re-check a merge that already happened; ` + "`lead finish`" +
 runs the same check right after merging (issue #275).
 
 The revert is committed in the temporary worktree and pushed as
-HEAD:<base>, so the caller's checkout and local branches are untouched.
+HEAD:<default-branch>, so the caller's checkout and local branches are
+untouched. Branch protection that forbids direct pushes makes that push
+fail; the incident then reports that manual recovery is required.
 When the revert itself fails, main stays broken and the incident says
 manual recovery is required.`,
 		Args: cobra.ExactArgs(1),
@@ -2135,7 +2137,8 @@ func runPostmerge(cmd *cobra.Command, deps Deps, raw string) error {
 	if err != nil {
 		return err
 	}
-	w, ok, err := (&state.Store{Path: deps.stateFile()}).Get(number, "")
+	store := &state.Store{Path: deps.stateFile()}
+	w, ok, err := store.Get(number, "")
 	if err != nil {
 		return err
 	}
@@ -2159,16 +2162,26 @@ func runPostmerge(cmd *cobra.Command, deps Deps, raw string) error {
 	started := time.Now()
 	res, err := finish.PostMerge(cmd.Context(), deps.gh(), finish.PostMergeOptions{
 		Issue: number, PR: pr, WorkDir: workDir, Git: deps.gitRunner(),
-		Smoke: postMergeSmoke(), Timeout: timeout,
+		Repo: git.RepoSlug(w.Repository), Smoke: postMergeSmoke(), Timeout: timeout,
 	})
 	if res.Message != "" {
 		fmt.Fprintln(cmd.OutOrStdout(), res.Message)
 	}
-	if err != nil && res.SmokeFailed {
+	if err != nil && res.SmokeFailed && w.Status != state.StatusClosed {
+		w.Status = state.StatusBlocked
+		if uerr := store.Upsert(w); uerr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "postmerge: state: %v\n", uerr)
+		}
+	}
+	if !res.Skipped && (res.Passed || res.SmokeFailed) {
+		outcome := ledger.OutcomeCompleted
+		if res.SmokeFailed {
+			outcome = ledger.OutcomePostMergeFailed
+		}
 		if aerr := ledger.Append(ledger.Path(deps.stateFile()), ledger.Record{
 			Issue: number, Phase: ledger.PhaseMerge, PR: pr,
 			StartedAt: started, EndedAt: time.Now(),
-			Outcome: ledger.OutcomePostMergeFailed, RevertOf: res.RevertOf,
+			Outcome: outcome, RevertOf: res.RevertOf,
 		}); aerr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "postmerge: ledger: %v\n", aerr)
 		}

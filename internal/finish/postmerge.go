@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kuwa72/lead-cli/internal/inbox"
 	"github.com/kuwa72/lead-cli/internal/ports"
 )
 
@@ -25,7 +26,9 @@ const DefaultPostMergeTimeout = 10 * time.Minute
 // PostMergeGit is the git subset the post-merge smoke needs. It is
 // satisfied by workflow.GitRunner.
 type PostMergeGit interface {
-	RepoRoot(dir string) (string, error)
+	// MainWorktree is the checkout that owns .worktrees/. It matters
+	// because finish runs from the issue's linked worktree.
+	MainWorktree(dir string) (string, error)
 	EnsureCommit(repoDir, sha string) error
 	WorktreeAddDetached(repoDir, path, commit string) error
 	WorktreeRemove(repoDir, path string, force bool) error
@@ -42,8 +45,11 @@ type PostMergeOptions struct {
 	MergeSHA string
 	// WorkDir is a checkout inside the repository.
 	WorkDir string
-	// Base is the branch the revert is pushed to (default main).
+	// Base is the branch the revert is pushed to (default: the repo's
+	// default branch, else main).
 	Base string
+	// Repo is "owner/repo" for the default-branch lookup; empty skips it.
+	Repo string
 	// Smoke overrides DefaultSmoke (tests).
 	Smoke func(ctx context.Context, dir string) error
 	// Timeout caps the smoke (default 10m).
@@ -96,10 +102,15 @@ func PostMerge(ctx context.Context, gh ports.GhClient, opts PostMergeOptions) (P
 	base := opts.Base
 	if base == "" {
 		base = "main"
+		if opts.Repo != "" {
+			if def, err := gh.RepoDefaultBranch(ctx, opts.Repo); err == nil && def != "" {
+				base = def
+			}
+		}
 	}
-	root, err := opts.Git.RepoRoot(opts.WorkDir)
+	root, err := opts.Git.MainWorktree(opts.WorkDir)
 	if err != nil {
-		return PostMergeResult{}, fmt.Errorf("postmerge: repository root: %w", err)
+		return PostMergeResult{}, fmt.Errorf("postmerge: main worktree: %w", err)
 	}
 	if err := opts.Git.EnsureCommit(root, sha); err != nil {
 		return PostMergeResult{}, fmt.Errorf("postmerge: merge commit %s is not available: %w", shortSHA(sha), err)
@@ -158,9 +169,14 @@ func revertAndFile(ctx context.Context, gh ports.GhClient, opts PostMergeOptions
 	}
 	ref, createErr := gh.IssueCreate(ctx, title, body, labels)
 	if createErr != nil {
-		return res, fmt.Errorf("postmerge: smoke failed and the incident issue could not be filed: %w", createErr)
+		return res, fmt.Errorf("postmerge: smoke failed (reverted: %t) and the incident issue could not be filed: %w", res.Reverted, createErr)
 	}
 	res.Incident = ref.Number
+	// The change is no longer on main: keep the queue from re-dispatching
+	// the issue and leave a pointer on it (best effort).
+	_ = gh.IssueRemoveLabel(ctx, opts.Issue, inbox.LabelReady)
+	_ = gh.IssueAddLabel(ctx, opts.Issue, inbox.LabelBlocked)
+	_ = gh.IssueComment(ctx, opts.Issue, blockComment(opts, sha, base, ref.Number, revertErr))
 	if revertErr != nil {
 		res.Message = fmt.Sprintf("postmerge: smoke failed for PR #%d; revert failed (%v), so main is still broken. Manual recovery is required (incident #%d).", opts.PR, revertErr, ref.Number)
 		return res, fmt.Errorf("postmerge: smoke failed and the revert failed: %w", revertErr)
@@ -183,6 +199,14 @@ func incidentBody(opts PostMergeOptions, sha, base string, smokeErr, revertErr e
 	}
 	fmt.Fprintf(&b, "\n## スモーク失敗\n\n```\n%s\n```\n", strings.TrimSpace(smokeErr.Error()))
 	return b.String()
+}
+
+// blockComment tells the issue why it left the queue.
+func blockComment(opts PostMergeOptions, sha, base string, incident int, revertErr error) string {
+	if revertErr != nil {
+		return fmt.Sprintf("postmerge: main のマージ後スモークが失敗し、revert にも失敗しました。手動復旧が必要です (incident #%d, merge %s)。", incident, sha)
+	}
+	return fmt.Sprintf("postmerge: main のマージ後スモークが失敗したため、PR #%d のマージを revert しました (`%s` に push 済み)。incident #%d を確認してください。", opts.PR, base, incident)
 }
 
 // ensureIncidentLabel creates the incident label when the repository does

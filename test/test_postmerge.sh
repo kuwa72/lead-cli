@@ -44,10 +44,11 @@ case "$1 $2" in
   "pr checks") printf '[{"bucket":"pass","name":"test","state":"SUCCESS"}]' ;;
   "pr merge") printf '{"number":7,"state":"MERGED"}' ;;
   "api user") printf 'lead\n' ;;
+  "api repos/o/r") printf 'main\n' ;;
   "label list") printf '[{"name":"incident"}]' ;;
   "label create") : ;;
   "issue create") printf 'https://github.com/o/r/issues/900\n' ;;
-  "issue close" | "issue comment") : ;;
+  "issue close" | "issue comment" | "issue edit") : ;;
   *) echo "unexpected gh call: $@" >&2; exit 3 ;;
 esac
 EOF
@@ -102,6 +103,7 @@ seed() {
   local name="$1"
   repo="$tmp/repo-$name"
   mk_repo "$repo"
+  git -C "$repo" remote add origin https://github.com/o/r.git
   mkdir -p "$tmp/state-$name"
   export LEAD_STATE_FILE="$tmp/state-$name/wf.json"
   export GIT_WT_LIST="$tmp/worktrees-$name.list"
@@ -147,11 +149,15 @@ grep -q "GHLOG issue create --title \[P0\] postmerge smoke failed after PR #7" "
   || fail "scenario B: incident issue not created: $(cat "$GH_ARGS_LOG")"
 grep -q "GHLOG issue create .*--label incident" "$GH_ARGS_LOG" || fail "scenario B: incident lacks the P0 label"
 grep -q "GHLOG issue close 36" "$GH_ARGS_LOG" && fail "scenario B: closed the issue although the merge was reverted"
+grep -q "GHLOG issue edit 36 --remove-label ready" "$GH_ARGS_LOG" || fail "scenario B: ready label not removed from the reverted issue"
+grep -q "GHLOG issue edit 36 --add-label blocked" "$GH_ARGS_LOG" || fail "scenario B: blocked label not added to the reverted issue"
+grep -q "GHLOG issue comment 36 --body postmerge:" "$GH_ARGS_LOG" || fail "scenario B: no revert note on the issue"
+grep -q "GHLOG api repos/o/r --jq .default_branch" "$GH_ARGS_LOG" || fail "scenario B: default branch not resolved"
 python3 - "$LEAD_STATE_FILE" <<'PY' || fail "scenario B: ledger/state do not record the revert"
 import json, sys, os
 state = json.load(open(sys.argv[1]))
 w = state["workflows"][0]
-assert w["status"] != "closed", w
+assert w["status"] == "blocked", w
 ledger = os.path.join(os.path.dirname(sys.argv[1]), "runs.jsonl")
 recs = [json.loads(l) for l in open(ledger) if l.strip()]
 assert any(r["outcome"] == "postmerge-failed" and r.get("revert_of") for r in recs), recs
