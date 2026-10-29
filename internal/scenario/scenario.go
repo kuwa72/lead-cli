@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -221,6 +222,10 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	if r.Agent == nil {
 		return Result{}, errors.New("scenario: no agent runner")
 	}
+	// Ctrl-C must still run the cleanup defers; without this the generated
+	// tests would be left in the worktree (issue #276 review).
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	opts := r.Opts
 	if opts.Issue <= 0 {
 		return Result{}, errors.New("scenario: issue number is required")
@@ -283,12 +288,17 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	if err := os.RemoveAll(dest); err != nil {
 		return Result{LogPath: logPath}, fmt.Errorf("scenario: clear %s: %w", dest, err)
 	}
+	// Register the cleanup before copying: a partial copy must not stay in
+	// the worktree (issue #276 review).
+	defer os.RemoveAll(dest)
 	if err := copyTree(outDir, dest); err != nil {
 		return Result{LogPath: logPath}, fmt.Errorf("scenario: copy generated tests: %w", err)
 	}
-	defer os.RemoveAll(dest)
 
 	out, runErr := runRunner(ctx, opts.WorkDir, opts.ExecTimeout)
+	if ctx.Err() == context.Canceled {
+		return Result{Total: len(sc.Steps), Output: string(out), LogPath: logPath}, fmt.Errorf("scenario: interrupted: %w", ctx.Err())
+	}
 	if errors.Is(runErr, context.DeadlineExceeded) {
 		return Result{Total: len(sc.Steps), Output: string(out), LogPath: logPath}, fmt.Errorf("scenario: generated tests timed out after %s", execTimeout(opts.ExecTimeout))
 	}

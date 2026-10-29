@@ -256,6 +256,34 @@ func TestRunWithoutGeneratedRunnerFails(t *testing.T) {
 	}
 }
 
+func TestRunCancelRemovesWorktreeCopy(t *testing.T) {
+	worktree := t.TempDir()
+	scenarioPath := filepath.Join(t.TempDir(), "42.md")
+	if err := Save(scenarioPath, "## Steps\n1. hangs until cancel\n"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	agent := &fakeAgent{writeRun: "#!/bin/sh\nsleep 30\n"}
+	r := &Runner{Agent: agent, Opts: Options{
+		Issue:        42,
+		ScenarioPath: scenarioPath,
+		WorkDir:      worktree,
+		Agent:        "agy",
+		LogDir:       t.TempDir(),
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+	_, err := r.Run(ctx)
+	if err == nil || !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("Run error = %v, want an interruption", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(worktree, workDirName)); !os.IsNotExist(statErr) {
+		t.Fatalf("%s left in the worktree after cancel: %v", workDirName, statErr)
+	}
+}
+
 func TestRunTimesOutHangingTests(t *testing.T) {
 	scenarioPath := filepath.Join(t.TempDir(), "42.md")
 	if err := Save(scenarioPath, "## Steps\n1. hangs\n"); err != nil {
