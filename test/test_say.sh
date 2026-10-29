@@ -56,6 +56,7 @@ case "$1 $2" in
     for a in "$@"; do last="$a"; done
     case "$*" in *"--body-file"*) cp "$last" "$GH_LOG.body-$3" ;; esac ;;
   "issue comment") ;;
+  "issue list") echo '[]' ;;
   *) echo "unexpected: $*" >&2; exit 3 ;;
 esac
 EOF
@@ -117,7 +118,9 @@ grep -q 'feat(cli): add lead say' "$tmp/state/logs"/say-*.log || fail "agent log
 # --- 2. --dry-run: agent runs, gh mutates nothing --------------------------------
 : > "$GH_LOG"; : > "$AGENT_LOG"
 out="$(cd "$repo" && "$tmp/lead" say "dry" --agent claude --dry-run 2>&1)" || fail "dry-run exited non-zero: $out"
-[ -s "$GH_LOG" ] && fail "dry-run called gh: $(cat "$GH_LOG")"
+if grep -Eq '^GH (issue create|issue edit|issue comment)' "$GH_LOG"; then fail "dry-run mutated gh: $(cat "$GH_LOG")"; fi
+grep -q '^GH issue list --state closed' "$GH_LOG" || fail "dry-run did not read the merge evidence: $(cat "$GH_LOG")"
+grep -q '^GH issue list --state open' "$GH_LOG" || fail "dry-run did not read the open issues: $(cat "$GH_LOG")"
 grep -qxF '<-p>' "$AGENT_LOG" || fail "dry-run did not run the agent"
 case "$out" in *"[dry-run] would create issue 1/2"*"labels: needs-review"*"docs: describe lead say"*) ;; *) fail "dry-run output unexpected: $out";; esac
 
@@ -147,7 +150,7 @@ case "$out" in *"redrafted #42"*) ;; *) fail "output lacks redrafted line: $out"
 : > "$GH_LOG"
 echo 'I refuse.' > "$AGENT_OUT"
 if (cd "$repo" && "$tmp/lead" say "x" --agent claude >/dev/null 2>&1); then fail "invalid agent output accepted"; fi
-[ -s "$GH_LOG" ] && fail "gh called despite invalid agent output"
+if grep -Eq '^GH (issue create|issue edit|issue comment)' "$GH_LOG"; then fail "gh mutated despite invalid agent output: $(cat "$GH_LOG")"; fi
 
 # --- 6. agy gets a --print-timeout backstop; --timeout/LEAD_SPEC_TIMEOUT are gone (issue #215) ---
 : > "$AGENT_LOG"
