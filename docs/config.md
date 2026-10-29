@@ -74,6 +74,9 @@
 `--override-guardrail` だけが人間専用フラグで、規約ファイル保護を解除する
 唯一の手段。エージェントは付けてはならない。
 
+`risk:a` / `risk:b` は `lead new` / `lead ready` と inbox が使う Issue メタデータ
+として残るが、マージ判定には影響しない（issue #278）。
+
 シナリオを実行したいときに `lead review <pr>` を回す。`lead dispatch` の
 完了定義はこの手順を含む。
 

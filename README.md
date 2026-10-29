@@ -159,6 +159,9 @@ is an error (exit 1) and is not posted as a pause.
 `--override-guardrail` is the only human-only flag: it is the one way past the
 protected-file guardrail. An unattended agent must never pass it.
 
+`risk:a` / `risk:b` remain issue metadata used by `lead new`/`lead ready` and
+the inbox; they no longer affect the merge decision (issue #278).
+
 Run `lead review <pr>` when you want the generated scenario tests to run;
 `lead dispatch` keeps that step in its completion definition.
 
