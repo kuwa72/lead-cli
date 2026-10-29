@@ -32,11 +32,12 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
   （`docs/rfc-inbox-ux.md` §8）。テンプレート本体は `internal/spec`（golden テスト付き）。
 - 入力: 一言、リポジトリ（origin URL）、`AGENTS.md` の内容（なければ TDD 既定文）、
   リポジトリの現状（`git ls-files` の先頭60件・直近30日のクローズ Issue 10件・
-  open Issue 10件、issue #279）、`--follow-up N` なら元 Issue、`--redraft N` なら
-  対象 Issue とコメント一覧。現状ブロックには「読んで確認したものだけ書く」制約を付ける。
+  open Issue 10件）、`--follow-up N` なら元 Issue、`--redraft N` なら対象 Issue と
+  コメント一覧。`## 制約` 6 に「読んで確認したものだけ書く」を常に含める。
 - 本文形式: Mode / Goal / Scope / Non-goals / Acceptance criteria / シナリオ /
-  TDD first step / Open questions。`## シナリオ` は実行可能な番号付きステップを
-  1つ以上含むこと（`issuecheck` が検査する）。タイトルは §2 の規則を明記し、返却後に
+  TDD first step / Open questions。`## シナリオ` は実行可能な番号付きステップ
+  （バッククォートのコマンドまたはテストパスを含む）を1つ以上含むこと
+  （`issuecheck` が検査する）。タイトルは §2 の規則を明記し、返却後に
   `prompter.LintTitle` で機械検査する（違反は起票せず終了）。
 - 出力形式: JSON 配列 `[{"title","body"}]` のみ（`--redraft` はオブジェクト 1 つ）。
   コードフェンスや前置き文が混ざっても `spec.ParseDrafts` が JSON 部分だけを取り出す。

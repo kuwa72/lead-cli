@@ -133,21 +133,14 @@ func TestBuildPrompt_IncludesRepositoryEvidence(t *testing.T) {
 	}
 }
 
-// issue #279: the body schema the agent is told to follow must contain the
-// sections issuecheck now requires.
-func TestBodyFormat_HasGoalNonGoalsAndScenario(t *testing.T) {
-	for _, want := range []string{"## Goal", "## Non-goals", "## シナリオ"} {
-		if !strings.Contains(bodyFormat, want) {
-			t.Errorf("bodyFormat lacks %q:\n%s", want, bodyFormat)
-		}
-	}
-}
-
 // issue #279: the schema itself must satisfy the gate `lead new` applies.
 func TestBodyFormat_SatisfiesIssueCheck(t *testing.T) {
-	body := "# t\n\n" + strings.Replace(bodyFormat,
+	body := "# t\n\n" + strings.NewReplacer(
 		"- 実行結果・生成物・終了状態で検証できる条件（チェックリスト）",
-		"- [ ] `go test ./...` が pass する", 1)
+		"- [ ] `go test ./...` が pass する",
+		"1. <!-- 実行するコマンド → 期待する出力・終了コード -->（実装後に使い捨てテストで検証する）",
+		"1. `lead x` → exit 0",
+	).Replace(bodyFormat)
 	if missing := issuecheck.Check(body, []string{"risk:a"}); len(missing) != 0 {
 		t.Fatalf("bodyFormat fails issuecheck: %v\n%s", missing, body)
 	}
@@ -194,28 +187,12 @@ func runGit(t *testing.T, dir string, args ...string) {
 // issue #279: what `lead say --dry-run` prints must be a body `lead new` /
 // `lead ready` accept.
 func TestDryRunBodyPassesIssueCheck(t *testing.T) {
-	body := `# feat: x
-
-## Goal
-
-x works
-
-## Non-goals
-
-y
-
-## 受入条件
-
-- [ ] ` + "`./test/run-tests.sh`" + ` が pass する
-
-## スコープ外
-
-- z
-
-## シナリオ
-
-1. ` + "`lead x`" + ` → exit 0
-`
+	body := "# feat: x\n\n" + strings.NewReplacer(
+		"- 実行結果・生成物・終了状態で検証できる条件（チェックリスト）",
+		"- [ ] `go test ./...` が pass する",
+		"1. <!-- 実行するコマンド → 期待する出力・終了コード -->（実装後に使い捨てテストで検証する）",
+		"1. `lead x` → exit 0",
+	).Replace(bodyFormat)
 	r, _, _, buf := newRunner(t, `[{"title":"feat: x","body":`+strconv.Quote(body)+`}]`)
 	r.Opts.DryRun = true
 	if _, err := r.Say(context.Background(), "x"); err != nil {

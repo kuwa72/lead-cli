@@ -83,7 +83,7 @@ func TestCheck_RejectsProseOnlyAcceptance(t *testing.T) {
 
 ## シナリオ
 
-1. 何かする → 嬉しくなる
+1. ` + "`cmd`" + ` → 嬉しくなる
 `
 	missing := Check(body, []string{"risk:b"})
 	if len(missing) != 1 || !strings.Contains(missing[0], "実行可能") {
@@ -104,7 +104,7 @@ nothing here.
 
 ## シナリオ
 
-1. 何かする → 何か起きる
+1. ` + "`cmd`" + ` → 何か起きる
 `
 	missing := Check(body, []string{"risk:b"})
 	if len(missing) != 1 || !strings.Contains(missing[0], "受入条件") || !strings.Contains(missing[0], "Acceptance criteria") {
@@ -125,7 +125,7 @@ func TestCheck_RejectsAcceptanceWithoutCheckbox(t *testing.T) {
 
 ## シナリオ
 
-1. 何かする → 何か起きる
+1. ` + "`cmd`" + ` → 何か起きる
 `
 	missing := Check(body, []string{"risk:b"})
 	if len(missing) != 1 || !strings.Contains(missing[0], "- [ ]") {
@@ -142,7 +142,7 @@ func TestCheck_RejectsMissingScopeSection(t *testing.T) {
 
 ## シナリオ
 
-1. 何かする → 何か起きる
+1. ` + "`cmd`" + ` → 何か起きる
 `
 	missing := Check(body, []string{"risk:b"})
 	if len(missing) != 1 || !strings.Contains(missing[0], "スコープ外") {
@@ -230,6 +230,27 @@ func TestCheck_RejectsMissingScenario(t *testing.T) {
 	missing := Check(body, []string{"risk:b"})
 	if len(missing) != 1 || !strings.Contains(missing[0], "シナリオ") || !strings.Contains(missing[0], "Scenarios") {
 		t.Fatalf("Check(no scenario) = %v, want a scenario finding", missing)
+	}
+}
+
+func TestCheck_RejectsScenarioStepWithoutAnExecutable(t *testing.T) {
+	body := `# title
+
+## 受入条件
+
+- [ ] ` + "`./test/run-tests.sh`" + ` が pass する
+
+## スコープ外
+
+- none
+
+## シナリオ
+
+1. 何かする → 何か起きる
+`
+	missing := Check(body, []string{"risk:b"})
+	if len(missing) != 1 || !strings.Contains(missing[0], "実行可能") {
+		t.Fatalf("Check(prose scenario) = %v, want an executable-step finding", missing)
 	}
 }
 

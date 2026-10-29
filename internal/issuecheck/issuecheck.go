@@ -109,7 +109,7 @@ func Check(body string, labels []string) []string {
 	if scenario, ok := sectionAny(body, ScenarioHeadings); !ok {
 		missing = append(missing, "`"+ScenarioHeading+"` または `## Scenarios` セクションがありません")
 	} else if !hasScenarioStep(scenario) {
-		missing = append(missing, "`"+ScenarioHeading+"` に実行可能なステップ（番号付きリスト）がありません")
+		missing = append(missing, "`"+ScenarioHeading+"` に実行可能なステップ（バッククォートのコマンドまたはテストパスを含む番号付きリスト）がありません")
 	}
 
 	if riskLabel(labels) == "" {
@@ -199,7 +199,7 @@ func hasAnyMarker(body string, markers []string) bool {
 func hasScenarioStep(section string) bool {
 	for _, line := range strings.Split(section, "\n") {
 		s := strings.TrimSpace(htmlComment.ReplaceAllString(line, ""))
-		if stepItem.MatchString(s) {
+		if stepItem.MatchString(s) && (codeSpan.MatchString(s) || testPath.MatchString(s)) {
 			return true
 		}
 	}
