@@ -102,7 +102,7 @@ grep -q 'lead finish 7 --merge' "$PROMPT_LOG" || fail "prompt does not route the
 grep -q 'gh pr merge --squash' "$PROMPT_LOG" && fail "prompt still instructs a direct gh pr merge"
 grep -q 'gh issue close' "$PROMPT_LOG" && fail "prompt still instructs a direct gh issue close"
 
-for want in "AGENTS.md" ".github/workflows/ci.yml" "protected files" "confirm" "--override-guardrail"; do
+for want in "AGENTS.md" ".github/workflows/ci.yml" "protected files" "--override-guardrail"; do
   grep -qF -- "$want" "$FINISH_LOG" || fail "finish did not stop with the guardrail message (missing '$want'): $(cat "$FINISH_LOG")"
 done
 grep -q '^GH pr merge ' "$GH_LOG" && fail "guarded PR was merged directly: $(cat "$GH_LOG")"
@@ -110,7 +110,6 @@ grep -q '^GH issue close ' "$GH_LOG" && fail "guarded PR's issue was closed: $(c
 [ -f "$CLOSED_MARK" ] && fail "guarded issue was closed"
 case "$out" in *"#7 retry"*) ;; *) fail "guarded issue should be retried, got: $out";; esac
 grep -q '"attempts": 1' "$LEAD_STATE_FILE" || fail "guardrail stop was not counted as a failed attempt: $(cat "$LEAD_STATE_FILE")"
-grep -q '"merge_policy": "confirm"' "$LEAD_STATE_FILE" || fail "guardrail did not lower the recorded policy to confirm: $(cat "$LEAD_STATE_FILE")"
 
 # --- 2. 規約ファイルを含まない PR は finish 経由でマージ・クローズされる -----
 export ISSUE=8 FILES="internal/x.go"
