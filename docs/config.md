@@ -55,42 +55,24 @@
 | `LEAD_THEME` | `terminal` | inbox の配色。`terminal` / `dark` / `light`。`NO_COLOR` / `TERM=dumb` が優先 |
 | `LEAD_ISSUE_LIMIT` | `300` | `gh issue list` 1 回あたりの取得件数 |
 
-## `lead finish` のリスク分級（Issue ラベル）
+## `lead finish` のマージ判定（承認なし）
 
-`lead finish <n> --merge` は、設定ファイルではなく Issue のラベルで
-マージ可否を分級する（issue #245）。
+`lead finish <n> --merge` は次の3つがすべて通るときだけマージする（issue #278）。
 
-| Issue のラベル | `lead finish <n> --merge` の挙動 |
-|---|---|
-| `risk:a` | CI 成功かつ現在の head SHA に対するレビュー pass があればマージする（規約ファイル保護のガードレールは別途適用） |
-| `risk:b` | マージせず、人間の承認待ちにする |
-| ラベルなし | `risk:b` と同じ（**既定は人間承認**） |
+1. CI が pass（`skipping` / `neutral` / `cancelled` は不合格）。
+2. `lead review <pr>` が記録した生成シナリオがすべて pass（`SCENARIOS: n/n`）。
+   シナリオ未設定ならこの層は飛ばす。
+3. PR が規約ファイル（`AGENTS.md`、`.github/`、`.claude/` 等）を含まない。
 
-`risk:a` の自動マージは独立レビューを必須にする（issue #246）。
-`lead review <pr>` が PR の diff・Issue の受入条件・CI 結果を別プロセスの
-ヘッドレスエージェントに審査させ、最終行の `VERDICT: pass` /
-`VERDICT: needs-work` に応じて `review:pass` / `review:needs-work` を付ける。
-レビューコメントには審査時点の head SHA が
-`<!-- lead-review sha=<SHA> verdict=pass -->` として記録され、`lead finish`
-は現在の head SHA と一致する pass がある場合のみマージする（issue #249）。
-レビュー後にコミットを push すると再レビューが必要になり、finish は exit 0
-で `lead review` を案内する。コメントを取得できない場合は fail closed で
-exit 1（マージしない）。
-`--no-review` は `--approve` と同時に指定した場合のみ有効な人間専用の
-回避フラグで、単独ではエラーになる。ヘッドレス dispatch の完了定義には
-含めない。
-`review:pass` / `review:needs-work` は `lead enable` が作成する必須ラベルの
-一部（`lead enable --yes` で既存リポジトリにも追加できる）。
+承認ステップと `risk:*` ラベルによるゲートは無い。`review:pass` は助言で、
+単独ではマージを決めない。止めたときは exit 0 で理由を標準出力と Issue の
+コメントに残す。
 
-承認待ちは失敗ではない。CI 成功後に `awaiting-human` ラベルが付き、
-workflow status が `awaiting_review` になり、exit 0 で終了する。
-`lead dispatch` はこれを attempt に数えず `blocked` ラベルも付けない。
-人間は `lead finish <n> --merge --approve` でマージする（`--approve` は
-人間専用で、ヘッドレス dispatch の完了定義には含めない）。
-`--override-guardrail`（規約ファイル保護の解除）とは別のフラグである。
+`--override-guardrail` だけが人間専用フラグで、規約ファイル保護を解除する
+唯一の手段。エージェントは付けてはならない。
 
-`awaiting-human` ラベルは `lead enable` が作成する必須ラベルの一つ。
-`risk:a` は当面 `gh issue edit <n> --add-label risk:a` で付ける。
+シナリオを実行したいときに `lead review <pr>` を回す。`lead dispatch` の
+完了定義はこの手順を含む。
 
 ## 関連
 
