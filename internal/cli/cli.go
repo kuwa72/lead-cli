@@ -2119,6 +2119,10 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 	policy, _ := flags.GetString("merge-policy")
 	timeout, _ := flags.GetDuration("timeout")
 	interval, _ := flags.GetDuration("poll-interval")
+	workDir, err := deps.workDir()
+	if err != nil {
+		return err
+	}
 
 	// The post-merge smoke needs a real repository (worktree add); CLI
 	// wiring tests that use a temp dir opt out with LEAD_TEST_SKIP_POSTMERGE.

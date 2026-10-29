@@ -7,6 +7,9 @@
 #   - --approve は unknown flag で exit 1
 set -euo pipefail
 
+# This test exercises the merge gate, not the post-merge smoke (#275).
+export LEAD_TEST_SKIP_POSTMERGE=1
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
