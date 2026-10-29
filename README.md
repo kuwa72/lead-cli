@@ -54,6 +54,7 @@ Sections:
 | `lead ready <n>` | validate an existing issue body and move it to `ready` |
 | `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
 | `lead review <pr>` | run an independent headless review; label `review:pass` / `review:needs-work` |
+| `lead scenario` | store issue scenarios outside the worktree; generate and run throwaway tests (`add` / `list` / `run`) |
 | `lead clean <n>` | remove the workflow worktree and state |
 | `lead peek <n>` | open the running agent log with `$PAGER` |
 | `lead stop <n>` | stop a running agent (kill, clean up, record interruption) |

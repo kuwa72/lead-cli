@@ -44,6 +44,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/projinit"
 	"github.com/kuwa72/lead-cli/internal/prompter"
 	"github.com/kuwa72/lead-cli/internal/review"
+	"github.com/kuwa72/lead-cli/internal/scenario"
 	"github.com/kuwa72/lead-cli/internal/server"
 	"github.com/kuwa72/lead-cli/internal/setup"
 	"github.com/kuwa72/lead-cli/internal/spec"
@@ -736,6 +737,50 @@ read-only. Agent: --agent, else agents.review, else agents.impl, else agent.`,
 	reviewCmd.Flags().Int("issue", 0, "issue number the PR implements (default: derive from the PR)")
 	reviewCmd.Flags().String("agent", "", "headless reviewer (default: agents.review, agents.impl, then agent)")
 
+	scenarioCmd := &cobra.Command{
+		Use:   "scenario",
+		Short: "Store issue scenarios outside the worktree and run generated tests",
+		Long: `Issue scenarios live outside the repository, at
+<state-dir>/scenarios/<owner>_<repo>/<issue>.md, so the implementation agent
+cannot edit them. ` + "`lead scenario run`" + ` hands the scenario and the PR-head
+worktree to a headless agent, which writes a throwaway runner to a temporary
+directory. lead copies it into the worktree, runs it, reports one
+` + "`SCENARIO <n>: pass|fail`" + ` line per step, and deletes it again.`,
+	}
+	scenarioAddCmd := &cobra.Command{
+		Use:   "add <issue>",
+		Short: "Save a scenario for an issue (--file <path>, or stdin)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runScenarioAdd(cmd, deps, args[0])
+		},
+	}
+	scenarioAddCmd.Flags().String("file", "", "read the scenario from this file ('-' = stdin)")
+	scenarioListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List saved scenarios for this repository",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runScenarioList(cmd, deps)
+		},
+	}
+	scenarioRunCmd := &cobra.Command{
+		Use:   "run <issue>",
+		Short: "Generate and run throwaway tests in the worktree",
+		Long: `Generate throwaway tests from the saved scenario and run them in the
+worktree (default: the current directory). The generated files are removed
+afterwards; nothing is left in the repository. An issue without a scenario
+reports 0/0 and exits 0.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runScenarioRun(cmd, deps, args[0])
+		},
+	}
+	scenarioRunCmd.Flags().String("worktree", "", "PR-head worktree to test (default: current directory)")
+	scenarioRunCmd.Flags().String("agent", "", "headless generator (default: agents.impl, then agent)")
+	scenarioRunCmd.Flags().Duration("timeout", 0, "generated test run cap (default 10m)")
+	scenarioCmd.AddCommand(scenarioAddCmd, scenarioListCmd, scenarioRunCmd)
+
 	serverCmd := &cobra.Command{
 		Use:   "server",
 		Short: "Run the headless socket API daemon (see design.md §7)",
@@ -804,7 +849,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 
 	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, statsCmd, cleanCmd, peekCmd, stopCmd, finishCmd, reviewCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
-	root.AddCommand(newCmd, readyCmd)
+	root.AddCommand(newCmd, readyCmd, scenarioCmd)
 	return root
 }
 
@@ -2137,6 +2182,121 @@ func runReview(cmd *cobra.Command, deps Deps, raw string) error {
 	}
 	if !res.Passed {
 		return fmt.Errorf("%w (PR #%d; see the PR comment)", review.ErrNeedsWork, pr)
+	}
+	return nil
+}
+
+// runScenarioAdd stores one scenario outside the repository (issue #276).
+func runScenarioAdd(cmd *cobra.Command, deps Deps, raw string) error {
+	issue, err := strconv.Atoi(raw)
+	if err != nil || issue <= 0 {
+		return fmt.Errorf("lead scenario add: invalid issue number %q", raw)
+	}
+	file, _ := cmd.Flags().GetString("file")
+	var body []byte
+	switch {
+	case file == "-":
+		body, err = io.ReadAll(deps.stdin())
+	case file != "":
+		body, err = os.ReadFile(file)
+	default:
+		if f, ok := deps.stdin().(*os.File); ok && isTerminal(f) {
+			return errors.New("lead scenario add: pass --file <path> or pipe the scenario on stdin")
+		}
+		body, err = io.ReadAll(deps.stdin())
+	}
+	if err != nil {
+		return fmt.Errorf("lead scenario add: %w", err)
+	}
+	if len(scenario.Parse(string(body)).Steps) == 0 {
+		return errors.New("lead scenario add: no steps found under ## Steps")
+	}
+	path := scenario.Path(filepath.Dir(deps.stateFile()), deps.repoSlug(), issue)
+	if err := scenario.Save(path, string(body)); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "saved scenario #%d: %s\n", issue, path)
+	return nil
+}
+
+// runScenarioList prints the repository's saved scenarios.
+func runScenarioList(cmd *cobra.Command, deps Deps) error {
+	entries, err := scenario.List(filepath.Dir(deps.stateFile()), deps.repoSlug())
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "no scenarios")
+		return nil
+	}
+	for _, e := range entries {
+		fmt.Fprintf(cmd.OutOrStdout(), "#%d\t%s\n", e.Issue, e.Path)
+	}
+	return nil
+}
+
+// runScenarioRun generates throwaway tests from the stored scenario and
+// executes them in the PR-head worktree.
+func runScenarioRun(cmd *cobra.Command, deps Deps, raw string) error {
+	issue, err := strconv.Atoi(raw)
+	if err != nil || issue <= 0 {
+		return fmt.Errorf("lead scenario run: invalid issue number %q", raw)
+	}
+	scenarioPath := scenario.Path(filepath.Dir(deps.stateFile()), deps.repoSlug(), issue)
+	// Resolve 0/0 before reading the agent config: an unconfigured issue must
+	// not fail on an unrelated corrupt inbox-config.json.
+	body, loadErr := scenario.Load(scenarioPath)
+	if loadErr != nil && !os.IsNotExist(loadErr) {
+		return fmt.Errorf("lead scenario run: %w", loadErr)
+	}
+	if os.IsNotExist(loadErr) || len(scenario.Parse(body).Steps) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "scenarios: 0/0")
+		return nil
+	}
+	agentName, _ := cmd.Flags().GetString("agent")
+	if agentName == "" {
+		agentName = deps.configuredImplAgent()
+	}
+	worktree, _ := cmd.Flags().GetString("worktree")
+	if worktree == "" {
+		if worktree, err = deps.workDir(); err != nil {
+			return fmt.Errorf("lead scenario run: %w", err)
+		}
+	}
+	timeout, _ := cmd.Flags().GetDuration("timeout")
+	cfg, err := deps.headlessConfig()
+	if err != nil {
+		return err
+	}
+	stallTimeout, err := cfg.StallTimeoutOr(dispatch.DefaultStuckAfter)
+	if err != nil {
+		return err
+	}
+	maxRuntime, err := cfg.MaxRuntimeOr(dispatch.DefaultMaxRuntime)
+	if err != nil {
+		return err
+	}
+	r := &scenario.Runner{
+		Agent: deps.specAgent(stallTimeout, maxRuntime),
+		Opts: scenario.Options{
+			Issue:        issue,
+			ScenarioPath: scenarioPath,
+			WorkDir:      worktree,
+			Agent:        agentName,
+			LogDir:       filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
+			ExecTimeout:  timeout,
+		},
+	}
+	res, err := r.Run(cmd.Context())
+	if err != nil {
+		return err
+	}
+	for _, s := range res.Steps {
+		fmt.Fprintf(cmd.OutOrStdout(), "SCENARIO %d: %s\n", s.Number, s.Verdict)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "scenarios: %s\n", res.Score())
+	if res.Passed < res.Total {
+		return fmt.Errorf("%w (%s)", scenario.ErrScenariosFailed, res.Score())
 	}
 	return nil
 }
