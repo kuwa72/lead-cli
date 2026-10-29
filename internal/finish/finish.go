@@ -298,15 +298,24 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 	if err != nil {
 		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: head SHA (merge): %w", prNumber, err)
 	}
-	// Scenario gate (issue #278): when the reviewer recorded a scenario
-	// score for this head, every step must pass. No marker means no
-	// scenario was configured, so this layer is skipped (0/0).
+	// Scenario gate (issues #277/#278): a configured scenario must have a
+	// passing score for this head. A harness failure is not 0/0; it is a
+	// pause. A scenario file with no review result is also a pause, so a
+	// forgotten `lead review` cannot merge without semantic verification.
+	scenarioFile := scenario.Path(filepath.Dir(store.Path), git.RepoSlug(w.Repository), issue)
+	_, statErr := os.Stat(scenarioFile)
+	hasScenario := statErr == nil
 	comments, err := gh.PrComments(ctx, prNumber)
 	if err != nil {
 		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: comments (scenario gate): %w", prNumber, err)
 	}
 	login, _ := gh.ApiUser(ctx)
-	if marker, found := review.LatestMarkerFor(comments, login); found && marker.Scenarios != "" {
+	marker, found := review.LatestMarkerFor(comments, login)
+	switch {
+	case found && marker.Scenarios == "error":
+		return pause(ctx, gh, issue, Result{ChecksPassed: true,
+			Message: fmt.Sprintf("CI passed for PR #%d, but the scenario harness failed; re-run `lead review %d` after fixing it.", prNumber, prNumber)})
+	case found && marker.Scenarios != "" && marker.Scenarios != "0/0":
 		if !strings.EqualFold(marker.SHA, head) {
 			return pause(ctx, gh, issue, Result{ChecksPassed: true,
 				Message: fmt.Sprintf("CI passed for PR #%d, but the scenario result is for %s and the head is now %s; re-review required: run `lead review %d` again.",
@@ -323,6 +332,9 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 				Message: fmt.Sprintf("CI passed for PR #%d, but generated scenarios are %d/%d; fix the failing steps and re-run `lead review %d`.",
 					prNumber, passed, total, prNumber)})
 		}
+	case hasScenario:
+		return pause(ctx, gh, issue, Result{ChecksPassed: true,
+			Message: fmt.Sprintf("CI passed for PR #%d, but this issue has a scenario with no passing review result; run `lead review %d` first.", prNumber, prNumber)})
 	}
 	if err := gh.PrMerge(ctx, prNumber, head); err != nil {
 		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: merge: %w", prNumber, err)
