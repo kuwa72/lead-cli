@@ -72,6 +72,10 @@ type GhClient interface {
 	// PrHeadSHA mirrors `gh pr view <pr> --json headRefOid` (review gate
 	// bound to the reviewed commit, issue #249).
 	PrHeadSHA(ctx context.Context, pr int) (string, error)
+	// PrMergeCommit mirrors `gh pr view <pr> --json mergeCommit` and
+	// returns the commit the merge landed on main ("" when not merged).
+	// The post-merge smoke reverts this commit (issue #275).
+	PrMergeCommit(ctx context.Context, pr int) (string, error)
 	// PrComments mirrors `gh pr view <pr> --json comments` (review verdict
 	// markers, issue #249).
 	PrComments(ctx context.Context, pr int) ([]Comment, error)

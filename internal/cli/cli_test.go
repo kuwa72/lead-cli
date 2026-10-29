@@ -35,6 +35,8 @@ func (g *fakeGitRunner) WorktreeAddDetached(repoDir, path, commit string) error 
 func (g *fakeGitRunner) HeadSHA(dir string) (string, error)                    { return "", nil }
 func (g *fakeGitRunner) MainWorktree(dir string) (string, error)               { return g.root, nil }
 func (g *fakeGitRunner) EnsureCommit(repoDir, sha string) error                { return nil }
+func (g *fakeGitRunner) Revert(dir, sha string) error                          { return nil }
+func (g *fakeGitRunner) Push(dir, remote, refspec string) error                { return nil }
 func (g *fakeGitRunner) WorktreeRemove(repoDir, path string, force bool) error { return nil }
 func (g *fakeGitRunner) OriginURL(repoDir string) string                       { return g.origin }
 func (g *fakeGitRunner) BranchExists(repoDir, branch string) (bool, error)     { return true, nil }

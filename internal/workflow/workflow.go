@@ -31,6 +31,9 @@ type GitRunner interface {
 	HeadSHA(dir string) (string, error)
 	MainWorktree(dir string) (string, error)
 	EnsureCommit(repoDir, sha string) error
+	// Post-merge revert (issue #275): undo a merge commit and publish it.
+	Revert(dir, sha string) error
+	Push(dir, remote, refspec string) error
 }
 
 // StartOptions controls one Start call.

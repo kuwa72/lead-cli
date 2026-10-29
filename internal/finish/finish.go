@@ -58,6 +58,9 @@ type Options struct {
 	WorkDir string
 	// Sleep waits between polls; defaults to time.Sleep (tests inject no-op).
 	Sleep func(time.Duration)
+	// PostMerge runs the post-merge smoke after a merge (issue #275).
+	// Nil disables it.
+	PostMerge *PostMergeOptions
 }
 
 // Result reports what happened. Pauses (confirm stop, never policy,
@@ -72,6 +75,11 @@ type Result struct {
 	// AwaitingHuman is true when CI passed but the risk gate deferred the
 	// merge to a human (issue #245). Not an error.
 	AwaitingHuman bool
+	// PostMergeFailed is true when the smoke failed and main was reverted
+	// (issue #275). The issue stays open, blocked on the incident.
+	PostMergeFailed bool
+	// RevertOf is the merge commit the post-merge revert undid.
+	RevertOf string
 }
 
 func (o *Options) timeout() time.Duration {
@@ -143,6 +151,8 @@ func WaitChecks(ctx context.Context, gh ports.GhClient, pr int, timeout, interva
 // mergeOutcome maps a finished merge attempt to a ledger outcome.
 func mergeOutcome(res Result, err error, opts Options) string {
 	switch {
+	case res.PostMergeFailed:
+		return ledger.OutcomePostMergeFailed
 	case err != nil:
 		return ledger.OutcomeError
 	case res.Merged, res.Closed:
@@ -191,7 +201,7 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		if aerr := ledger.Append(opts.LedgerPath, ledger.Record{
 			Repo: repo, Issue: issue, Phase: ledger.PhaseMerge, Mode: w.Mode, PR: prNumber,
 			StartedAt: started, EndedAt: time.Now(),
-			Outcome: mergeOutcome(res, err, opts),
+			Outcome: mergeOutcome(res, err, opts), RevertOf: res.RevertOf,
 		}); aerr != nil {
 			fmt.Fprintf(os.Stderr, "finish: ledger: %v\n", aerr)
 		}
@@ -365,7 +375,43 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 				fmt.Errorf("PR #%d merged, but removing the %s label failed: %w", prNumber, state.AwaitingHumanLabel, err)
 		}
 	}
-	return runClosePhase(ctx, gh, store, w, prRef, prNumber, opts, true)
+	pmNote := ""
+	if opts.PostMerge != nil {
+		pm := *opts.PostMerge
+		pm.Issue, pm.PR = issue, prNumber
+		if pm.WorkDir == "" {
+			pm.WorkDir = opts.WorkDir
+		}
+		if pm.Git == nil {
+			pm.Git = opts.Git
+		}
+		pmRes, pmErr := PostMerge(ctx, gh, pm)
+		if pmErr != nil {
+			// The PR is merged on GitHub even when main was reverted, so
+			// keep that in the record; blocked keeps dispatch from retrying
+			// the issue until a human resolves the incident.
+			w.Status = state.StatusBlocked
+			if prRef != nil {
+				prRef.Status = "merged"
+			} else {
+				w.PullRequests = append(w.PullRequests, state.PRRef{Number: prNumber, Part: opts.Part, Status: "merged"})
+			}
+			if saveErr := store.Upsert(w); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "finish: state save: %v\n", saveErr)
+			}
+			return Result{ChecksPassed: true, Merged: true,
+				PostMergeFailed: pmRes.SmokeFailed, RevertOf: pmRes.RevertOf,
+				Message: pmRes.Message}, pmErr
+		}
+		if pmRes.Skipped {
+			pmNote = pmRes.Message
+		}
+	}
+	res, err = runClosePhase(ctx, gh, store, w, prRef, prNumber, opts, true)
+	if err == nil && pmNote != "" {
+		res.Message += " (" + pmNote + ")"
+	}
+	return res, err
 }
 
 // runAwaitingHuman records that CI passed but the risk class needs a

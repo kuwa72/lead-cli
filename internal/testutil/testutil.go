@@ -130,6 +130,10 @@ type FakeGhClient struct {
 	PRHeadSHA      string
 	PRHeadSHAErr   error
 	PRHeadSHACalls []int
+	// PRMergeCommit feeds PrMergeCommit (post-merge smoke, issue #275);
+	// PRMergeCommitErr fails every call.
+	PRMergeCommit    string
+	PRMergeCommitErr error
 	// PRThread feeds PrComments (the PR's existing comments); PRThreadErr
 	// fails every call.
 	PRThread      []ports.Comment
@@ -489,6 +493,14 @@ func (f *FakeGhClient) PrHeadSHA(ctx context.Context, pr int) (string, error) {
 		return "", f.PRHeadSHAErr
 	}
 	return f.PRHeadSHA, nil
+}
+
+// PrMergeCommit returns PRMergeCommit (or PRMergeCommitErr).
+func (f *FakeGhClient) PrMergeCommit(ctx context.Context, pr int) (string, error) {
+	if f.PRMergeCommitErr != nil {
+		return "", f.PRMergeCommitErr
+	}
+	return f.PRMergeCommit, nil
 }
 
 // PrComments returns PRThread (or PRThreadErr) and records the call.
