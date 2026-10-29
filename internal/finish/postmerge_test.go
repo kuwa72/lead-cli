@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kuwa72/lead-cli/internal/ledger"
+	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 )
 
@@ -23,7 +24,7 @@ type fakePostMergeGit struct {
 	pushErr   error
 }
 
-func (f *fakePostMergeGit) RepoRoot(dir string) (string, error) { return f.root, nil }
+func (f *fakePostMergeGit) MainWorktree(dir string) (string, error) { return f.root, nil }
 func (f *fakePostMergeGit) EnsureCommit(repoDir, sha string) error {
 	return nil
 }
@@ -108,6 +109,14 @@ func TestPostMerge_FailureRevertsPushesAndFilesIncident(t *testing.T) {
 	if strings.Contains(inc.Body, "手動復旧") {
 		t.Errorf("incident body claims manual recovery although the revert was pushed: %q", inc.Body)
 	}
+	// The reverted change must not be re-dispatched, and the issue keeps a
+	// pointer to the incident.
+	if len(fake.AddedLabels) != 1 || fake.AddedLabels[0].Label != "blocked" {
+		t.Errorf("added labels = %+v, want the blocked label", fake.AddedLabels)
+	}
+	if len(fake.Comments) != 1 || !strings.Contains(fake.Comments[0].Body, "revert") {
+		t.Errorf("issue comments = %+v, want a revert note", fake.Comments)
+	}
 }
 
 func TestPostMerge_RevertFailureFilesManualRecoveryIncident(t *testing.T) {
@@ -154,6 +163,37 @@ func TestPostMerge_NoMergeCommitSkips(t *testing.T) {
 	}
 	if len(g.added) != 0 || len(fake.Created) != 0 {
 		t.Errorf("worktree=%v created=%+v, want none when skipping", g.added, fake.Created)
+	}
+}
+
+func TestRun_BlockedRetryDoesNotClose(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{Status: state.StatusBlocked})
+	fake := baseFake()
+	fake.PR = ports.PRInfo{Number: 7, State: "MERGED"}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+		PostMerge: &PostMergeOptions{Smoke: func(context.Context, string) error { return nil }},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Closed || len(fake.Closed) != 0 {
+		t.Fatalf("closed a reverted change on retry: result=%+v closed=%v", res, fake.Closed)
+	}
+	if !res.PostMergeFailed || !strings.Contains(res.Message, "reverted") {
+		t.Errorf("Result = %+v, want the postmerge-failed pause", res)
+	}
+}
+
+func TestDefaultSmoke_FailsOutsideAModule(t *testing.T) {
+	err := DefaultSmoke(context.Background(), t.TempDir())
+	if err == nil {
+		t.Fatal("DefaultSmoke passed in an empty directory, want a build failure")
+	}
+	if !strings.Contains(err.Error(), "go build") {
+		t.Errorf("error = %v, want the failing command named", err)
 	}
 }
 
