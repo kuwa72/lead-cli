@@ -524,22 +524,24 @@ func TestBuildPrompt_Golden(t *testing.T) {
 }
 
 // issue #246: the completion definition routes through the independent
-// review and never teaches the agent the human-only skip flag.
+// review and never teaches the agent a human-only skip flag.
 func TestBuildPrompt_IncludesReviewStep(t *testing.T) {
 	got := BuildPrompt(ports.Issue{Number: 42, Title: "feat: thing", Body: "b"})
 	for _, want := range []string{
 		"lead review <PR番号>",
-		"VERDICT: pass",
-		"VERDICT: needs-work",
-		"最大2周",
+		"SCENARIOS",
+		"m/m",
+		"2周上限は無い",
 		"gh issue comment 42 --body",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt missing %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "--no-review") {
-		t.Errorf("prompt must not mention the human-only --no-review flag:\n%s", got)
+	for _, forbidden := range []string{"--no-review", "--approve", "awaiting-human"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("prompt must not mention the removed %s flag:\n%s", forbidden, got)
+		}
 	}
 }
 
