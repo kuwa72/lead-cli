@@ -85,9 +85,6 @@ type Item struct {
 	// DeferredBy is the first open blocked-by issue number (issue #212);
 	// the row shows "deferred: blocked by #N". 0 means dispatchable.
 	DeferredBy int
-	// AwaitingHuman marks a ready issue whose CI passed but whose risk
-	// class waits for human approval (issue #245).
-	AwaitingHuman bool
 }
 
 // Section is one heading plus its rows.
@@ -133,7 +130,6 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 	enrich := func(it Item) Item {
 		if w, ok := byIssue[it.Number]; ok {
 			it.Agent, it.Attempts, it.PID, it.LogPath, it.Branch, it.PRNumber = w.Agent, w.Attempts, w.PID, w.LogPath, w.Branch, firstPRNumber(w.PullRequests)
-			it.AwaitingHuman = w.Status == state.StatusAwaitingReview
 		}
 		return it
 	}

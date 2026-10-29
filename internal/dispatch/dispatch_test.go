@@ -158,58 +158,7 @@ func TestOnce_CompletedIssueCleansUp(t *testing.T) {
 	}
 }
 
-// issue #245: a CI-passed risk:b PR is labelled awaiting-human and the
-// agent exits cleanly. Dispatch must not count an attempt, must not block,
-// and must clean the worktree; later passes must not redispatch it.
-func TestOnce_AwaitingHumanIsNotAFailedAttempt(t *testing.T) {
-	d, gh, git, l := newFixture(t, 7)
-	l.OnWait = func(c launchCall) error {
-		iss := gh.Issues[7]
-		iss.Labels = []string{"risk:b", state.AwaitingHumanLabel}
-		gh.Issues[7] = iss
-		return nil // finish exits 0 when it defers to a human
-	}
-
-	rep, err := d.Once(context.Background())
-	if err != nil {
-		t.Fatalf("Once: %v", err)
-	}
-	if len(rep.Results) != 1 || rep.Results[0].Outcome != OutcomeAwaitingHuman {
-		t.Fatalf("results = %+v, want one awaiting_human", rep.Results)
-	}
-	if len(gh.AddedLabels) != 0 || len(gh.RemovedLabels) != 0 {
-		t.Errorf("labels touched by dispatch = +%v -%v; awaiting-human is finish's job", gh.AddedLabels, gh.RemovedLabels)
-	}
-	if len(gh.Comments) != 0 {
-		t.Errorf("comments = %+v, want none for awaiting-human", gh.Comments)
-	}
-	wantDir := filepath.Join(git.root, ".worktrees", "issue-7")
-	if !reflect.DeepEqual(git.Removed, []string{wantDir}) {
-		t.Errorf("worktree removed = %q, want %q", git.Removed, []string{wantDir})
-	}
-	w, ok, err := d.Store.Get(7, "")
-	if err != nil || !ok {
-		t.Fatalf("state = %+v, %v; want the awaiting record kept", w, err)
-	}
-	if w.Attempts != 0 {
-		t.Errorf("attempts = %d, want 0 (awaiting human is not a failure)", w.Attempts)
-	}
-	if w.Status != state.StatusAwaitingReview {
-		t.Errorf("status = %q, want awaiting_review", w.Status)
-	}
-	if w.PID != 0 {
-		t.Errorf("pid = %d, want cleared", w.PID)
-	}
-
-	before := len(l.Calls)
-	if _, err := d.Once(context.Background()); err != nil {
-		t.Fatalf("second Once: %v", err)
-	}
-	if len(l.Calls) != before {
-		t.Errorf("awaiting-human issue was re-dispatched (%d → %d launches)", before, len(l.Calls))
-	}
-}
-
+// issue #245's awaiting-human path was removed by #278.
 func TestOnce_FailuresRetryThenBlockAtMax(t *testing.T) {
 	d, gh, _, l := newFixture(t, 7)
 	l.OnWait = func(c launchCall) error { return errors.New("exit status 1") }

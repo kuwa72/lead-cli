@@ -2,10 +2,8 @@ package finish
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -14,7 +12,6 @@ import (
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/review"
 	"github.com/kuwa72/lead-cli/internal/state"
-	"github.com/kuwa72/lead-cli/internal/workflow"
 )
 
 // Defaults mirror bin/ci-wait (1800s cap, 10s poll).
@@ -38,40 +35,25 @@ type Options struct {
 	// protected-file guardrail (issue #230). Merge alone does not: the
 	// headless completion definition merges with --merge.
 	OverrideGuardrail bool
-	// Approve is the human-only confirmation that merges a risk:b issue
-	// (issue #245). Merge alone does not: unlabelled and risk:b issues
-	// stop for human approval by default. Unrelated to OverrideGuardrail.
-	Approve bool
-	// NoReview is the human-only confirmation that lets a risk:a PR merge
-	// without the independent reviewer's pass (issue #246). It requires
-	// Approve as well (issue #249), so an unattended agent cannot lift the
-	// review gate alone. It is never part of the headless dispatch prompt.
-	NoReview     bool
-	Timeout      time.Duration
-	PollInterval time.Duration
+	Timeout           time.Duration
+	PollInterval      time.Duration
 	// LedgerPath receives one line per merge attempt (issue #274). Empty
 	// disables recording.
 	LedgerPath string
-	// Git and WorkDir let finish remove the issue's worktree when it
-	// defers the merge to a human (issue #245). Nil Git skips cleanup.
-	Git     workflow.GitRunner
-	WorkDir string
 	// Sleep waits between polls; defaults to time.Sleep (tests inject no-op).
 	Sleep func(time.Duration)
 }
 
 // Result reports what happened. Pauses (confirm stop, never policy,
-// auto-merge fallback) are NOT errors: Message tells the next step.
+// auto-merge fallback, failed scenario) are NOT errors: Message tells the
+// next step.
 type Result struct {
 	ChecksPassed bool
 	Merged       bool
 	Closed       bool
 	Message      string
-	// Guarded lists protected files that lowered the policy to confirm.
+	// Guarded lists protected files that stopped the merge.
 	Guarded []string
-	// AwaitingHuman is true when CI passed but the risk gate deferred the
-	// merge to a human (issue #245). Not an error.
-	AwaitingHuman bool
 }
 
 func (o *Options) timeout() time.Duration {
@@ -149,8 +131,6 @@ func mergeOutcome(res Result, err error, opts Options) string {
 		// Already-merged retries close the issue without merging again;
 		// they are still completed runs, not pauses.
 		return ledger.OutcomeCompleted
-	case res.AwaitingHuman:
-		return ledger.OutcomeAwaitingHuman
 	case len(res.Guarded) > 0:
 		return ledger.OutcomeGuardrail
 	case opts.Outcome == "blocked":
@@ -165,9 +145,6 @@ func mergeOutcome(res Result, err error, opts Options) string {
 // Run executes finish for one issue: re-verify PR, wait CI, policy-gated
 // merge, optional comment/close, and state recording.
 func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, opts Options) (res Result, err error) {
-	if opts.NoReview && !opts.Approve {
-		return Result{}, errors.New("finish: --no-review requires --approve (both are human-only confirmations)")
-	}
 	w, ok, err := store.Get(issue, opts.Part)
 	if err != nil {
 		return Result{}, err
@@ -244,166 +221,91 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return Result{}, fmt.Errorf("PR #%d: merge conflict; resolve it first (checks will not run)", prNumber)
 	}
 
-	// Risk classification (issue #245): labels come from the issue, not the
-	// PR. Fail closed — if the lookup fails, we cannot tell a safe change
-	// from a risky one, so stop before merging.
-	iss, err := gh.View(ctx, issue)
-	if err != nil {
-		return Result{}, fmt.Errorf("issue #%d: view labels (risk gate): %w", issue, err)
-	}
-	risk := RiskClass(iss.Labels)
-	hadAwaiting := slices.Contains(iss.Labels, state.AwaitingHumanLabel)
-
 	// Guardrail (RFC inbox §7): a PR touching protected convention files
-	// never auto-merges. Lower auto → confirm and persist the reason so the
-	// inbox can show why this issue stopped. Checked before the CI wait so a
-	// gh failure surfaces early and the record is written even if the wait
-	// is interrupted.
+	// never auto-merges. The only way past it is the human-only
+	// --override-guardrail.
 	guarded, err := guardrail(ctx, gh, prNumber)
 	if err != nil {
 		return Result{}, err
 	}
-	if len(guarded) > 0 && policy == PolicyAuto {
-		policy = PolicyConfirm
-		w.MergePolicy = string(PolicyConfirm)
-		w.PolicyReason = fmt.Sprintf("guardrail: PR #%d touches protected files: %s", prNumber, strings.Join(guarded, ", "))
-		if err := store.Upsert(w); err != nil {
-			return Result{}, err
-		}
+	// Protected paths stop the merge unless a human passed the only
+	// override that exists (issue #278).
+	if len(guarded) > 0 && !opts.OverrideGuardrail {
+		return pause(ctx, gh, issue, Result{ChecksPassed: true, Guarded: guarded,
+			Message: fmt.Sprintf("CI passed for PR #%d, but it touches protected files (%s). A human must run `lead finish %d --merge --override-guardrail` to merge.",
+				prNumber, strings.Join(guarded, ", "), issue)})
 	}
 
 	if err := WaitChecks(ctx, gh, prNumber, opts.timeout(), opts.pollInterval(), opts.sleep); err != nil {
 		return Result{}, err
 	}
 
-	// Gate: never stops, the protected-file guardrail stops unless a human
-	// passed --override-guardrail (--merge is not enough: the headless
-	// completion definition uses it, issue #230), confirm pauses without
-	// --merge, auto checks the repository auto-merge setting and falls back
-	// to a manual pointer.
+	// Gate: never stops, confirm pauses without --merge, auto checks the
+	// repository auto-merge setting and falls back to a manual pointer.
 	repo := git.RepoSlug(w.Repository)
 	switch {
 	case policy == PolicyNever:
-		return Result{ChecksPassed: true,
-			Message: fmt.Sprintf("CI passed for PR #%d; merge policy is never, stopping.", prNumber)}, nil
-	case len(guarded) > 0 && !opts.OverrideGuardrail:
-		return Result{ChecksPassed: true, Guarded: guarded,
-			Message: fmt.Sprintf("CI passed for PR #%d, but it touches protected files (%s); merge policy lowered to confirm. Review the PR, then run `lead finish %d --merge --override-guardrail` to merge.",
-				prNumber, strings.Join(guarded, ", "), issue)}, nil
+		return pause(ctx, gh, issue, Result{ChecksPassed: true,
+			Message: fmt.Sprintf("CI passed for PR #%d; merge policy is never, stopping.", prNumber)})
 	case policy == PolicyConfirm && !opts.Merge:
-		return Result{ChecksPassed: true,
-			Message: fmt.Sprintf("CI passed for PR #%d; run `lead finish %d --merge` to merge.", prNumber, issue)}, nil
+		return pause(ctx, gh, issue, Result{ChecksPassed: true,
+			Message: fmt.Sprintf("CI passed for PR #%d; run `lead finish %d --merge` to merge.", prNumber, issue)})
 	case policy == PolicyAuto && !opts.Merge && repo != "":
 		allowed, err := gh.RepoAllowsAutoMerge(ctx, repo)
 		if err != nil {
 			return Result{}, fmt.Errorf("PR #%d: auto-merge check: %w", prNumber, err)
 		}
 		if !allowed {
-			msg := fmt.Sprintf("CI passed for PR #%d, but the repository disallows auto-merge; run `lead finish %d --merge` to merge manually.", prNumber, issue)
-			return Result{ChecksPassed: true, Message: msg}, nil
+			return pause(ctx, gh, issue, Result{ChecksPassed: true,
+				Message: fmt.Sprintf("CI passed for PR #%d, but the repository disallows auto-merge; run `lead finish %d --merge` to merge manually.", prNumber, issue)})
 		}
 	}
-	// Risk gate (issue #245): only risk:a merges unattended. Unlabelled
-	// and risk:b stop here as awaiting-human — a clean pause, not a
-	// failure. The human merges with --approve.
-	if risk != RiskA && !opts.Approve {
-		return runAwaitingHuman(ctx, gh, store, w, prNumber, risk, opts)
+
+	head, err := gh.PrHeadSHA(ctx, prNumber)
+	if err != nil {
+		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: head SHA (merge): %w", prNumber, err)
 	}
-	// Independent review gate (issue #246): an unattended merge of a
-	// risk:a PR also needs the separate reviewer's verdict. Since issue
-	// #249 that verdict is a PR comment marker bound to the head SHA the
-	// reviewer examined: the label alone is display only. A missing or
-	// stale marker stops before merging; --no-review --approve is the
-	// human-only override. Issue #250 pins the merge to the same head
-	// (--match-head-commit) so a push between the check and the merge
-	// cannot slip in.
-	mergeHead := ""
-	if risk == RiskA && !opts.NoReview {
-		head, err := gh.PrHeadSHA(ctx, prNumber)
-		if err != nil {
-			return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: head SHA (review gate): %w", prNumber, err)
+	// Scenario gate (issue #278): when the reviewer recorded a scenario
+	// score for this head, every step must pass. No marker means no
+	// scenario was configured, so this layer is skipped (0/0).
+	comments, err := gh.PrComments(ctx, prNumber)
+	if err != nil {
+		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: comments (scenario gate): %w", prNumber, err)
+	}
+	login, _ := gh.ApiUser(ctx)
+	if marker, found := review.LatestMarkerFor(comments, login); found && marker.Scenarios != "" {
+		if !strings.EqualFold(marker.SHA, head) {
+			return pause(ctx, gh, issue, Result{ChecksPassed: true,
+				Message: fmt.Sprintf("CI passed for PR #%d, but the scenario result is for %s and the head is now %s; re-review required: run `lead review %d` again.",
+					prNumber, shortSHA(marker.SHA), shortSHA(head), prNumber)})
 		}
-		mergeHead = head
-		comments, err := gh.PrComments(ctx, prNumber)
-		if err != nil {
-			return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: comments (review gate): %w", prNumber, err)
+		passed, total, ok := review.ParseScenarioScore([]byte("SCENARIOS: " + marker.Scenarios))
+		if !ok {
+			return pause(ctx, gh, issue, Result{ChecksPassed: true,
+				Message: fmt.Sprintf("CI passed for PR #%d, but the scenario score %q is unreadable; run `lead review %d` again.",
+					prNumber, marker.Scenarios, prNumber)})
 		}
-		// Best effort author check (#250): markers from another gh user
-		// are ignored when the login is known. The implementation session
-		// usually shares the account, so this is defense in depth, not the
-		// primary gate.
-		login, _ := gh.ApiUser(ctx)
-		marker, found := review.LatestMarkerFor(comments, login)
-		switch {
-		case !found:
-			return Result{ChecksPassed: true,
-				Message: fmt.Sprintf("CI passed for PR #%d, but it has no review pass for the current head. Run `lead review %d` and merge after it passes; a human can override with `lead finish %d --merge --approve --no-review`.",
-					prNumber, prNumber, issue)}, nil
-		case marker.Verdict != review.VerdictPass:
-			return Result{ChecksPassed: true,
-				Message: fmt.Sprintf("CI passed for PR #%d, but the last review verdict is %s. Address the findings, then run `lead review %d` again.",
-					prNumber, marker.Verdict, prNumber)}, nil
-		case !strings.EqualFold(marker.SHA, head):
-			return Result{ChecksPassed: true,
-				Message: fmt.Sprintf("CI passed for PR #%d, but the review passed %s and the head is now %s; re-review required: run `lead review %d`.",
-					prNumber, shortSHA(marker.SHA), shortSHA(head), prNumber)}, nil
+		if total > 0 && passed < total {
+			return pause(ctx, gh, issue, Result{ChecksPassed: true,
+				Message: fmt.Sprintf("CI passed for PR #%d, but generated scenarios are %d/%d; fix the failing steps and re-run `lead review %d`.",
+					prNumber, passed, total, prNumber)})
 		}
 	}
-	if mergeHead == "" {
-		head, err := gh.PrHeadSHA(ctx, prNumber)
-		if err != nil {
-			return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: head SHA (merge): %w", prNumber, err)
-		}
-		mergeHead = head
-	}
-	if err := gh.PrMerge(ctx, prNumber, mergeHead); err != nil {
+	if err := gh.PrMerge(ctx, prNumber, head); err != nil {
 		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: merge: %w", prNumber, err)
-	}
-	if hadAwaiting {
-		if err := gh.IssueRemoveLabel(ctx, w.Issue, state.AwaitingHumanLabel); err != nil {
-			return Result{ChecksPassed: true, Merged: true},
-				fmt.Errorf("PR #%d merged, but removing the %s label failed: %w", prNumber, state.AwaitingHumanLabel, err)
-		}
 	}
 	return runClosePhase(ctx, gh, store, w, prRef, prNumber, opts, true)
 }
 
-// runAwaitingHuman records that CI passed but the risk class needs a
-// human's approval: label the issue, move the workflow to awaiting_review,
-// clean the worktree (branch and PR stay), and report a clean pause.
-func runAwaitingHuman(ctx context.Context, gh ports.GhClient, store *state.Store, w state.Workflow, prNumber int, risk Risk, opts Options) (Result, error) {
-	if err := gh.IssueAddLabel(ctx, w.Issue, state.AwaitingHumanLabel); err != nil {
-		return Result{ChecksPassed: true}, fmt.Errorf("issue #%d: add label %s: %w", w.Issue, state.AwaitingHumanLabel, err)
+// pause reports a clean stop (exit 0) and leaves the reason on the issue
+// so the next reader sees why the merge did not happen (issue #278).
+func pause(ctx context.Context, gh ports.GhClient, issue int, res Result) (Result, error) {
+	if res.Message != "" {
+		if err := gh.IssueComment(ctx, issue, res.Message); err != nil {
+			return res, fmt.Errorf("issue #%d: pause comment: %w", issue, err)
+		}
 	}
-	w.Status = state.StatusAwaitingReview
-	w.PID = 0
-	msg := fmt.Sprintf("CI passed for PR #%d; issue #%d is risk:%s (unlabelled means risk:b), so it is awaiting human approval. Review the PR, then run `lead finish %d --merge --approve`.",
-		prNumber, w.Issue, risk, w.Issue)
-	if cleanup := cleanupWorktree(opts, &w); cleanup != "" {
-		msg += " (" + cleanup + ")"
-	}
-	if err := store.Upsert(w); err != nil {
-		return Result{ChecksPassed: true}, err
-	}
-	return Result{ChecksPassed: true, AwaitingHuman: true, Message: msg}, nil
-}
-
-// cleanupWorktree removes the issue's worktree for an awaiting-human pause.
-// Best effort: a failure is reported in the message but never turns the
-// pause into a failed dispatch attempt. The branch and PR are untouched.
-func cleanupWorktree(opts Options, w *state.Workflow) string {
-	if w.Worktree == "" || opts.Git == nil {
-		return ""
-	}
-	root, err := opts.Git.RepoRoot(opts.WorkDir)
-	if err != nil {
-		return "worktree cleanup failed: " + err.Error()
-	}
-	if err := opts.Git.WorktreeRemove(root, w.Worktree, true); err != nil {
-		return "worktree cleanup failed: " + err.Error()
-	}
-	w.Worktree = ""
-	return ""
+	return res, nil
 }
 
 // shortSHA abbreviates a commit SHA for pause messages (7 chars).

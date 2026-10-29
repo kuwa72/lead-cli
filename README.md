@@ -133,37 +133,25 @@ Settings view (`,` / `S`), but can be edited by hand.
 Keys, types, defaults, and the environment variables that override them are
 documented in [docs/config.md](docs/config.md).
 
-## Risk gate for merges
+## Merge gate (computed, no approval)
 
-`lead finish <n> --merge` classifies the issue by label before merging
-(issue #245):
+`lead finish <n> --merge` merges when three checks pass (issue #278):
 
-| Issue label | Behavior |
-|---|---|
-| `risk:a` | merge after CI passes (the protected-file guardrail still applies) |
-| `risk:b` | stop and wait for human approval |
-| none | same as `risk:b` — **human approval is the default** |
+1. CI is green — `skipping`, `neutral`, and `cancelled` do not count.
+2. The generated scenarios recorded by `lead review <pr>` are all passing
+   (`SCENARIOS: n/n`). No scenario configured skips this layer.
+3. The PR does not touch protected convention files (`AGENTS.md`, `.github/`,
+   `.claude/`, …).
 
-A waiting issue is labelled `awaiting-human`, recorded as `awaiting_review`,
-and left open; this is not a failure. `lead dispatch` does not count it as an
-attempt and does not label it `blocked`, so the inbox keeps showing it while a
-human reviews the PR. The human merges it with `--approve`:
+There is no approval step and no `risk:*` label gate any more; `review:pass`
+is advisory (it decides nothing on its own). When a check stops the merge,
+`lead finish` exits 0, prints the reason, and comments it on the issue.
 
-```sh
-lead finish <n> --merge --approve
-```
+`--override-guardrail` is the only human-only flag: it is the one way past the
+protected-file guardrail. An unattended agent must never pass it.
 
-`--approve` is human-only and is never part of the headless dispatch prompt.
-It is separate from `--override-guardrail`, which lifts the protected-file
-guardrail. Mark a safe issue with `gh issue edit <n> --add-label risk:a`.
-
-An automatic (`risk:a`) merge also requires an independent review: run
-`lead review <pr>` (a separate headless agent reads the diff, the issue's
-acceptance criteria, and CI, then labels the PR `review:pass` or
-`review:needs-work`). The review comment records the reviewed head SHA, and
-`lead finish` merges only while the PR head still matches it — a commit
-pushed after the review requires another `lead review`. A human can skip the
-gate with `--no-review --approve` (`--no-review` alone is rejected).
+Run `lead review <pr>` when you want the generated scenario tests to run;
+`lead dispatch` keeps that step in its completion definition.
 
 ## Conventions
 

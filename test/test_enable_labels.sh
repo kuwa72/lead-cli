@@ -70,7 +70,6 @@ clear_log
 out="$("$tmp/lead" enable --dry-run)" || fail "enable dry-run failed"
 case "$out" in *"label/ready: missing"*) ;; *) fail "dry-run missing label/ready missing line: $out";; esac
 case "$out" in *"label/blocked: missing"*) ;; *) fail "dry-run missing label/blocked missing line: $out";; esac
-case "$out" in *"label/awaiting-human: missing"*) ;; *) fail "dry-run missing label/awaiting-human missing line: $out";; esac
 case "$out" in *"label/review:pass: missing"*) ;; *) fail "dry-run missing label/review:pass missing line: $out";; esac
 case "$out" in *"label/review:needs-work: missing"*) ;; *) fail "dry-run missing label/review:needs-work missing line: $out";; esac
 [ "$(label_count)" = "1" ] || fail "dry-run created labels"
@@ -86,13 +85,12 @@ clear_log
 out="$("$tmp/lead" enable --yes)" || fail "enable apply failed: $out"
 case "$out" in *"label/ready: created"*) ;; *) fail "missing label/ready created line: $out";; esac
 case "$out" in *"label/blocked: created"*) ;; *) fail "missing label/blocked created line: $out";; esac
-case "$out" in *"label/awaiting-human: created"*) ;; *) fail "missing label/awaiting-human created line: $out";; esac
 case "$out" in *"label/review:pass: created"*) ;; *) fail "missing label/review:pass created line: $out";; esac
 case "$out" in *"label/review:needs-work: created"*) ;; *) fail "missing label/review:needs-work created line: $out";; esac
 case "$out" in *"label/needs-review: ok"*) ;; *) fail "present label must stay ok: $out";; esac
 case "$(cat "$GH_ARG_LOG")" in *"label"*"<create>"*"ready"*) ;; *) fail "gh label create ready was not called";; esac
 case "$(cat "$GH_ARG_LOG")" in *"<--repo>"*"<o/r>"*) ;; *) fail "gh label create was not scoped to o/r";; esac
-[ "$(label_count)" = "6" ] || fail "expected 6 labels after --write"
+[ "$(label_count)" = "5" ] || fail "expected 5 labels after --write"
 
 # --- 4. --check passes once labels exist ---
 out="$("$tmp/lead" enable --check)" || fail "enable --check failed after creation: $out"
