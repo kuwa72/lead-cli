@@ -145,7 +145,9 @@ func mergeOutcome(res Result, err error, opts Options) string {
 	switch {
 	case err != nil:
 		return ledger.OutcomeError
-	case res.Merged:
+	case res.Merged, res.Closed:
+		// Already-merged retries close the issue without merging again;
+		// they are still completed runs, not pauses.
 		return ledger.OutcomeCompleted
 	case res.AwaitingHuman:
 		return ledger.OutcomeAwaitingHuman
@@ -163,22 +165,6 @@ func mergeOutcome(res Result, err error, opts Options) string {
 // Run executes finish for one issue: re-verify PR, wait CI, policy-gated
 // merge, optional comment/close, and state recording.
 func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, opts Options) (res Result, err error) {
-	started := time.Now()
-	var mode string
-	var prNumber int
-	defer func() {
-		if opts.LedgerPath == "" {
-			return
-		}
-		if aerr := ledger.Append(opts.LedgerPath, ledger.Record{
-			Issue: issue, Phase: ledger.PhaseMerge, Mode: mode, PR: prNumber,
-			StartedAt: started, EndedAt: time.Now(),
-			Outcome: mergeOutcome(res, err, opts),
-		}); aerr != nil {
-			fmt.Fprintf(os.Stderr, "finish: ledger: %v\n", aerr)
-		}
-	}()
-
 	if opts.NoReview && !opts.Approve {
 		return Result{}, errors.New("finish: --no-review requires --approve (both are human-only confirmations)")
 	}
@@ -190,8 +176,23 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return Result{}, fmt.Errorf("no workflow for #%d; run `lead run %d` first", issue, issue)
 	}
 
-	mode = w.Mode
-	prNumber = opts.PR
+	// Record only attempts that reached a real workflow: argument errors
+	// and unknown issues must not add noise to the history.
+	started := time.Now()
+	prNumber := opts.PR
+	defer func() {
+		if opts.LedgerPath == "" {
+			return
+		}
+		if aerr := ledger.Append(opts.LedgerPath, ledger.Record{
+			Issue: issue, Phase: ledger.PhaseMerge, Mode: w.Mode, PR: prNumber,
+			StartedAt: started, EndedAt: time.Now(),
+			Outcome: mergeOutcome(res, err, opts),
+		}); aerr != nil {
+			fmt.Fprintf(os.Stderr, "finish: ledger: %v\n", aerr)
+		}
+	}()
+
 	var prRef *state.PRRef
 	if prNumber != 0 {
 		for i := range w.PullRequests {

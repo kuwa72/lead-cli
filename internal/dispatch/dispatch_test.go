@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
+	"github.com/kuwa72/lead-cli/internal/ledger"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
@@ -1339,4 +1340,38 @@ func TestOnce_DeferredDoesNotNotifyAllDone(t *testing.T) {
 		}
 	}
 	_ = gh
+}
+
+// issue #274 review: a run settled by reconnect (watchdog kill or a
+// restarted lead) must also leave one ledger line, attributed to the agent
+// that actually ran.
+func TestOnce_RecordsReconnectedSettleInLedger(t *testing.T) {
+	d, gh, git, _ := newFixture(t, 5)
+	ledgerPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	d.Opts.LedgerPath = ledgerPath
+	seedRunning(t, d, git, 5, 999)
+	iss := gh.Issues[5]
+	iss.State = "OPEN"
+	gh.Issues[5] = iss
+	d.ProcessAlive = func(int) bool { return false }
+
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	recs, err := ledger.Read(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("records = %d, want 1", len(recs))
+	}
+	if recs[0].Issue != 5 || recs[0].Phase != ledger.PhaseRun {
+		t.Fatalf("record = %+v", recs[0])
+	}
+	if recs[0].Agent != "claude" {
+		t.Fatalf("agent = %q, want the recorded agent (claude)", recs[0].Agent)
+	}
+	if recs[0].Outcome != string(OutcomeRetry) && recs[0].Outcome != string(OutcomeBlocked) {
+		t.Fatalf("outcome = %q, want retry or blocked", recs[0].Outcome)
+	}
 }

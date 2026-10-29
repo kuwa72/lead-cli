@@ -574,7 +574,7 @@ func (d *Dispatcher) reconnect(ctx context.Context, opts Options) ([]Running, []
 					continue
 				}
 				res := d.evaluate(ctx, opts, w.Issue, repoRoot, w.Worktree, w.LogPath, reason)
-				d.recordRun(opts, w.Issue, w.StartedAt, res)
+				d.recordRun(opts, w.Issue, w.StartedAt, w.Agent, res)
 				settled = append(settled, res)
 				continue
 			}
@@ -583,7 +583,7 @@ func (d *Dispatcher) reconnect(ctx context.Context, opts Options) ([]Running, []
 		}
 		gone := fmt.Errorf("agent process %d is gone without closing the issue", w.PID)
 		res := d.evaluate(ctx, opts, w.Issue, repoRoot, w.Worktree, w.LogPath, gone)
-		d.recordRun(opts, w.Issue, w.StartedAt, res)
+		d.recordRun(opts, w.Issue, w.StartedAt, w.Agent, res)
 		settled = append(settled, res)
 	}
 	return running, settled, nil
@@ -669,7 +669,14 @@ func (d *Dispatcher) RunningCount() (int, error) {
 func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res Result) {
 	res = Result{Issue: number}
 	started := time.Now()
-	defer func() { d.recordRun(opts, number, started, res) }()
+	defer func() {
+		// On cancellation reconnect owns the record: the PID is still in
+		// the state file and would otherwise be counted twice.
+		if ctx.Err() != nil {
+			return
+		}
+		d.recordRun(opts, number, started, opts.Agent, res)
+	}()
 
 	iss, err := d.Gh.View(ctx, number)
 	if err != nil {
@@ -718,7 +725,7 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res 
 
 // recordRun appends one ledger line for a finished run (issue #274). The
 // history workflows.json deletes on completion lives here.
-func (d *Dispatcher) recordRun(opts Options, number int, started time.Time, res Result) {
+func (d *Dispatcher) recordRun(opts Options, number int, started time.Time, agent string, res Result) {
 	if opts.LedgerPath == "" {
 		return
 	}
@@ -726,7 +733,7 @@ func (d *Dispatcher) recordRun(opts Options, number int, started time.Time, res 
 	if err := ledger.Append(opts.LedgerPath, ledger.Record{
 		Issue:     number,
 		Phase:     ledger.PhaseRun,
-		Agent:     opts.Agent,
+		Agent:     agent,
 		Mode:      state.ModeImplement,
 		StartedAt: started,
 		EndedAt:   time.Now(),
