@@ -609,12 +609,13 @@ touches $HOME. Repository issue labels are kept.`,
 
 	statsCmd := &cobra.Command{
 		Use:   "stats",
-		Short: "Aggregate recorded runs (success rate, duration, reverts)",
+		Short: "Aggregate recorded runs (success rate, duration)",
 		Long: `Aggregate the run history (issue #274).
 
 dispatch appends one line per run to ` + "`runs.jsonl`" + ` next to the state
 file; workflows.json only holds live work. stats reports runs, completed,
-failed, success rate, median duration, reverts, and scenario pass counts.
+failed, awaiting human, success rate, and median duration. Merge events
+contribute reverts and scenario counts once a later step records them.
 --json prints the same numbers for scripts (success_rate is a ratio,
 median_duration_seconds is a number).`,
 		RunE: func(cmd *cobra.Command, args []string) error {

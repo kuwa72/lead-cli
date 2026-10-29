@@ -87,9 +87,11 @@ func TestAggregateEmpty(t *testing.T) {
 func TestAggregateMedianAndScenarios(t *testing.T) {
 	base := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
 	recs := []Record{
-		{StartedAt: base, EndedAt: base.Add(10 * time.Minute), Outcome: OutcomeCompleted, Scenarios: "1/2"},
-		{StartedAt: base, EndedAt: base.Add(30 * time.Minute), Outcome: OutcomeCompleted, Scenarios: "2/2"},
-		{StartedAt: base, EndedAt: base.Add(20 * time.Minute), Outcome: OutcomePostMergeFailed},
+		{Phase: PhaseRun, StartedAt: base, EndedAt: base.Add(10 * time.Minute), Outcome: OutcomeCompleted},
+		{Phase: PhaseRun, StartedAt: base, EndedAt: base.Add(30 * time.Minute), Outcome: OutcomeCompleted},
+		{Phase: PhaseRun, StartedAt: base, EndedAt: base.Add(20 * time.Minute), Outcome: OutcomePostMergeFailed},
+		{Phase: PhaseMerge, Outcome: OutcomeCompleted, Scenarios: "1/2"},
+		{Phase: PhaseMerge, Outcome: OutcomeCompleted, Scenarios: "2/2"},
 	}
 	s := Aggregate(recs)
 	if s.MedianTime != 20*time.Minute {

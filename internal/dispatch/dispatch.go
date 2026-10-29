@@ -573,14 +573,18 @@ func (d *Dispatcher) reconnect(ctx context.Context, opts Options) ([]Running, []
 					running = append(running, Running{Issue: w.Issue, PID: w.PID})
 					continue
 				}
-				settled = append(settled, d.evaluate(ctx, opts, w.Issue, repoRoot, w.Worktree, w.LogPath, reason))
+				res := d.evaluate(ctx, opts, w.Issue, repoRoot, w.Worktree, w.LogPath, reason)
+				d.recordRun(opts, w.Issue, w.StartedAt, res)
+				settled = append(settled, res)
 				continue
 			}
 			running = append(running, Running{Issue: w.Issue, PID: w.PID})
 			continue
 		}
 		gone := fmt.Errorf("agent process %d is gone without closing the issue", w.PID)
-		settled = append(settled, d.evaluate(ctx, opts, w.Issue, repoRoot, w.Worktree, w.LogPath, gone))
+		res := d.evaluate(ctx, opts, w.Issue, repoRoot, w.Worktree, w.LogPath, gone)
+		d.recordRun(opts, w.Issue, w.StartedAt, res)
+		settled = append(settled, res)
 	}
 	return running, settled, nil
 }
@@ -718,11 +722,8 @@ func (d *Dispatcher) recordRun(opts Options, number int, started time.Time, res 
 	if opts.LedgerPath == "" {
 		return
 	}
-	attempts := 0
-	if w, ok, err := d.Store.Get(number, ""); err == nil && ok {
-		attempts = w.Attempts
-	}
-	_ = ledger.Append(opts.LedgerPath, ledger.Record{
+	attempts := res.Attempts
+	if err := ledger.Append(opts.LedgerPath, ledger.Record{
 		Issue:     number,
 		Phase:     ledger.PhaseRun,
 		Agent:     opts.Agent,
@@ -731,7 +732,9 @@ func (d *Dispatcher) recordRun(opts Options, number int, started time.Time, res 
 		EndedAt:   time.Now(),
 		Outcome:   string(res.Outcome),
 		Attempts:  attempts,
-	})
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "dispatch: ledger: %v\n", err)
+	}
 }
 
 // evaluate settles an issue whose agent is no longer running: closed on

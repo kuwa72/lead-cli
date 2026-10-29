@@ -867,3 +867,16 @@ func TestRun_RecordsMergeInLedger(t *testing.T) {
 		t.Fatalf("record = %+v", recs[0])
 	}
 }
+
+// issue #274 review: --outcome blocked is not a success.
+func TestMergeOutcome_BlockedIsNotCompleted(t *testing.T) {
+	if got := mergeOutcome(Result{}, nil, Options{Outcome: "blocked"}); got != ledger.OutcomeBlocked {
+		t.Fatalf("outcome = %q, want %q", got, ledger.OutcomeBlocked)
+	}
+	if got := mergeOutcome(Result{}, errors.New("boom"), Options{}); got != ledger.OutcomeError {
+		t.Fatalf("outcome = %q, want error", got)
+	}
+	if got := mergeOutcome(Result{AwaitingHuman: true}, nil, Options{}); got != ledger.OutcomeAwaitingHuman {
+		t.Fatalf("outcome = %q, want awaiting", got)
+	}
+}

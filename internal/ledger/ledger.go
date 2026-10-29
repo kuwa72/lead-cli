@@ -39,8 +39,8 @@ const (
 
 // Record is one run. Fields that a caller cannot know stay empty.
 type Record struct {
-	Repo      string    `json:"repo,omitempty"`
-	Issue     int       `json:"issue"`
+	Repo  string `json:"repo,omitempty"`
+	Issue int    `json:"issue"`
 	// Phase separates the dispatch run ("run", default) from the merge
 	// event ("merge"): both are appended, but only runs count as attempts.
 	Phase     string    `json:"phase,omitempty"`
@@ -139,7 +139,7 @@ func Aggregate(recs []Record) Stats {
 	var s Stats
 	var durations []time.Duration
 	for _, r := range recs {
-		if r.Phase != "" && r.Phase != PhaseRun {
+		if r.Phase == PhaseMerge {
 			// A merge event: contributes scenarios/reverts, not attempts.
 			if pass, total, ok := parseScenarios(r.Scenarios); ok {
 				s.Scenarios += pass
@@ -164,10 +164,6 @@ func Aggregate(recs []Record) Stats {
 		}
 		if !r.StartedAt.IsZero() && !r.EndedAt.IsZero() && r.EndedAt.After(r.StartedAt) {
 			durations = append(durations, r.EndedAt.Sub(r.StartedAt))
-		}
-		if pass, total, ok := parseScenarios(r.Scenarios); ok {
-			s.Scenarios += pass
-			s.ScenarioAll += total
 		}
 	}
 	if s.Runs > 0 {

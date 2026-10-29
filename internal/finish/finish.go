@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -150,6 +151,8 @@ func mergeOutcome(res Result, err error, opts Options) string {
 		return ledger.OutcomeAwaitingHuman
 	case len(res.Guarded) > 0:
 		return ledger.OutcomeGuardrail
+	case opts.Outcome == "blocked":
+		return ledger.OutcomeBlocked
 	case opts.Outcome != "":
 		return ledger.OutcomeCompleted
 	default:
@@ -167,11 +170,13 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		if opts.LedgerPath == "" {
 			return
 		}
-		_ = ledger.Append(opts.LedgerPath, ledger.Record{
+		if aerr := ledger.Append(opts.LedgerPath, ledger.Record{
 			Issue: issue, Phase: ledger.PhaseMerge, Mode: mode, PR: prNumber,
 			StartedAt: started, EndedAt: time.Now(),
 			Outcome: mergeOutcome(res, err, opts),
-		})
+		}); aerr != nil {
+			fmt.Fprintf(os.Stderr, "finish: ledger: %v\n", aerr)
+		}
 	}()
 
 	if opts.NoReview && !opts.Approve {

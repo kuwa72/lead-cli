@@ -28,9 +28,12 @@ out="$("$tmp/lead" stats)"
 
 # --- 3 runs, 2 completed ---
 cat > "$tmp/state/runs.jsonl" <<'EOF'
-{"issue":1,"agent":"devin","outcome":"completed","started_at":"2026-10-29T01:00:00Z","ended_at":"2026-10-29T01:10:00Z","scenarios":"1/1"}
-{"issue":2,"agent":"devin","outcome":"completed","started_at":"2026-10-29T02:00:00Z","ended_at":"2026-10-29T02:30:00Z","scenarios":"2/2"}
-{"issue":3,"agent":"devin","outcome":"blocked","started_at":"2026-10-29T03:00:00Z","ended_at":"2026-10-29T03:20:00Z","scenarios":"1/2"}
+{"issue":1,"phase":"run","agent":"devin","outcome":"completed","started_at":"2026-10-29T01:00:00Z","ended_at":"2026-10-29T01:10:00Z"}
+{"issue":2,"phase":"run","agent":"devin","outcome":"completed","started_at":"2026-10-29T02:00:00Z","ended_at":"2026-10-29T02:30:00Z"}
+{"issue":3,"phase":"run","agent":"devin","outcome":"blocked","started_at":"2026-10-29T03:00:00Z","ended_at":"2026-10-29T03:20:00Z"}
+{"issue":1,"phase":"merge","outcome":"completed","scenarios":"1/1"}
+{"issue":2,"phase":"merge","outcome":"completed","scenarios":"2/2"}
+{"issue":3,"phase":"merge","outcome":"paused","scenarios":"1/2"}
 EOF
 
 out="$("$tmp/lead" stats)"
