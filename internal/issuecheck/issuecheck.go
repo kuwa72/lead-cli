@@ -2,7 +2,8 @@
 // needs before an agent receives it (issue #254).
 //
 // `lead new` and `lead ready` both call Check so an issue cannot enter the
-// queue with missing acceptance criteria, scope, or risk classification.
+// queue with missing acceptance criteria, scope, scenario, or risk
+// classification.
 package issuecheck
 
 import (
@@ -15,6 +16,9 @@ import (
 const (
 	AcceptanceHeading = "## 受入条件"
 	OutOfScopeHeading = "## スコープ外"
+	// ScenarioHeading is the verification the implementation agent must
+	// satisfy after the change (issue #279).
+	ScenarioHeading = "## シナリオ"
 )
 
 // Accepted aliases. Bodies written in English (or by an AI draft) must not be
@@ -24,6 +28,7 @@ var (
 	AcceptanceHeadings = []string{AcceptanceHeading, "## Acceptance criteria"}
 	OutOfScopeHeadings = []string{OutOfScopeHeading, "## Scope", "## Out of scope", "## 対象外"}
 	OutOfScopeMarkers  = []string{"**対象外**", "**スコープ外**", "**Out of scope**"}
+	ScenarioHeadings   = []string{ScenarioHeading, "## Scenarios"}
 )
 
 // RiskLabels are the accepted risk classifications (docs/config.md).
@@ -43,6 +48,10 @@ const Template = `# <title>
 ## スコープ外
 
 - <!-- この Issue でやらないこと -->
+
+## シナリオ
+
+1. <!-- 実行するコマンド → 期待する出力・終了コード -->
 `
 
 var (
@@ -51,6 +60,10 @@ var (
 	checklist = regexp.MustCompile(`^[ \t]*-[ \t]+\[[ \t]*\][ \t]`)
 	// codeSpan matches a backtick-quoted command or path.
 	codeSpan = regexp.MustCompile("`[^`]+`")
+	// stepItem matches a numbered list line with text left after the marker.
+	stepItem = regexp.MustCompile(`^(?:\d+[.)]|[-*+])\s+\S`)
+	// htmlComment strips template placeholders before the step check.
+	htmlComment = regexp.MustCompile(`(?s)<!--.*?-->`)
 	// testPath matches a repository test path: test/, *_test.go, *.spec.*.
 	testPath = regexp.MustCompile(`(^|[^\w])(\./)?test/|[\w./-]+_test\.go\b|[\w./-]+\.spec\.[A-Za-z0-9]+`)
 )
@@ -92,6 +105,12 @@ func Check(body string, labels []string) []string {
 
 	if _, ok := sectionAny(body, OutOfScopeHeadings); !ok && !hasAnyMarker(body, OutOfScopeMarkers) {
 		missing = append(missing, "`"+OutOfScopeHeading+"` / `## Scope` / `## Out of scope`（または `**対象外**`）がありません")
+	}
+
+	if scenario, ok := sectionAny(body, ScenarioHeadings); !ok {
+		missing = append(missing, "`"+ScenarioHeading+"` または `## Scenarios` セクションがありません")
+	} else if !hasScenarioStep(scenario) {
+		missing = append(missing, "`"+ScenarioHeading+"` に実行可能なステップ（バッククォートのコマンドまたはテストパスを含むリスト項目）がありません")
 	}
 
 	if riskLabel(labels) == "" {
@@ -170,6 +189,19 @@ func hasAnyMarker(body string, markers []string) bool {
 			if strings.EqualFold(s, m) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// hasScenarioStep reports whether the section holds at least one numbered or
+// bulleted step with real text (HTML comments do not count: the template
+// placeholder must not satisfy the check).
+func hasScenarioStep(section string) bool {
+	for _, line := range strings.Split(section, "\n") {
+		s := strings.TrimSpace(htmlComment.ReplaceAllString(line, ""))
+		if stepItem.MatchString(s) && (codeSpan.MatchString(s) || testPath.MatchString(s)) {
+			return true
 		}
 	}
 	return false

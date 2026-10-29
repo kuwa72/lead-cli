@@ -18,6 +18,10 @@ const validBody = `# feat(cli): add lead new
 ## スコープ外
 
 - 既存 Issue の自動修正
+
+## シナリオ
+
+1. ` + "`lead new --body-file valid.md`" + ` → Issue が作られる
 `
 
 func TestCheck_ValidBodyWithBacktickCommand(t *testing.T) {
@@ -36,6 +40,10 @@ func TestCheck_ValidBodyWithTestPath(t *testing.T) {
 ## スコープ外
 
 - none
+
+## シナリオ
+
+1. ` + "`lead new --body-file valid.md`" + ` → Issue が作られる
 `
 	if missing := Check(body, []string{"risk:a"}); len(missing) != 0 {
 		t.Fatalf("Check(test path) = %v, want no missing items", missing)
@@ -52,6 +60,10 @@ func TestCheck_ValidBodyWithGoTestFile(t *testing.T) {
 ## スコープ外
 
 - none
+
+## シナリオ
+
+1. ` + "`go test ./internal/issuecheck/`" + ` → ok
 `
 	if missing := Check(body, []string{"risk:a"}); len(missing) != 0 {
 		t.Fatalf("Check(_test.go) = %v, want no missing items", missing)
@@ -68,6 +80,10 @@ func TestCheck_RejectsProseOnlyAcceptance(t *testing.T) {
 ## スコープ外
 
 - none
+
+## シナリオ
+
+1. ` + "`cmd`" + ` → 嬉しくなる
 `
 	missing := Check(body, []string{"risk:b"})
 	if len(missing) != 1 || !strings.Contains(missing[0], "実行可能") {
@@ -85,6 +101,10 @@ nothing here.
 ## スコープ外
 
 - none
+
+## シナリオ
+
+1. ` + "`cmd`" + ` → 何か起きる
 `
 	missing := Check(body, []string{"risk:b"})
 	if len(missing) != 1 || !strings.Contains(missing[0], "受入条件") || !strings.Contains(missing[0], "Acceptance criteria") {
@@ -102,6 +122,10 @@ func TestCheck_RejectsAcceptanceWithoutCheckbox(t *testing.T) {
 ## スコープ外
 
 - none
+
+## シナリオ
+
+1. ` + "`cmd`" + ` → 何か起きる
 `
 	missing := Check(body, []string{"risk:b"})
 	if len(missing) != 1 || !strings.Contains(missing[0], "- [ ]") {
@@ -115,6 +139,10 @@ func TestCheck_RejectsMissingScopeSection(t *testing.T) {
 ## 受入条件
 
 - [ ] ` + "`./test/run-tests.sh`" + ` が pass する
+
+## シナリオ
+
+1. ` + "`cmd`" + ` → 何か起きる
 `
 	missing := Check(body, []string{"risk:b"})
 	if len(missing) != 1 || !strings.Contains(missing[0], "スコープ外") {
@@ -131,8 +159,8 @@ func TestCheck_RejectsMissingRisk(t *testing.T) {
 
 func TestCheck_CollectsEveryMissingItem(t *testing.T) {
 	missing := Check("# title\n\njust prose\n", nil)
-	if len(missing) != 3 {
-		t.Fatalf("Check(empty body) = %v, want 3 findings", missing)
+	if len(missing) != 4 {
+		t.Fatalf("Check(empty body) = %v, want 4 findings", missing)
 	}
 }
 
@@ -148,6 +176,10 @@ func TestCheck_SubsectionDoesNotEndTheSection(t *testing.T) {
 ## スコープ外
 
 - none
+
+## シナリオ
+
+1. ` + "`go test ./...`" + ` → ok
 `
 	if missing := Check(body, []string{"risk:b"}); len(missing) != 0 {
 		t.Fatalf("Check(subsection) = %v, want no missing items", missing)
@@ -175,10 +207,91 @@ func TestMessage_Bullets(t *testing.T) {
 }
 
 func TestTemplate_HasRequiredSections(t *testing.T) {
-	for _, want := range []string{"## 受入条件", "## スコープ外", "- [ ]"} {
+	for _, want := range []string{"## 受入条件", "## スコープ外", "## シナリオ", "- [ ]"} {
 		if !strings.Contains(Template, want) {
 			t.Errorf("Template missing %q:\n%s", want, Template)
 		}
+	}
+}
+
+// issue #279: a scenario is the verification the implementation agent must
+// satisfy; an issue without one cannot be checked after the fact.
+func TestCheck_RejectsMissingScenario(t *testing.T) {
+	body := `# title
+
+## 受入条件
+
+- [ ] ` + "`./test/run-tests.sh`" + ` が pass する
+
+## スコープ外
+
+- none
+`
+	missing := Check(body, []string{"risk:b"})
+	if len(missing) != 1 || !strings.Contains(missing[0], "シナリオ") || !strings.Contains(missing[0], "Scenarios") {
+		t.Fatalf("Check(no scenario) = %v, want a scenario finding", missing)
+	}
+}
+
+func TestCheck_RejectsScenarioStepWithoutAnExecutable(t *testing.T) {
+	body := `# title
+
+## 受入条件
+
+- [ ] ` + "`./test/run-tests.sh`" + ` が pass する
+
+## スコープ外
+
+- none
+
+## シナリオ
+
+1. 何かする → 何か起きる
+`
+	missing := Check(body, []string{"risk:b"})
+	if len(missing) != 1 || !strings.Contains(missing[0], "実行可能") {
+		t.Fatalf("Check(prose scenario) = %v, want an executable-step finding", missing)
+	}
+}
+
+func TestCheck_AcceptsEnglishScenarioHeading(t *testing.T) {
+	body := `# title
+
+## 受入条件
+
+- [ ] ` + "`./test/run-tests.sh`" + ` が pass する
+
+## スコープ外
+
+- none
+
+## Scenarios
+
+1. run ` + "`lead stats`" + ` → exit 0
+`
+	if missing := Check(body, []string{"risk:a"}); len(missing) != 0 {
+		t.Fatalf("Check(english scenario) = %v, want no missing items", missing)
+	}
+}
+
+func TestCheck_RejectsScenarioWithoutSteps(t *testing.T) {
+	body := `# title
+
+## 受入条件
+
+- [ ] ` + "`./test/run-tests.sh`" + ` が pass する
+
+## スコープ外
+
+- none
+
+## シナリオ
+
+1. <!-- 実行するコマンド → 期待する出力・終了コード -->
+`
+	missing := Check(body, []string{"risk:b"})
+	if len(missing) != 1 || !strings.Contains(missing[0], "ステップ") {
+		t.Fatalf("Check(empty scenario) = %v, want a step finding", missing)
 	}
 }
 
@@ -197,6 +310,10 @@ func TestCheck_AcceptsEnglishHeadingsAndBoldScope(t *testing.T) {
 
 **対象外**
 - list cache
+
+## Scenarios
+
+1. run ` + "`lead inbox`" + ` → cache hit
 `
 	if missing := Check(body, []string{"risk:b"}); len(missing) != 0 {
 		t.Fatalf("Check(english body) = %v, want no missing items", missing)
@@ -211,6 +328,10 @@ func TestCheck_RejectsEnglishBodyWithoutScope(t *testing.T) {
 ## Acceptance criteria
 
 - [ ] ` + "`go test ./...`" + ` passes
+
+## Scenarios
+
+1. run ` + "`go test ./...`" + ` → ok
 `
 	missing := Check(body, []string{"risk:b"})
 	if len(missing) != 1 || !strings.Contains(missing[0], "スコープ外") {

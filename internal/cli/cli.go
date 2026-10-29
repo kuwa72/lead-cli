@@ -459,7 +459,9 @@ $LEAD_SPEC_PROGRESS_INTERVAL; negative disables).`,
 before creating anything. The body must contain a ` + "`## 受入条件`" + ` section with
 at least one ` + "`- [ ]`" + ` item, at least one executable acceptance condition (a
 バッククォートで囲まれたコマンド、または test/・*_test.go・*.spec.* などの
-テストパス), and a ` + "`## スコープ外`" + ` section. The issue also needs a risk label:
+テストパス), a ` + "`## スコープ外`" + ` section, and a ` + "`## シナリオ`" + ` (or
+` + "`## Scenarios`" + `) section with at least one step containing a
+backtick-quoted command or a test path. The issue also needs a risk label:
 risk:a or risk:b (--risk, default b).
 
 Labels: always risk:*; with --ready the issue is enqueued as ready, otherwise
@@ -485,7 +487,9 @@ else from the first Markdown heading in the body.`,
 Fetches issue <n> and applies the same rules as ` + "`lead new`" + `: an
 acceptance section (` + "`## 受入条件`" + ` or ` + "`## Acceptance criteria`" + `) with at least
 one executable ` + "`- [ ]`" + ` item, an out-of-scope section (` + "`## スコープ外`" + `,
-` + "`## Scope`" + `, ` + "`## Out of scope`" + `, or a bold ` + "`**対象外**`" + `), and a risk
+` + "`## Scope`" + `, ` + "`## Out of scope`" + `, or a bold ` + "`**対象外**`" + `), a scenario
+section (` + "`## シナリオ`" + ` or ` + "`## Scenarios`" + `) with at least one step
+containing a backtick-quoted command or a test path, and a risk
 label (risk:a or risk:b). Use --risk to apply the classification when the
 issue has none. On success it labels the issue risk:* and ready and removes
 needs-review. On failure it changes no labels, lists the missing items, and

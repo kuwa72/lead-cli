@@ -81,6 +81,9 @@ A body passes when it has all of:
   backtick-quoted command (`` `./test/run-tests.sh` ``) or a test path
   (`test/`, `*_test.go`, `*.spec.*`, …)
 - a `## スコープ外` section
+- a `## シナリオ` (`## Scenarios`) section with at least one step that contains
+  a backtick-quoted command or a test path (the executable check is the same
+  as the acceptance condition)
 - a risk label: `risk:a` or `risk:b` (`lead new --risk`, default `b`; for
   `lead ready` the label must already be on the issue)
 

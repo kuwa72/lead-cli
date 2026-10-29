@@ -48,7 +48,7 @@ case "$1 $2" in
   "issue view")
     case "$3" in
       42) cat <<'JSON'
-{"number":42,"title":"valid","body":"# valid\n\n## 受入条件\n\n- [ ] `./test/run-tests.sh` が pass する\n\n## スコープ外\n\n- none","state":"OPEN","labels":[{"name":"needs-review"},{"name":"risk:b"}]}
+{"number":42,"title":"valid","body":"# valid\n\n## 受入条件\n\n- [ ] `./test/run-tests.sh` が pass する\n\n## スコープ外\n\n- none\n\n## シナリオ\n\n1. `lead ready 42` → ready が付く","state":"OPEN","labels":[{"name":"needs-review"},{"name":"risk:b"}]}
 JSON
         ;;
       43) cat <<'JSON'
@@ -56,11 +56,15 @@ JSON
 JSON
         ;;
       44) cat <<'JSON'
-{"number":44,"title":"no risk","body":"# no risk\n\n## 受入条件\n\n- [ ] `./test/run-tests.sh` が pass する\n\n## スコープ外\n\n- none","state":"OPEN","labels":[{"name":"needs-review"}]}
+{"number":44,"title":"no risk","body":"# no risk\n\n## 受入条件\n\n- [ ] `./test/run-tests.sh` が pass する\n\n## スコープ外\n\n- none\n\n## シナリオ\n\n1. `lead ready 44` → ready が付く","state":"OPEN","labels":[{"name":"needs-review"}]}
 JSON
         ;;
       45) cat <<'JSON'
-{"number":45,"title":"english","body":"# english\n\n## Acceptance criteria\n\n- [ ] `./test/run-tests.sh` passes\n\n## Scope\n\n**変更対象**\n- preview cache\n\n**対象外**\n- list cache","state":"OPEN","labels":[{"name":"needs-review"}]}
+{"number":45,"title":"english","body":"# english\n\n## Acceptance criteria\n\n- [ ] `./test/run-tests.sh` passes\n\n## Scope\n\n**変更対象**\n- preview cache\n\n**対象外**\n- list cache\n\n## Scenarios\n\n1. `lead ready 45` → ready is added","state":"OPEN","labels":[{"name":"needs-review"}]}
+JSON
+        ;;
+      46) cat <<'JSON'
+{"number":46,"title":"no scenario","body":"# no scenario\n\n## 受入条件\n\n- [ ] `./test/run-tests.sh` が pass する\n\n## スコープ外\n\n- none","state":"OPEN","labels":[{"name":"needs-review"},{"name":"risk:b"}]}
 JSON
         ;;
       *) echo "unexpected issue view: $*" >&2; exit 3 ;;
@@ -75,7 +79,7 @@ cat > "$tmp/bin/editor" <<'EOF'
 #!/bin/sh
 printf 'EDITOR %s\n' "$*" >> "$EDITOR_LOG"
 target="$1"
-if grep -q '## 受入条件' "$target" && grep -q '## スコープ外' "$target"; then
+if grep -q '## 受入条件' "$target" && grep -q '## スコープ外' "$target" && grep -q '## シナリオ' "$target"; then
   echo "template-ok" >> "$EDITOR_LOG"
 fi
 cat "$BODY_SRC" > "$target"
@@ -85,6 +89,21 @@ export PATH="$tmp/bin:$PATH"
 
 cat > "$tmp/valid.md" <<'EOF'
 # feat(cli): add lead new
+
+## 受入条件
+
+- [ ] `./test/run-tests.sh` が pass する
+
+## スコープ外
+
+- none
+
+## シナリオ
+
+1. `lead new --body-file valid.md` → Issue が作られる
+EOF
+cat > "$tmp/no_scenario.md" <<'EOF'
+# broken
 
 ## 受入条件
 
@@ -125,7 +144,17 @@ case "$out" in *"受入条件"*) ;; *) fail "missing 受入条件 not reported: 
 case "$out" in *"スコープ外"*) ;; *) fail "missing スコープ外 not reported: $out";; esac
 grep -q '^GH issue create' "$GH_LOG" && fail "invalid body must not create an issue: $(cat "$GH_LOG")"
 
-# --- 3. non-TTY without --body-file is an error before $EDITOR ----------------
+# --- 3. missing scenario: no create, exit 1, シナリオ reported ----------------
+: > "$GH_LOG"
+set +e
+out="$("$tmp/lead" new --body-file "$tmp/no_scenario.md" 2>&1)"
+status=$?
+set -e
+[ "$status" -eq 1 ] || fail "no-scenario exit = $status, want 1: $out"
+case "$out" in *"シナリオ"*) ;; *) fail "missing シナリオ not reported: $out";; esac
+grep -q '^GH issue create' "$GH_LOG" && fail "no-scenario body must not create an issue: $(cat "$GH_LOG")"
+
+# --- 4. non-TTY without --body-file is an error before $EDITOR ----------------
 : > "$GH_LOG"; : > "$EDITOR_LOG"
 set +e
 out="$(EDITOR="$tmp/bin/editor" "$tmp/lead" new </dev/null 2>&1)"
@@ -180,7 +209,7 @@ grep -q '^GH issue edit' "$GH_LOG" && fail "no-risk ready must not change labels
 
 # --- 9. help documents the required sections and validation rules ------------
 out="$("$tmp/lead" new --help 2>&1)" || fail "lead new --help failed"
-for needle in "## 受入条件" "## スコープ外" "risk:a" "risk:b" "バッククォート" "--body-file" "--ready" "--risk"; do
+for needle in "## 受入条件" "## スコープ外" "## シナリオ" "risk:a" "risk:b" "バッククォート" "--body-file" "--ready" "--risk"; do
   case "$out" in *"$needle"*) ;; *) fail "lead new --help lacks $needle: $out";; esac
 done
 out="$("$tmp/lead" ready --help 2>&1)" || fail "lead ready --help failed"
@@ -203,5 +232,15 @@ status=$?
 set -e
 [ "$status" -eq 1 ] || fail "no-risk english ready exit = $status, want 1: $out"
 grep -q '^GH issue edit' "$GH_LOG" && fail "no-risk english ready must not change labels: $(cat "$GH_LOG")"
+
+# --- 12. lead ready <n>: a missing scenario is rejected ----------------------
+: > "$GH_LOG"
+set +e
+out="$("$tmp/lead" ready 46 2>&1)"
+status=$?
+set -e
+[ "$status" -eq 1 ] || fail "no-scenario ready exit = $status, want 1: $out"
+case "$out" in *"シナリオ"*) ;; *) fail "no-scenario ready does not list シナリオ: $out";; esac
+grep -q '^GH issue edit' "$GH_LOG" && fail "no-scenario ready must not change labels: $(cat "$GH_LOG")"
 
 echo "new/ready tests passed"

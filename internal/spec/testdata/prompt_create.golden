@@ -9,25 +9,37 @@ lead say で一言から Issue を起票したい
 ## リポジトリ規約（AGENTS.md）
 TDD required
 
+## リポジトリの現状（起票前に必ず読むこと）
+- ファイル一覧: internal/spec/spec.go, internal/cli/cli.go
+- 直近のクローズ Issue: #264 fix(issuecheck): accept English headings
+- open の Issue: #281 docs(agents): drop approval
+
 ## 制約
 1. 各Issueは、目的・対象範囲・受入条件・検証方法が1つのまとまりになっていること。1セッションで終わらない場合は複数Issueに分け、本文で相互に参照すること。
 2. 受入条件は実行結果、生成物、終了状態など検証可能な形で書くこと。
 3. 実装Issueでは、最初に追加する失敗テスト（Red）を明記すること。
 4. 一言にない要件を勝手に追加しないこと。不明点は Open questions に分離すること。
 5. タイトルは256文字以内・1行・文末ピリオドなし。要点（何を）・対象（どこに）・意図（なぜ）が読めること。動詞始まりの接頭辞（例: feat(cli):, fix(dispatch):, docs:）を推奨。
+6. 本文に書くファイル名・関数名は推測せず、リポジトリで読んで確認したものだけを書くこと。読んでいないものは Open questions に分離すること。
 
 ## 本文の形式（Markdown）
 ## Mode
 implement | research | docs のいずれか
 
-## Purpose
+## Goal
 このIssueで完了させること（1〜3文）
 
 ## Scope
 変更対象と対象外
 
+## Non-goals
+このIssueでやらないこと
+
 ## Acceptance criteria
 - 実行結果・生成物・終了状態で検証できる条件（チェックリスト）
+
+## シナリオ
+1. <!-- 実行するコマンド → 期待する出力・終了コード -->（実装後に使い捨てテストで検証する）
 
 ## TDD first step
 最初に追加してRedを確認するテスト。該当しない場合は理由

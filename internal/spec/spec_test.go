@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kuwa72/lead-cli/internal/issuecheck"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/testutil"
 	"github.com/kuwa72/lead-cli/internal/watchdog"
@@ -60,7 +63,12 @@ func newRunner(t *testing.T, out string) (*Runner, *testutil.FakeGhClient, *fake
 // --- prompt goldens ---------------------------------------------------------
 
 func TestBuildPrompt_Create_MatchesGolden(t *testing.T) {
-	out, err := BuildPrompt(PromptInput{Repository: "o/r", OneLiner: "lead say で一言から Issue を起票したい", Rules: "TDD required"})
+	out, err := BuildPrompt(PromptInput{Repository: "o/r", OneLiner: "lead say で一言から Issue を起票したい", Rules: "TDD required",
+		Evidence: Evidence{
+			Files:  []string{"internal/spec/spec.go", "internal/cli/cli.go"},
+			Merged: []string{"#264 fix(issuecheck): accept English headings"},
+			Open:   []string{"#281 docs(agents): drop approval"},
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +109,110 @@ func TestBuildPrompt_DefaultsAndErrors(t *testing.T) {
 	}
 	if _, err := BuildPrompt(PromptInput{OneLiner: "x", Parent: &ports.Issue{Number: 1}, Redraft: &RedraftInput{}}); err == nil {
 		t.Error("parent+redraft accepted")
+	}
+}
+
+// issue #279: the spec agent must see the repository before it writes file
+// names, so its prompt carries files, recent merges and open issues.
+func TestBuildPrompt_IncludesRepositoryEvidence(t *testing.T) {
+	out, err := BuildPrompt(PromptInput{
+		Repository: "o/r", OneLiner: "x", Rules: "r",
+		Evidence: Evidence{
+			Files:  []string{"internal/spec/spec.go", "internal/cli/cli.go"},
+			Merged: []string{"#264 fix(issuecheck): accept English headings"},
+			Open:   []string{"#281 docs(agents): drop approval"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"リポジトリの現状", "internal/spec/spec.go", "#264", "#281", "読んで確認したものだけ"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// issue #279: the schema itself must satisfy the gate `lead new` applies.
+func TestBodyFormat_SatisfiesIssueCheck(t *testing.T) {
+	body := "# t\n\n" + strings.NewReplacer(
+		"- 実行結果・生成物・終了状態で検証できる条件（チェックリスト）",
+		"- [ ] `go test ./...` が pass する",
+		"1. <!-- 実行するコマンド → 期待する出力・終了コード -->（実装後に使い捨てテストで検証する）",
+		"1. `lead x` → exit 0",
+	).Replace(bodyFormat)
+	if missing := issuecheck.Check(body, []string{"risk:a"}); len(missing) != 0 {
+		t.Fatalf("bodyFormat fails issuecheck: %v\n%s", missing, body)
+	}
+}
+
+// issue #279: evidence collection must cap the prompt and must not fail the
+// whole run when gh is unavailable.
+func TestGatherEvidenceCapsAndSurvivesGHErrors(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q", "-b", "main")
+	for i := 0; i < 65; i++ {
+		name := filepath.Join(dir, fmt.Sprintf("f%02d.txt", i))
+		if err := os.WriteFile(name, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+
+	gh := &testutil.FakeGhClient{MergedErr: errors.New("gh down"), Merged: make([]ports.MergedIssue, 12)}
+	for i := 0; i < 12; i++ {
+		gh.Summaries = append(gh.Summaries, ports.IssueSummary{Number: i + 1, Title: "x"})
+	}
+	ev := (&Runner{Gh: gh}).gatherEvidence(context.Background(), dir)
+	if len(ev.Files) != evidenceFiles {
+		t.Errorf("files = %d, want %d", len(ev.Files), evidenceFiles)
+	}
+	if len(ev.Open) != evidenceLimit {
+		t.Errorf("open = %d, want %d", len(ev.Open), evidenceLimit)
+	}
+	if len(ev.Merged) != 0 {
+		t.Errorf("merged = %v, want empty on gh error", ev.Merged)
+	}
+	gh.MergedErr = nil
+	ev = (&Runner{Gh: gh}).gatherEvidence(context.Background(), dir)
+	if len(ev.Merged) != evidenceLimit {
+		t.Errorf("merged = %d, want %d", len(ev.Merged), evidenceLimit)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// issue #279: what `lead say --dry-run` prints must be a body `lead new` /
+// `lead ready` accept.
+func TestDryRunBodyPassesIssueCheck(t *testing.T) {
+	body := "# feat: x\n\n" + strings.NewReplacer(
+		"- 実行結果・生成物・終了状態で検証できる条件（チェックリスト）",
+		"- [ ] `go test ./...` が pass する",
+		"1. <!-- 実行するコマンド → 期待する出力・終了コード -->（実装後に使い捨てテストで検証する）",
+		"1. `lead x` → exit 0",
+	).Replace(bodyFormat)
+	r, _, _, buf := newRunner(t, `[{"title":"feat: x","body":`+strconv.Quote(body)+`}]`)
+	r.Opts.DryRun = true
+	if _, err := r.Say(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	const sep = "\n---\n"
+	i := strings.Index(got, sep)
+	j := strings.Index(got[i+len(sep):], sep)
+	if i < 0 || j < 0 {
+		t.Fatalf("dry-run output lacks the body fence:\n%s", got)
+	}
+	printed := got[i+len(sep) : i+len(sep)+j]
+	if missing := issuecheck.Check(printed, []string{"risk:a"}); len(missing) != 0 {
+		t.Fatalf("dry-run body fails issuecheck: %v\n%s", missing, printed)
 	}
 }
 

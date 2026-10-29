@@ -146,7 +146,8 @@ func (r *Runner) Say(ctx context.Context, oneLiner string) (Result, error) {
 }
 
 func (r *Runner) create(ctx context.Context, opts Options, oneLiner string) (Result, error) {
-	in := PromptInput{Repository: opts.Repository, OneLiner: oneLiner, Rules: opts.Rules}
+	in := PromptInput{Repository: opts.Repository, OneLiner: oneLiner, Rules: opts.Rules,
+		Evidence: r.gatherEvidence(ctx, opts.WorkDir)}
 	if opts.FollowUp > 0 {
 		parent, err := r.Gh.View(ctx, opts.FollowUp)
 		if err != nil {
@@ -206,6 +207,45 @@ func (r *Runner) create(ctx context.Context, opts Options, oneLiner string) (Res
 	return res, nil
 }
 
+// gatherEvidence reads the repository snapshot the prompt shows (issue #279).
+// git/gh failures are not fatal: the prompt still works, just with less
+// context, and the one-liner's issue must not fail because a listing failed.
+func (r *Runner) gatherEvidence(ctx context.Context, workDir string) Evidence {
+	var ev Evidence
+	if workDir != "" {
+		if out, err := exec.CommandContext(ctx, "git", "-C", workDir, "ls-files").Output(); err == nil {
+			for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if f == "" {
+					continue
+				}
+				if len(ev.Files) == evidenceFiles {
+					break
+				}
+				ev.Files = append(ev.Files, f)
+			}
+		}
+	}
+	if r.Gh != nil {
+		if merged, err := r.Gh.ListMergedSince(ctx, time.Now().AddDate(0, 0, -30)); err == nil {
+			for _, m := range merged {
+				if len(ev.Merged) == evidenceLimit {
+					break
+				}
+				ev.Merged = append(ev.Merged, fmt.Sprintf("#%d %s", m.Number, m.Title))
+			}
+		}
+		if open, err := r.Gh.ListOpen(ctx); err == nil {
+			for _, o := range open {
+				if len(ev.Open) == evidenceLimit {
+					break
+				}
+				ev.Open = append(ev.Open, fmt.Sprintf("#%d %s", o.Number, o.Title))
+			}
+		}
+	}
+	return ev
+}
+
 func siblingFooter(refs []ports.IssueRef, self int) string {
 	var b strings.Builder
 	b.WriteString("\n\n## 関連 Issue（lead say で同時起票）\n")
@@ -230,7 +270,8 @@ func (r *Runner) redraft(ctx context.Context, opts Options, oneLiner string) (Re
 	}
 	prompt, err := BuildPrompt(PromptInput{
 		Repository: opts.Repository, OneLiner: oneLiner, Rules: opts.Rules,
-		Redraft: &RedraftInput{Issue: iss, Comments: comments},
+		Evidence: r.gatherEvidence(ctx, opts.WorkDir),
+		Redraft:  &RedraftInput{Issue: iss, Comments: comments},
 	})
 	if err != nil {
 		return Result{}, err
@@ -531,9 +572,25 @@ type PromptInput struct {
 	Repository string
 	OneLiner   string
 	Rules      string
+	Evidence   Evidence      // repository context the agent must read before writing (issue #279)
 	Parent     *ports.Issue  // follow-up: the issue whose 実機 NG this addresses
 	Redraft    *RedraftInput // redraft: rewrite this issue instead of creating
 }
+
+// Evidence is the repository snapshot the spec prompt carries so the agent
+// grounds file names in reality instead of guessing (issue #279). Lines are
+// already formatted ("#264 title") for direct display.
+type Evidence struct {
+	Files  []string // `git ls-files` head
+	Merged []string // recently closed issues (merge proxies)
+	Open   []string // open issues
+}
+
+// Evidence sizes: enough context to orient, small enough for a prompt.
+const (
+	evidenceFiles = 60
+	evidenceLimit = 10
+)
 
 // RedraftInput is the issue being re-proposed plus its discussion.
 type RedraftInput struct {
@@ -541,19 +598,25 @@ type RedraftInput struct {
 	Comments []ports.Comment
 }
 
-// bodyFormat mirrors prompter's decomposition sections (RFC §8: 本文は
-// Mode / Purpose / Scope / Acceptance criteria / TDD first step).
+// bodyFormat mirrors the issue schema (RFC #279: Goal / Non-goals /
+// シナリオ included).
 const bodyFormat = `## Mode
 implement | research | docs のいずれか
 
-## Purpose
+## Goal
 このIssueで完了させること（1〜3文）
 
 ## Scope
 変更対象と対象外
 
+## Non-goals
+このIssueでやらないこと
+
 ## Acceptance criteria
 - 実行結果・生成物・終了状態で検証できる条件（チェックリスト）
+
+## シナリオ
+1. <!-- 実行するコマンド → 期待する出力・終了コード -->（実装後に使い捨てテストで検証する）
 
 ## TDD first step
 最初に追加してRedを確認するテスト。該当しない場合は理由
@@ -587,15 +650,21 @@ const promptTemplate = `あなたはGitHub Issueの起票担当（仕様AI）で
 {{end}}{{end}}{{end}}
 ## リポジトリ規約（AGENTS.md）
 {{.Rules}}
-
+{{if or .Evidence.Files .Evidence.Merged .Evidence.Open}}
+## リポジトリの現状（起票前に必ず読むこと）
+{{if .Evidence.Files}}- ファイル一覧: {{range $i, $f := .Evidence.Files}}{{if $i}}, {{end}}{{$f}}{{end}}
+{{end}}{{if .Evidence.Merged}}- 直近のクローズ Issue: {{range $i, $m := .Evidence.Merged}}{{if $i}}, {{end}}{{$m}}{{end}}
+{{end}}{{if .Evidence.Open}}- open の Issue: {{range $i, $o := .Evidence.Open}}{{if $i}}, {{end}}{{$o}}{{end}}
+{{end}}{{end}}
 ## 制約
 1. 各Issueは、目的・対象範囲・受入条件・検証方法が1つのまとまりになっていること。1セッションで終わらない場合は複数Issueに分け、本文で相互に参照すること。
 2. 受入条件は実行結果、生成物、終了状態など検証可能な形で書くこと。
 3. 実装Issueでは、最初に追加する失敗テスト（Red）を明記すること。
 4. 一言にない要件を勝手に追加しないこと。不明点は Open questions に分離すること。
 5. タイトルは256文字以内・1行・文末ピリオドなし。要点（何を）・対象（どこに）・意図（なぜ）が読めること。動詞始まりの接頭辞（例: feat(cli):, fix(dispatch):, docs:）を推奨。
-{{if .Parent}}6. 本文に元 Issue「#{{.Parent.Number}}」への参照と、実機で何がNGだったかを書くこと。
-{{end}}{{if .Redraft}}6. 一言で指示された点だけを反映し、他の内容は保つこと。タイトルは必要なときだけ変えること。
+6. 本文に書くファイル名・関数名は推測せず、リポジトリで読んで確認したものだけを書くこと。読んでいないものは Open questions に分離すること。
+{{if .Parent}}7. 本文に元 Issue「#{{.Parent.Number}}」への参照と、実機で何がNGだったかを書くこと。
+{{end}}{{if .Redraft}}7. 一言で指示された点だけを反映し、他の内容は保つこと。タイトルは必要なときだけ変えること。
 {{end}}
 ## 本文の形式（Markdown）
 ` + bodyFormat + `
