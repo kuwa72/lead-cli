@@ -59,15 +59,17 @@
 
 `lead finish <n> --merge` は次の3つがすべて通るときだけマージする（issue #278）。
 
-1. CI が pass（`skipping` / `neutral` / `cancelled` は不合格）。
+1. CI が pass（`skipping` / `fail` / `cancel` は不合格。`neutral` は待機し、
+   タイムアウトする）。
 2. `lead review <pr>` が記録した生成シナリオがすべて pass（`SCENARIOS: n/n`）。
    シナリオ未設定ならこの層は飛ばす。シナリオファイルがあるのにレビュー結果が
    無い場合はマージせず停止する。
 3. PR が規約ファイル（`AGENTS.md`、`.github/`、`.claude/` 等）を含まない。
 
 承認ステップと `risk:*` ラベルによるゲートは無い。`review:pass` は助言で、
-単独ではマージを決めない。マージを試みて（`--merge` または auto）止めたときは
-exit 0 で理由を標準出力と Issue のコメントに残す。
+単独ではマージを決めない。シナリオ・規約パスでマージを止めたときは exit 0 で
+理由を標準出力と Issue のコメントに残す。CI 不合格は exit 1 で、pause としては
+投稿しない。
 
 `--override-guardrail` だけが人間専用フラグで、規約ファイル保護を解除する
 唯一の手段。エージェントは付けてはならない。

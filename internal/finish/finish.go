@@ -304,6 +304,9 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 	// forgotten `lead review` cannot merge without semantic verification.
 	scenarioFile := scenario.Path(filepath.Dir(store.Path), git.RepoSlug(w.Repository), issue)
 	_, statErr := os.Stat(scenarioFile)
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: scenario file %s: %w", prNumber, scenarioFile, statErr)
+	}
 	hasScenario := statErr == nil
 	comments, err := gh.PrComments(ctx, prNumber)
 	if err != nil {

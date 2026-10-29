@@ -49,8 +49,8 @@ type Issue struct {
 	State         string
 	UpdatedAt     time.Time
 	BlockedReason string
-	// Labels are the issue's label names (risk classification and
-	// awaiting-human detection, issue #245).
+	// Labels are the issue's label names (queue and readiness metadata;
+	// merge gating is computed from CI/scenarios/protected paths, #278).
 	Labels []string
 }
 
