@@ -174,6 +174,11 @@ func TestGatherEvidenceCapsAndSurvivesGHErrors(t *testing.T) {
 	if len(ev.Merged) != 0 {
 		t.Errorf("merged = %v, want empty on gh error", ev.Merged)
 	}
+	gh.MergedErr = nil
+	ev = (&Runner{Gh: gh}).gatherEvidence(context.Background(), dir)
+	if len(ev.Merged) != evidenceLimit {
+		t.Errorf("merged = %d, want %d", len(ev.Merged), evidenceLimit)
+	}
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

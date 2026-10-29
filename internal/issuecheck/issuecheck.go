@@ -2,7 +2,8 @@
 // needs before an agent receives it (issue #254).
 //
 // `lead new` and `lead ready` both call Check so an issue cannot enter the
-// queue with missing acceptance criteria, scope, or risk classification.
+// queue with missing acceptance criteria, scope, scenario, or risk
+// classification.
 package issuecheck
 
 import (
@@ -109,7 +110,7 @@ func Check(body string, labels []string) []string {
 	if scenario, ok := sectionAny(body, ScenarioHeadings); !ok {
 		missing = append(missing, "`"+ScenarioHeading+"` または `## Scenarios` セクションがありません")
 	} else if !hasScenarioStep(scenario) {
-		missing = append(missing, "`"+ScenarioHeading+"` に実行可能なステップ（バッククォートのコマンドまたはテストパスを含む番号付きリスト）がありません")
+		missing = append(missing, "`"+ScenarioHeading+"` に実行可能なステップ（バッククォートのコマンドまたはテストパスを含むリスト項目）がありません")
 	}
 
 	if riskLabel(labels) == "" {
