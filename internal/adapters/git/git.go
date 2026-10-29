@@ -273,6 +273,18 @@ func (r *Runner) WorktreeRemove(repoDir, path string, force bool) error {
 	return err
 }
 
+// Revert creates a revert commit for sha in dir (git revert --no-edit).
+func (r *Runner) Revert(dir, sha string) error {
+	_, err := r.run(context.Background(), dir, "revert", "--no-edit", sha)
+	return err
+}
+
+// Push publishes refspec to remote from dir.
+func (r *Runner) Push(dir, remote, refspec string) error {
+	_, err := r.run(context.Background(), dir, "push", remote, refspec)
+	return err
+}
+
 // OriginURL returns remote.origin.url ("" when unset).
 func (r *Runner) OriginURL(repoDir string) string {
 	out, err := r.run(context.Background(), repoDir, "config", "--get", "remote.origin.url")
