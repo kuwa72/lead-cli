@@ -92,6 +92,9 @@ case "$out" in *"#7"*"completed"*) ;; *) fail "output lacks completed report: $o
 # --- 1. success path (protected repo) -----------------------------------------
 export PROTECTED=1
 rm -f "$CLOSED_MARK"; : > "$GH_LOG"; : > "$AGENT_LOG"
+ledger_file="$(dirname "$LEAD_STATE_FILE")/runs.jsonl"
+before=0
+[ -f "$ledger_file" ] && before=$(wc -l < "$ledger_file")
 out="$(cd "$repo" && "$tmp/lead" dispatch --once --parallel 1 --agent claude 2>&1)" || fail "dispatch --once exited non-zero: $out"
 case "$out" in *WARNING*) fail "protected repo must not warn: $out";; esac
 
@@ -106,6 +109,16 @@ git -C "$repo" worktree list | grep -q "issue-7" && fail "worktree still registe
 case "$out" in *"#7"*"completed"*) ;; *) fail "output lacks completed report: $out";; esac
 if [ -f "$LEAD_STATE_FILE" ] && grep -q '"issue": 7' "$LEAD_STATE_FILE"; then fail "state record for #7 left behind"; fi
 ls "$tmp/state/logs"/issue-7*.log >/dev/null 2>&1 || fail "agent log file not written under state dir"
+
+# issue #274: exactly one ledger line per run, next to the state file.
+[ -f "$ledger_file" ] || fail "ledger not written: $ledger_file"
+after=$(wc -l < "$ledger_file")
+[ "$after" -eq $((before + 1)) ] || fail "ledger grew by $((after - before)) lines, want 1"
+python3 - "$ledger_file" <<'PY' || fail "ledger lacks a completed run for #7"
+import json, sys
+recs = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+assert recs[-1]["issue"] == 7 and recs[-1]["outcome"] == "completed", recs[-1]
+PY
 
 # --- 2. failure path: 3 attempts → blocked, then no re-dispatch ---------------
 rm -f "$CLOSED_MARK"; : > "$AGENT_LOG"; : > "$GH_LOG"

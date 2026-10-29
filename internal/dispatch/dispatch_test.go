@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
+	"github.com/kuwa72/lead-cli/internal/ledger"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
@@ -640,12 +641,13 @@ func TestLoop_CancelDoesNotKillAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	git := &fakeGit{root: root, origin: "github.com/o/r"}
+	ledgerPath := filepath.Join(t.TempDir(), "runs.jsonl")
 	d := &Dispatcher{
 		Gh:       gh,
 		Git:      git,
 		Store:    store,
 		Launcher: &ExecLauncher{},
-		Opts:     Options{Parallel: 1, Agent: "claude", LogDir: logDir, WorkDir: root},
+		Opts:     Options{Parallel: 1, Agent: "claude", LogDir: logDir, WorkDir: root, LedgerPath: ledgerPath},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -695,6 +697,16 @@ func TestLoop_CancelDoesNotKillAgent(t *testing.T) {
 	waitFor(t, "agent exit", func() bool {
 		return p.Signal(syscall.Signal(0)) != nil
 	})
+	// Cancellation leaves the PID in state so reconnect owns the settle;
+	// runOne must not append a second record for the same run.
+	time.Sleep(200 * time.Millisecond)
+	recs, err := ledger.Read(ledgerPath)
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	if len(recs) != 0 {
+		t.Fatalf("canceled run wrote %d ledger records, want 0: %+v", len(recs), recs)
+	}
 
 	logText := testutil.LogText(t, argLog)
 	for _, want := range []string{"<-p>", "<--dangerously-skip-permissions>", "Issue #7: dispatch me", "do the thing"} {
@@ -1339,4 +1351,59 @@ func TestOnce_DeferredDoesNotNotifyAllDone(t *testing.T) {
 		}
 	}
 	_ = gh
+}
+
+// issue #274 review: a run settled by reconnect (watchdog kill or a
+// restarted lead) must also leave one ledger line, attributed to the agent
+// that actually ran.
+func TestOnce_RecordsReconnectedSettleInLedger(t *testing.T) {
+	d, gh, git, _ := newFixture(t, 5)
+	ledgerPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	d.Opts.LedgerPath = ledgerPath
+	seedRunning(t, d, git, 5, 999)
+	iss := gh.Issues[5]
+	iss.State = "OPEN"
+	gh.Issues[5] = iss
+	d.ProcessAlive = func(int) bool { return false }
+
+	opts := d.Opts.withDefaults()
+	if _, settled, err := d.reconnect(context.Background(), opts); err != nil {
+		t.Fatalf("reconnect: %v", err)
+	} else if len(settled) != 1 {
+		t.Fatalf("settled = %d, want 1", len(settled))
+	}
+	recs, err := ledger.Read(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("records = %d, want 1", len(recs))
+	}
+	if recs[0].Issue != 5 || recs[0].Phase != ledger.PhaseRun {
+		t.Fatalf("record = %+v", recs[0])
+	}
+	if recs[0].Agent != "claude" {
+		t.Fatalf("agent = %q, want the recorded agent (claude)", recs[0].Agent)
+	}
+	if recs[0].Repo != "o/r" {
+		t.Fatalf("repo = %q, want o/r", recs[0].Repo)
+	}
+	if recs[0].Outcome != string(OutcomeRetry) {
+		t.Fatalf("outcome = %q, want retry (attempts 1 < max)", recs[0].Outcome)
+	}
+
+	// The PID is cleared by the first settle; a second reconnect must not
+	// append the same run again.
+	if _, settled, err := d.reconnect(context.Background(), opts); err != nil {
+		t.Fatalf("second reconnect: %v", err)
+	} else if len(settled) != 0 {
+		t.Fatalf("second reconnect settled %d, want 0", len(settled))
+	}
+	recs, err = ledger.Read(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("records after second reconnect = %d, want 1", len(recs))
+	}
 }

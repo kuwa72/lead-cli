@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
+	"github.com/kuwa72/lead-cli/internal/ledger"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/review"
 	"github.com/kuwa72/lead-cli/internal/state"
@@ -47,6 +49,9 @@ type Options struct {
 	NoReview     bool
 	Timeout      time.Duration
 	PollInterval time.Duration
+	// LedgerPath receives one line per merge attempt (issue #274). Empty
+	// disables recording.
+	LedgerPath string
 	// Git and WorkDir let finish remove the issue's worktree when it
 	// defers the merge to a human (issue #245). Nil Git skips cleanup.
 	Git     workflow.GitRunner
@@ -135,9 +140,31 @@ func WaitChecks(ctx context.Context, gh ports.GhClient, pr int, timeout, interva
 	}
 }
 
+// mergeOutcome maps a finished merge attempt to a ledger outcome.
+func mergeOutcome(res Result, err error, opts Options) string {
+	switch {
+	case err != nil:
+		return ledger.OutcomeError
+	case res.Merged, res.Closed:
+		// Already-merged retries close the issue without merging again;
+		// they are still completed runs, not pauses.
+		return ledger.OutcomeCompleted
+	case res.AwaitingHuman:
+		return ledger.OutcomeAwaitingHuman
+	case len(res.Guarded) > 0:
+		return ledger.OutcomeGuardrail
+	case opts.Outcome == "blocked":
+		return ledger.OutcomeBlocked
+	case opts.Outcome != "":
+		return ledger.OutcomeCompleted
+	default:
+		return ledger.OutcomePaused
+	}
+}
+
 // Run executes finish for one issue: re-verify PR, wait CI, policy-gated
 // merge, optional comment/close, and state recording.
-func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, opts Options) (Result, error) {
+func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, opts Options) (res Result, err error) {
 	if opts.NoReview && !opts.Approve {
 		return Result{}, errors.New("finish: --no-review requires --approve (both are human-only confirmations)")
 	}
@@ -149,7 +176,27 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return Result{}, fmt.Errorf("no workflow for #%d; run `lead run %d` first", issue, issue)
 	}
 
+	// Record only attempts that reached a real workflow: argument errors
+	// and unknown issues must not add noise to the history.
+	started := time.Now()
 	prNumber := opts.PR
+	defer func() {
+		if opts.LedgerPath == "" {
+			return
+		}
+		repo := git.RepoSlug(w.Repository)
+		if repo == "" {
+			repo = w.Repository
+		}
+		if aerr := ledger.Append(opts.LedgerPath, ledger.Record{
+			Repo: repo, Issue: issue, Phase: ledger.PhaseMerge, Mode: w.Mode, PR: prNumber,
+			StartedAt: started, EndedAt: time.Now(),
+			Outcome: mergeOutcome(res, err, opts),
+		}); aerr != nil {
+			fmt.Fprintf(os.Stderr, "finish: ledger: %v\n", aerr)
+		}
+	}()
+
 	var prRef *state.PRRef
 	if prNumber != 0 {
 		for i := range w.PullRequests {

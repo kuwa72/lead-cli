@@ -38,6 +38,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/finish"
 	"github.com/kuwa72/lead-cli/internal/inbox"
 	"github.com/kuwa72/lead-cli/internal/issuecheck"
+	"github.com/kuwa72/lead-cli/internal/ledger"
 	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/projinit"
@@ -606,6 +607,22 @@ touches $HOME. Repository issue labels are kept.`,
 	}
 	statusCmd.Flags().Bool("json", false, "machine-readable output")
 
+	statsCmd := &cobra.Command{
+		Use:   "stats",
+		Short: "Aggregate recorded runs (success rate, duration)",
+		Long: `Aggregate the run history (issue #274).
+
+dispatch appends one line per run to ` + "`runs.jsonl`" + ` next to the state
+file; workflows.json only holds live work. stats reports this repository's
+runs, completed, failed, awaiting human, median duration, and
+success rate (completed / runs). --json prints the same numbers for
+scripts (success_rate is a ratio, median_duration_seconds is a number).`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runStats(cmd, deps)
+		},
+	}
+	statsCmd.Flags().Bool("json", false, "machine-readable output")
+
 	cleanCmd := &cobra.Command{
 		Use:   "clean <issue-number>",
 		Short: "Safely remove a workflow's worktree and state record",
@@ -785,7 +802,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, cleanCmd, peekCmd, stopCmd, finishCmd, reviewCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, statsCmd, cleanCmd, peekCmd, stopCmd, finishCmd, reviewCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	root.AddCommand(newCmd, readyCmd)
 	return root
@@ -1566,6 +1583,37 @@ func launchAgent(out io.Writer, res workflow.StartResult, agentName string, iss 
 	return err
 }
 
+// runStats implements `lead stats`: aggregate the run history (issue #274).
+func runStats(cmd *cobra.Command, deps Deps) error {
+	asJSON, _ := cmd.Flags().GetBool("json")
+	recs, err := ledger.Read(ledger.Path(deps.stateFile()))
+	if err != nil {
+		return err
+	}
+	repo := ""
+	if cwd, derr := deps.workDir(); derr == nil {
+		if root, rerr := deps.gitRunner().RepoRoot(cwd); rerr == nil {
+			repo = dispatch.RepoKey(deps.gitRunner().OriginURL(root))
+		}
+	}
+	s := ledger.Aggregate(ledger.ForRepo(recs, repo))
+	out := cmd.OutOrStdout()
+	if asJSON {
+		raw, err := json.MarshalIndent(s, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(out, string(raw))
+		return nil
+	}
+	if s.Runs == 0 {
+		fmt.Fprintln(out, "no runs recorded")
+		return nil
+	}
+	fmt.Fprintln(out, s.String())
+	return nil
+}
+
 // runStatus implements `lead status`: local workflow records (RFC §5.3).
 // Live GitHub/Git enrichment lands with #41; corrupt files surface an error.
 func runStatus(cmd *cobra.Command, deps Deps) error {
@@ -2023,6 +2071,7 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 		PR: pr, Part: part, Merge: merge, Close: closeIssue, NoClose: noClose,
 		Comment: comment, Outcome: outcome, MergePolicy: policy,
 		Approve:           approve,
+		LedgerPath:        ledger.Path(deps.stateFile()),
 		NoReview:          noReview,
 		OverrideGuardrail: overrideGuardrail,
 		Git:               deps.gitRunner(), WorkDir: workDir,
