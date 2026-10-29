@@ -8,16 +8,15 @@
 4. `git push -u origin $(git branch --show-current)` でブランチを push する。
 5. `gh pr create --fill` で PR を作成する。
 6. `bin/ci-wait <pr-number>`（または `gh pr checks`）で CI が pass するまで待つ。
-7. CI 通過後に `lead review <pr-number>` で独立レビューを実行する。VERDICT: pass なら次へ進む。VERDICT: needs-work なら所見に従って修正し、最大2周まで再レビューする（3周目はしない）。2周で通らなければ、所見を `gh issue comment <issue-number> --body` に貼って終了する。
-8. `lead finish <issue-number> --merge` でマージと Issue クローズまで行う（`gh pr merge` を直接実行しない。規約ファイル保護とリスク分級のガードレールを通すため）。
-   - `risk:a` は `review:pass` がある場合のみ自動マージする。
-   - `risk:b` とラベルなしは `awaiting-human` になり、人間が `--approve` で承認する。
+7. CI 通過後に `lead review <pr-number>` でシナリオ生成テストを実行する。`SCENARIOS: n/m` が m/m になるまで所見に従って直す。diff レビューは助言で、合否はシナリオが決める。
+8. `lead finish <issue-number> --merge` でマージと Issue クローズまで行う（`gh pr merge` を直接実行しない）。CI pass・生成シナリオ全 pass・規約ファイル非該当のときだけマージされる。承認ステップは無い。
 9. 関連 Issue が closed になったことを確認する。
 
 停止時の扱い：
 
-- `--approve`、`--no-review`、`--override-guardrail` は人間専用（human-only）のフラグで、エージェントは付けない。
-- `finish` が規約ファイル保護・レビュー未実施（`review:pass` なし）・承認待ち（`risk:b` / ラベルなし）で停止したら、自分で `gh pr merge` や `gh issue close` をせず、状況を `gh issue comment <issue-number> --body` に書いて終了する。
+- `--override-guardrail` は人間専用（human-only）のフラグで、エージェントは付けない。規約ファイル保護を解除できる唯一の手段。
+- シナリオは `<state-dir>/scenarios/<owner>_<repo>/<issue>.md`（worktree の外）に置く。実装エージェントは編集しない。誤りだと思ったら Issue にコメントして停止する。
+- `finish` が規約ファイル保護・シナリオ不合格で停止したら、自分で `gh pr merge` や `gh issue close` をせず、理由を `gh issue comment <issue-number> --body` に書いて終了する。
 
 ルール：
 - `main` には直接 push しない。`issue/<number>-<slug>` ブランチで作業する。
