@@ -134,8 +134,8 @@ lead status / finish / clean                       # 現行どおり（RFC-25）
 
 ## 8. 仕様 AI
 
-- 入力: 人間の一言、リポジトリの AGENTS.md、（`n` の場合）元 Issue
-- 出力: `gh issue create` で 1〜数件。タイトルは `internal/prompter.LintTitle` 規則、本文は Mode / Purpose / Scope / Acceptance criteria / TDD first step（`prompter.Render` の分解テンプレートを流用）
+- 入力: 人間の一言、リポジトリの AGENTS.md、リポジトリの現状（ファイル一覧・直近のクローズ Issue・open Issue）、（`n` の場合）元 Issue
+- 出力: `gh issue create` で 1〜数件。タイトルは `internal/prompter.LintTitle` 規則、本文は Mode / Goal / Scope / Non-goals / Acceptance criteria / シナリオ / TDD first step / Open questions（`## シナリオ` は実行可能なステップ必須）
 - ラベル: `needs-review`。親子がある場合は本文で相互参照
 - `t` で一言が付いたら、その Issue を再起案（本文を編集、コメントで差分を説明）
 - GitHub 以外に状態を持たない

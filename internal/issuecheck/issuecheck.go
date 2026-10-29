@@ -27,7 +27,7 @@ var (
 	AcceptanceHeadings = []string{AcceptanceHeading, "## Acceptance criteria"}
 	OutOfScopeHeadings = []string{OutOfScopeHeading, "## Scope", "## Out of scope", "## 対象外"}
 	OutOfScopeMarkers  = []string{"**対象外**", "**スコープ外**", "**Out of scope**"}
-	ScenarioHeadings   = []string{ScenarioHeading, "## Scenarios", "## Scenario"}
+	ScenarioHeadings   = []string{ScenarioHeading, "## Scenarios"}
 )
 
 // RiskLabels are the accepted risk classifications (docs/config.md).
@@ -59,6 +59,10 @@ var (
 	checklist = regexp.MustCompile(`^[ \t]*-[ \t]+\[[ \t]*\][ \t]`)
 	// codeSpan matches a backtick-quoted command or path.
 	codeSpan = regexp.MustCompile("`[^`]+`")
+	// stepItem matches a numbered list line with text left after the marker.
+	stepItem = regexp.MustCompile(`^(?:\d+[.)]|[-*+])\s+\S`)
+	// htmlComment strips template placeholders before the step check.
+	htmlComment = regexp.MustCompile(`(?s)<!--.*?-->`)
 	// testPath matches a repository test path: test/, *_test.go, *.spec.*.
 	testPath = regexp.MustCompile(`(^|[^\w])(\./)?test/|[\w./-]+_test\.go\b|[\w./-]+\.spec\.[A-Za-z0-9]+`)
 )
@@ -102,8 +106,10 @@ func Check(body string, labels []string) []string {
 		missing = append(missing, "`"+OutOfScopeHeading+"` / `## Scope` / `## Out of scope`（または `**対象外**`）がありません")
 	}
 
-	if _, ok := sectionAny(body, ScenarioHeadings); !ok {
+	if scenario, ok := sectionAny(body, ScenarioHeadings); !ok {
 		missing = append(missing, "`"+ScenarioHeading+"` または `## Scenarios` セクションがありません")
+	} else if !hasScenarioStep(scenario) {
+		missing = append(missing, "`"+ScenarioHeading+"` に実行可能なステップ（番号付きリスト）がありません")
 	}
 
 	if riskLabel(labels) == "" {
@@ -182,6 +188,19 @@ func hasAnyMarker(body string, markers []string) bool {
 			if strings.EqualFold(s, m) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// hasScenarioStep reports whether the section holds at least one numbered or
+// bulleted step with real text (HTML comments do not count: the template
+// placeholder must not satisfy the check).
+func hasScenarioStep(section string) bool {
+	for _, line := range strings.Split(section, "\n") {
+		s := strings.TrimSpace(htmlComment.ReplaceAllString(line, ""))
+		if stepItem.MatchString(s) {
+			return true
 		}
 	}
 	return false

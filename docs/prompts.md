@@ -31,9 +31,12 @@ RFC `docs/rfc-25-workflow-flexibility.md` §8 と旧 #15 タイトル指針の G
 - 用途: `lead say "<一言>"` が仕様エージェントをヘッドレス起動するときのプロンプト
   （`docs/rfc-inbox-ux.md` §8）。テンプレート本体は `internal/spec`（golden テスト付き）。
 - 入力: 一言、リポジトリ（origin URL）、`AGENTS.md` の内容（なければ TDD 既定文）、
-  `--follow-up N` なら元 Issue、`--redraft N` なら対象 Issue とコメント一覧。
-- 本文形式: §1 と同じ見出し（Mode / Purpose / Scope / Acceptance criteria /
-  TDD first step / Open questions）。タイトルは §2 の規則を明記し、返却後に
+  リポジトリの現状（`git ls-files` の先頭60件・直近30日のクローズ Issue 10件・
+  open Issue 10件、issue #279）、`--follow-up N` なら元 Issue、`--redraft N` なら
+  対象 Issue とコメント一覧。現状ブロックには「読んで確認したものだけ書く」制約を付ける。
+- 本文形式: Mode / Goal / Scope / Non-goals / Acceptance criteria / シナリオ /
+  TDD first step / Open questions。`## シナリオ` は実行可能な番号付きステップを
+  1つ以上含むこと（`issuecheck` が検査する）。タイトルは §2 の規則を明記し、返却後に
   `prompter.LintTitle` で機械検査する（違反は起票せず終了）。
 - 出力形式: JSON 配列 `[{"title","body"}]` のみ（`--redraft` はオブジェクト 1 つ）。
   コードフェンスや前置き文が混ざっても `spec.ParseDrafts` が JSON 部分だけを取り出す。

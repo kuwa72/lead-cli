@@ -253,6 +253,27 @@ func TestCheck_AcceptsEnglishScenarioHeading(t *testing.T) {
 	}
 }
 
+func TestCheck_RejectsScenarioWithoutSteps(t *testing.T) {
+	body := `# title
+
+## 受入条件
+
+- [ ] ` + "`./test/run-tests.sh`" + ` が pass する
+
+## スコープ外
+
+- none
+
+## シナリオ
+
+1. <!-- 実行するコマンド → 期待する出力・終了コード -->
+`
+	missing := Check(body, []string{"risk:b"})
+	if len(missing) != 1 || !strings.Contains(missing[0], "ステップ") {
+		t.Fatalf("Check(empty scenario) = %v, want a step finding", missing)
+	}
+}
+
 // issue #264: English headings and a bold **対象外** marker are accepted.
 func TestCheck_AcceptsEnglishHeadingsAndBoldScope(t *testing.T) {
 	body := `# title

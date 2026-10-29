@@ -213,7 +213,7 @@ func (r *Runner) create(ctx context.Context, opts Options, oneLiner string) (Res
 func (r *Runner) gatherEvidence(ctx context.Context, workDir string) Evidence {
 	var ev Evidence
 	if workDir != "" {
-		if out, err := exec.Command("git", "-C", workDir, "ls-files").Output(); err == nil {
+		if out, err := exec.CommandContext(ctx, "git", "-C", workDir, "ls-files").Output(); err == nil {
 			for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 				if f == "" {
 					continue
@@ -598,8 +598,8 @@ type RedraftInput struct {
 	Comments []ports.Comment
 }
 
-// bodyFormat mirrors prompter's decomposition sections (RFC §8: 本文は
-// Mode / Purpose / Scope / Acceptance criteria / TDD first step).
+// bodyFormat mirrors the issue schema (RFC #279: Goal / Non-goals /
+// シナリオ included).
 const bodyFormat = `## Mode
 implement | research | docs のいずれか
 
@@ -653,19 +653,18 @@ const promptTemplate = `あなたはGitHub Issueの起票担当（仕様AI）で
 {{if or .Evidence.Files .Evidence.Merged .Evidence.Open}}
 ## リポジトリの現状（起票前に必ず読むこと）
 {{if .Evidence.Files}}- ファイル一覧: {{range $i, $f := .Evidence.Files}}{{if $i}}, {{end}}{{$f}}{{end}}
-{{end}}{{if .Evidence.Merged}}- 直近のマージ: {{range $i, $m := .Evidence.Merged}}{{if $i}}, {{end}}{{$m}}{{end}}
+{{end}}{{if .Evidence.Merged}}- 直近のクローズ Issue: {{range $i, $m := .Evidence.Merged}}{{if $i}}, {{end}}{{$m}}{{end}}
 {{end}}{{if .Evidence.Open}}- open の Issue: {{range $i, $o := .Evidence.Open}}{{if $i}}, {{end}}{{$o}}{{end}}
-{{end}}
-推測でファイル名や関数名を書かない。読んで確認したものだけ書くこと。
-{{end}}
+{{end}}{{end}}
 ## 制約
 1. 各Issueは、目的・対象範囲・受入条件・検証方法が1つのまとまりになっていること。1セッションで終わらない場合は複数Issueに分け、本文で相互に参照すること。
 2. 受入条件は実行結果、生成物、終了状態など検証可能な形で書くこと。
 3. 実装Issueでは、最初に追加する失敗テスト（Red）を明記すること。
 4. 一言にない要件を勝手に追加しないこと。不明点は Open questions に分離すること。
 5. タイトルは256文字以内・1行・文末ピリオドなし。要点（何を）・対象（どこに）・意図（なぜ）が読めること。動詞始まりの接頭辞（例: feat(cli):, fix(dispatch):, docs:）を推奨。
-{{if .Parent}}6. 本文に元 Issue「#{{.Parent.Number}}」への参照と、実機で何がNGだったかを書くこと。
-{{end}}{{if .Redraft}}6. 一言で指示された点だけを反映し、他の内容は保つこと。タイトルは必要なときだけ変えること。
+6. 本文に書くファイル名・関数名は推測せず、リポジトリで読んで確認したものだけを書くこと。読んでいないものは Open questions に分離すること。
+{{if .Parent}}7. 本文に元 Issue「#{{.Parent.Number}}」への参照と、実機で何がNGだったかを書くこと。
+{{end}}{{if .Redraft}}7. 一言で指示された点だけを反映し、他の内容は保つこと。タイトルは必要なときだけ変えること。
 {{end}}
 ## 本文の形式（Markdown）
 ` + bodyFormat + `

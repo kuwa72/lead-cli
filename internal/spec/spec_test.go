@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -124,7 +126,7 @@ func TestBuildPrompt_IncludesRepositoryEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"リポジトリの現状", "internal/spec/spec.go", "#264", "#281", "読んで確認したものだけ書く"} {
+	for _, want := range []string{"リポジトリの現状", "internal/spec/spec.go", "#264", "#281", "読んで確認したものだけ"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, out)
 		}
@@ -138,6 +140,54 @@ func TestBodyFormat_HasGoalNonGoalsAndScenario(t *testing.T) {
 		if !strings.Contains(bodyFormat, want) {
 			t.Errorf("bodyFormat lacks %q:\n%s", want, bodyFormat)
 		}
+	}
+}
+
+// issue #279: the schema itself must satisfy the gate `lead new` applies.
+func TestBodyFormat_SatisfiesIssueCheck(t *testing.T) {
+	body := "# t\n\n" + strings.Replace(bodyFormat,
+		"- 実行結果・生成物・終了状態で検証できる条件（チェックリスト）",
+		"- [ ] `go test ./...` が pass する", 1)
+	if missing := issuecheck.Check(body, []string{"risk:a"}); len(missing) != 0 {
+		t.Fatalf("bodyFormat fails issuecheck: %v\n%s", missing, body)
+	}
+}
+
+// issue #279: evidence collection must cap the prompt and must not fail the
+// whole run when gh is unavailable.
+func TestGatherEvidenceCapsAndSurvivesGHErrors(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q", "-b", "main")
+	for i := 0; i < 65; i++ {
+		name := filepath.Join(dir, fmt.Sprintf("f%02d.txt", i))
+		if err := os.WriteFile(name, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+
+	gh := &testutil.FakeGhClient{MergedErr: errors.New("gh down"), Merged: make([]ports.MergedIssue, 12)}
+	for i := 0; i < 12; i++ {
+		gh.Summaries = append(gh.Summaries, ports.IssueSummary{Number: i + 1, Title: "x"})
+	}
+	ev := (&Runner{Gh: gh}).gatherEvidence(context.Background(), dir)
+	if len(ev.Files) != evidenceFiles {
+		t.Errorf("files = %d, want %d", len(ev.Files), evidenceFiles)
+	}
+	if len(ev.Open) != evidenceLimit {
+		t.Errorf("open = %d, want %d", len(ev.Open), evidenceLimit)
+	}
+	if len(ev.Merged) != 0 {
+		t.Errorf("merged = %v, want empty on gh error", ev.Merged)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 }
 
