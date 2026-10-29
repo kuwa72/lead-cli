@@ -46,8 +46,7 @@ expect() {
 }
 
 # --- AGENTS.md block: review gate, risk classes, human-only flags ---
-for needle in "lead review" "needs-work" "risk:a" "risk:b" "--approve" \
-  "--no-review" "--override-guardrail" "human-only" "人間専用"; do
+for needle in "lead review" "SCENARIOS" "lead finish" "--override-guardrail" "人間専用"; do
   expect "AGENTS.md block" "$needle" "$block"
 done
 
@@ -64,8 +63,7 @@ expect "AGENTS.md block" "gh pr merge" "$block"
 expect "AGENTS.md block" "gh issue close" "$block"
 
 # --- distributed skill: same procedure in English ---
-for needle in "lead review" "needs-work" "risk:a" "risk:b" "--approve" \
-  "--no-review" "--override-guardrail" "human-only"; do
+for needle in "lead review" "SCENARIOS" "lead finish" "--override-guardrail" "human-only"; do
   expect "skill" "$needle" "$(cat "$skill")"
 done
 
@@ -81,4 +79,4 @@ skill_finish="$(grep -n 'lead finish' "$skill" | head -1 | cut -d: -f1)"
 [ "$(grep -c 'lead review' "$agents")" = "1" ] || fail "re-enable duplicated the review step in AGENTS.md"
 [ "$(grep -c '<!-- lead-flow begin' "$agents")" = "1" ] || fail "re-enable duplicated the managed block"
 
-echo "PASS: enable distributes review/risk lead-flow docs"
+echo "PASS: enable distributes scenario/gate lead-flow docs"

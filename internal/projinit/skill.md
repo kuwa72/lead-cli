@@ -63,23 +63,24 @@ If the issue number is omitted, ask the user for one or run `lead run` to open t
    still needs work, post the findings to the issue with
    `gh issue comment <issue-number> --body` and stop.
 
-7. Merge and close through `lead finish` (it enforces the protected-file
-   guardrail and the risk gate):
+7. Merge and close through `lead finish` (it enforces the computed gate):
 
    ```bash
    lead finish <issue-number> --merge
    ```
 
-   - `risk:a` merges automatically only with a `review:pass` for the current head.
-   - `risk:b` and unlabelled issues stop as `awaiting-human`; a human approves
-     with `--approve`.
+   CI pass, every generated scenario passing, and no protected files are the
+   only conditions. There is no approval step and no `risk:*` gate; a
+   `review:pass` is advisory. Run `lead review <pr>` to generate and run the
+   scenario tests; the comment records `SCENARIOS: n/m`.
 
-   `--approve`, `--no-review`, and `--override-guardrail` are human-only flags.
-   Never pass them from an agent, and do not run `gh pr merge` yourself.
+   `--override-guardrail` is the only human-only flag: it is the one way past
+   the protected-file guardrail. Never pass it from an agent, and do not run
+   `gh pr merge` yourself.
 
-8. Confirm the related Issue is closed. If `finish` stopped (protected files,
-   missing review pass, or awaiting human approval), do not run `gh pr merge` or
-   `gh issue close` yourself: comment the situation on the issue with
+8. Confirm the related Issue is closed. If `finish` stopped (protected files or
+   a failing scenario), do not run `gh pr merge` or `gh issue close` yourself:
+   comment the situation on the issue with
    `gh issue comment <issue-number> --body` and stop.
 
 9. Report the PR URL and merge commit to the user.
