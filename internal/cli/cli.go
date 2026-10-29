@@ -2171,6 +2171,7 @@ func runReview(cmd *cobra.Command, deps Deps, raw string) error {
 			WorkDir:    workDir,
 			Repository: deps.gitRunner().OriginURL(workDir),
 			RepoSlug:   git.RepoSlug(deps.gitRunner().OriginURL(workDir)),
+			StateDir:   filepath.Dir(deps.stateFile()),
 		},
 	}
 	res, err := r.Review(cmd.Context())

@@ -106,7 +106,7 @@ out="$(cd "$repo" && "$tmp/lead" review 7 --agent claude 2>&1)" \
 case "$out" in *review:pass*) ;; *) fail "pass output missing review:pass: $out";; esac
 label_present 'review:pass' || fail "review:pass label was not added: $(cat "$LABELS_FILE")"
 grep -q 'VERDICT: pass' "$COMMENT_FILE" || fail "PR comment missing the review body: $(cat "$COMMENT_FILE")"
-grep -qF -- "<!-- lead-review sha=$PR_SHA verdict=pass -->" "$COMMENT_FILE" \
+grep -qF -- "<!-- lead-review sha=$PR_SHA verdict=pass scenarios=0/0 -->" "$COMMENT_FILE" \
   || fail "PR comment missing the head-SHA marker: $(cat "$COMMENT_FILE")"
 grep -q '受入条件を実行ログで確認した' "$COMMENT_FILE" || fail "PR comment missing the findings"
 grep -qx 'GH issue edit 7 --add-label review:pass' "$GH_LOG" \

@@ -25,6 +25,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/projinit"
+	"github.com/kuwa72/lead-cli/internal/scenario"
 	"github.com/kuwa72/lead-cli/internal/state"
 )
 
@@ -79,6 +80,10 @@ type Options struct {
 	Repository string
 	// RepoSlug is "owner/repo" for label creation; empty uses gh's cwd.
 	RepoSlug string
+	// StateDir locates the issue's scenario at
+	// <StateDir>/scenarios/<owner>_<repo>/<issue>.md (issue #277).
+	// Empty means no scenario: the review is diff-only (SCENARIOS: 0/0).
+	StateDir string
 }
 
 // Runner wires the ports together.
@@ -100,9 +105,13 @@ type Result struct {
 	// HeadSHA is the PR head the reviewer examined (issue #249). finish
 	// merges only when the current head still matches it.
 	HeadSHA string
-	Output  string
-	LogPath string
-	Message string
+	// ScenariosPassed/ScenariosTotal are the generated-test result; 0/0
+	// when the issue has no scenario (issue #277).
+	ScenariosPassed int
+	ScenariosTotal  int
+	Output          string
+	LogPath         string
+	Message         string
 }
 
 // Review gathers the PR/issue/CI context, runs the independent reviewer,
@@ -159,6 +168,7 @@ func (r *Runner) Review(ctx context.Context) (Result, error) {
 		PRBody:     body,
 		Diff:       diff,
 		Checks:     checks,
+		Scenario:   r.scenarioText(issueNumber),
 	})
 	if err != nil {
 		return Result{}, err
@@ -204,19 +214,90 @@ func (r *Runner) Review(ctx context.Context) (Result, error) {
 		return res, fmt.Errorf("%s: %w", res.Message, ErrInvalidVerdict)
 	}
 
+	// The generated scenario tests are the main gate; the diff review stays
+	// advisory (issue #277). A scenario harness failure fails closed.
+	scRes, scErr := r.runScenario(ctx, issueNumber, runDir)
+	passed, total := scRes.Passed, scRes.Total
+	if total == 0 {
+		if p, t, ok := ParseScenarioScore(out); ok {
+			passed, total = p, t
+		}
+	}
 	res.Verdict = verdict
-	res.Passed = verdict == VerdictPass
+	res.ScenariosPassed, res.ScenariosTotal = passed, total
+	res.Passed = verdict == VerdictPass && scErr == nil && (total == 0 || passed == total)
+	if !res.Passed && verdict == VerdictPass {
+		res.Verdict = VerdictNeedsWork
+	}
+	if scErr != nil {
+		res.Output = strings.TrimRight(string(out), "\n") + "\n\n## シナリオ実行\n\ngenerated tests failed to run: " + scErr.Error()
+	} else if total > 0 {
+		res.Output = strings.TrimRight(string(out), "\n") + "\n\n" + scenarioSummary(scRes)
+	}
 	label := state.ReviewNeedsWorkLabel
 	if res.Passed {
 		label = state.ReviewPassLabel
-		res.Message = fmt.Sprintf("review: PR #%d passed (%s)", pr, state.ReviewPassLabel)
+		res.Message = fmt.Sprintf("review: PR #%d passed (%s, scenarios %d/%d)", pr, state.ReviewPassLabel, passed, total)
 	} else {
-		res.Message = fmt.Sprintf("review: PR #%d needs work (%s)", pr, state.ReviewNeedsWorkLabel)
+		res.Message = fmt.Sprintf("review: PR #%d needs work (%s, scenarios %d/%d)", pr, state.ReviewNeedsWorkLabel, passed, total)
 	}
 	if err := r.publish(ctx, pr, res, label); err != nil {
 		return res, err
 	}
+	if scErr != nil {
+		return res, fmt.Errorf("review: PR #%d: scenario: %w", pr, scErr)
+	}
 	return res, nil
+}
+
+// scenarioPath is the issue's scenario outside the worktree, or "" when the
+// caller did not configure a state dir.
+func (r *Runner) scenarioPath(issue int) string {
+	if r.Opts.StateDir == "" {
+		return ""
+	}
+	return scenario.Path(r.Opts.StateDir, r.Opts.RepoSlug, issue)
+}
+
+// scenarioText reads the scenario for the reviewer prompt. A missing or
+// unreadable file is not an error here: runScenario reports it when it runs.
+func (r *Runner) scenarioText(issue int) string {
+	path := r.scenarioPath(issue)
+	if path == "" {
+		return ""
+	}
+	raw, err := scenario.Load(path)
+	if err != nil {
+		return ""
+	}
+	return raw
+}
+
+// runScenario generates and runs throwaway tests at the PR head. No scenario
+// configured yields the zero Result (0/0), never an error.
+func (r *Runner) runScenario(ctx context.Context, issue int, runDir string) (scenario.Result, error) {
+	path := r.scenarioPath(issue)
+	if path == "" {
+		return scenario.Result{}, nil
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return scenario.Result{}, nil
+	}
+	s := &scenario.Runner{Agent: r.Agent, Opts: scenario.Options{
+		Issue: issue, ScenarioPath: path, WorkDir: runDir,
+		Agent: r.Opts.Agent, LogDir: r.Opts.LogDir,
+	}}
+	return s.Run(ctx)
+}
+
+// scenarioSummary renders the per-step pass/fail lines the PR comment keeps.
+func scenarioSummary(res scenario.Result) string {
+	var b strings.Builder
+	b.WriteString("## シナリオ実行\n\n")
+	for _, s := range res.Steps {
+		fmt.Fprintf(&b, "- SCENARIO %d: %s — %s\n", s.Number, s.Verdict, s.Text)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // PromptInstruction is the short argv prompt that points the reviewer at the
@@ -330,26 +411,28 @@ func verdictLabelDefinition(name string) (ports.LabelDefinition, bool) {
 // (head SHA + verdict, issue #249), a verdict header, and the reviewer's
 // full output.
 func CommentBody(res Result) string {
-	return fmt.Sprintf("%s\n## lead review: PR #%d\n\nVERDICT: %s\n\n%s",
-		MarkerLine(res.HeadSHA, res.Verdict), res.PR, res.Verdict, strings.TrimRight(res.Output, "\n"))
+	return fmt.Sprintf("%s\n## lead review: PR #%d\n\nVERDICT: %s\nSCENARIOS: %d/%d\n\n%s",
+		MarkerLine(res.HeadSHA, res.Verdict, fmt.Sprintf("%d/%d", res.ScenariosPassed, res.ScenariosTotal)),
+		res.PR, res.Verdict, res.ScenariosPassed, res.ScenariosTotal, strings.TrimRight(res.Output, "\n"))
 }
 
 // MarkerLine renders the marker finish reads back:
-// `<!-- lead-review sha=<40 hex> verdict=<verdict> -->`.
-func MarkerLine(sha, verdict string) string {
-	return fmt.Sprintf("<!-- lead-review sha=%s verdict=%s -->", sha, verdict)
+// `<!-- lead-review sha=<40 hex> verdict=<verdict> scenarios=<n/m> -->`.
+func MarkerLine(sha, verdict, scenarios string) string {
+	return fmt.Sprintf("<!-- lead-review sha=%s verdict=%s scenarios=%s -->", sha, verdict, scenarios)
 }
 
 // Marker is one parsed review verdict marker.
 type Marker struct {
-	SHA     string
-	Verdict string
+	SHA       string
+	Verdict   string
+	Scenarios string // "passed/total"; empty on markers from before #277
 }
 
 // markerPattern matches a review marker. The verdict is captured verbatim
 // so an unknown verdict (including "invalid") still supersedes an older
 // pass; finish treats anything but pass as blocking.
-var markerPattern = regexp.MustCompile(`<!--\s*lead-review\s+sha=([0-9a-fA-F]{40})\s+verdict=([a-z-]+)\s*-->`)
+var markerPattern = regexp.MustCompile(`<!--\s*lead-review\s+sha=([0-9a-fA-F]{40})\s+verdict=([a-z-]+)(?:\s+scenarios=(\d+/\d+))?\s*-->`)
 
 // LatestMarker returns the newest review marker across the PR's comments.
 // Comments come oldest-first from gh, so the scan runs backwards.
@@ -374,7 +457,7 @@ func LatestMarkerFor(comments []ports.Comment, author string) (Marker, bool) {
 		if m == nil {
 			continue
 		}
-		return Marker{SHA: strings.ToLower(m[1]), Verdict: m[2]}, true
+		return Marker{SHA: strings.ToLower(m[1]), Verdict: m[2], Scenarios: m[3]}, true
 	}
 	return Marker{}, false
 }
@@ -398,6 +481,25 @@ func ParseVerdict(out []byte) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// scenarioScorePattern matches a `SCENARIOS: n/m` line in reviewer output.
+var scenarioScorePattern = regexp.MustCompile(`(?m)^SCENARIOS:\s*(\d+)\s*/\s*(\d+)\s*$`)
+
+// ParseScenarioScore reads the last `SCENARIOS: n/m` line the reviewer
+// printed. It is a fallback for reviewers whose scenario runner is external.
+func ParseScenarioScore(out []byte) (passed, total int, ok bool) {
+	all := scenarioScorePattern.FindAllSubmatch(out, -1)
+	if len(all) == 0 {
+		return 0, 0, false
+	}
+	m := all[len(all)-1]
+	p, err1 := strconv.Atoi(string(m[1]))
+	t, err2 := strconv.Atoi(string(m[2]))
+	if err1 != nil || err2 != nil || t < 0 || p > t {
+		return 0, 0, false
+	}
+	return p, t, true
 }
 
 var (
@@ -441,6 +543,9 @@ type PromptInput struct {
 	PRBody     string
 	Diff       string
 	Checks     []ports.PRCheck
+	// Scenario is the issue's scenario; the reviewer sees what the
+	// generated tests check (issue #277).
+	Scenario string
 }
 
 const promptTemplate = `あなたは独立レビュアーです。実装セッションとは別のプロセスとして、PRを審査します。
@@ -466,6 +571,12 @@ const promptTemplate = `あなたは独立レビュアーです。実装セッ�
 ### CI 結果
 {{range .Checks}}- {{.Name}}: {{.Bucket}} ({{.State}})
 {{else}}- (CI 結果なし)
+{{end}}{{if .Scenario}}
+### シナリオ（worktree 外に保存され、実装者は編集できない）
+{{.Scenario}}
+
+シナリオの生成テストは lead が PR head で別途実行する。あなたは diff の所見に集中し、
+シナリオの合否を覆さないこと。
 {{end}}
 ### PR diff
 {{.Diff}}
