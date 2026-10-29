@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kuwa72/lead-cli/internal/issuecheck"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/testutil"
 	"github.com/kuwa72/lead-cli/internal/watchdog"
@@ -60,7 +61,12 @@ func newRunner(t *testing.T, out string) (*Runner, *testutil.FakeGhClient, *fake
 // --- prompt goldens ---------------------------------------------------------
 
 func TestBuildPrompt_Create_MatchesGolden(t *testing.T) {
-	out, err := BuildPrompt(PromptInput{Repository: "o/r", OneLiner: "lead say で一言から Issue を起票したい", Rules: "TDD required"})
+	out, err := BuildPrompt(PromptInput{Repository: "o/r", OneLiner: "lead say で一言から Issue を起票したい", Rules: "TDD required",
+		Evidence: Evidence{
+			Files:  []string{"internal/spec/spec.go", "internal/cli/cli.go"},
+			Merged: []string{"#264 fix(issuecheck): accept English headings"},
+			Open:   []string{"#281 docs(agents): drop approval"},
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +107,80 @@ func TestBuildPrompt_DefaultsAndErrors(t *testing.T) {
 	}
 	if _, err := BuildPrompt(PromptInput{OneLiner: "x", Parent: &ports.Issue{Number: 1}, Redraft: &RedraftInput{}}); err == nil {
 		t.Error("parent+redraft accepted")
+	}
+}
+
+// issue #279: the spec agent must see the repository before it writes file
+// names, so its prompt carries files, recent merges and open issues.
+func TestBuildPrompt_IncludesRepositoryEvidence(t *testing.T) {
+	out, err := BuildPrompt(PromptInput{
+		Repository: "o/r", OneLiner: "x", Rules: "r",
+		Evidence: Evidence{
+			Files:  []string{"internal/spec/spec.go", "internal/cli/cli.go"},
+			Merged: []string{"#264 fix(issuecheck): accept English headings"},
+			Open:   []string{"#281 docs(agents): drop approval"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"リポジトリの現状", "internal/spec/spec.go", "#264", "#281", "読んで確認したものだけ書く"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// issue #279: the body schema the agent is told to follow must contain the
+// sections issuecheck now requires.
+func TestBodyFormat_HasGoalNonGoalsAndScenario(t *testing.T) {
+	for _, want := range []string{"## Goal", "## Non-goals", "## シナリオ"} {
+		if !strings.Contains(bodyFormat, want) {
+			t.Errorf("bodyFormat lacks %q:\n%s", want, bodyFormat)
+		}
+	}
+}
+
+// issue #279: what `lead say --dry-run` prints must be a body `lead new` /
+// `lead ready` accept.
+func TestDryRunBodyPassesIssueCheck(t *testing.T) {
+	body := `# feat: x
+
+## Goal
+
+x works
+
+## Non-goals
+
+y
+
+## 受入条件
+
+- [ ] ` + "`./test/run-tests.sh`" + ` が pass する
+
+## スコープ外
+
+- z
+
+## シナリオ
+
+1. ` + "`lead x`" + ` → exit 0
+`
+	r, _, _, buf := newRunner(t, `[{"title":"feat: x","body":`+strconv.Quote(body)+`}]`)
+	r.Opts.DryRun = true
+	if _, err := r.Say(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	const sep = "\n---\n"
+	i := strings.Index(got, sep)
+	j := strings.Index(got[i+len(sep):], sep)
+	if i < 0 || j < 0 {
+		t.Fatalf("dry-run output lacks the body fence:\n%s", got)
+	}
+	printed := got[i+len(sep) : i+len(sep)+j]
+	if missing := issuecheck.Check(printed, []string{"risk:a"}); len(missing) != 0 {
+		t.Fatalf("dry-run body fails issuecheck: %v\n%s", missing, printed)
 	}
 }
 

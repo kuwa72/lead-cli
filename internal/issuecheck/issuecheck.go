@@ -15,6 +15,9 @@ import (
 const (
 	AcceptanceHeading = "## 受入条件"
 	OutOfScopeHeading = "## スコープ外"
+	// ScenarioHeading is the verification the implementation agent must
+	// satisfy after the change (issue #279).
+	ScenarioHeading = "## シナリオ"
 )
 
 // Accepted aliases. Bodies written in English (or by an AI draft) must not be
@@ -24,6 +27,7 @@ var (
 	AcceptanceHeadings = []string{AcceptanceHeading, "## Acceptance criteria"}
 	OutOfScopeHeadings = []string{OutOfScopeHeading, "## Scope", "## Out of scope", "## 対象外"}
 	OutOfScopeMarkers  = []string{"**対象外**", "**スコープ外**", "**Out of scope**"}
+	ScenarioHeadings   = []string{ScenarioHeading, "## Scenarios", "## Scenario"}
 )
 
 // RiskLabels are the accepted risk classifications (docs/config.md).
@@ -43,6 +47,10 @@ const Template = `# <title>
 ## スコープ外
 
 - <!-- この Issue でやらないこと -->
+
+## シナリオ
+
+1. <!-- 実行するコマンド → 期待する出力・終了コード -->
 `
 
 var (
@@ -92,6 +100,10 @@ func Check(body string, labels []string) []string {
 
 	if _, ok := sectionAny(body, OutOfScopeHeadings); !ok && !hasAnyMarker(body, OutOfScopeMarkers) {
 		missing = append(missing, "`"+OutOfScopeHeading+"` / `## Scope` / `## Out of scope`（または `**対象外**`）がありません")
+	}
+
+	if _, ok := sectionAny(body, ScenarioHeadings); !ok {
+		missing = append(missing, "`"+ScenarioHeading+"` または `## Scenarios` セクションがありません")
 	}
 
 	if riskLabel(labels) == "" {

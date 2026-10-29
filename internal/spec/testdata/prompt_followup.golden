@@ -27,14 +27,20 @@ TDD required
 ## Mode
 implement | research | docs のいずれか
 
-## Purpose
+## Goal
 このIssueで完了させること（1〜3文）
 
 ## Scope
 変更対象と対象外
 
+## Non-goals
+このIssueでやらないこと
+
 ## Acceptance criteria
 - 実行結果・生成物・終了状態で検証できる条件（チェックリスト）
+
+## シナリオ
+1. `コマンド` → 期待する出力・終了コード（実装後に使い捨てテストで検証する）
 
 ## TDD first step
 最初に追加してRedを確認するテスト。該当しない場合は理由
