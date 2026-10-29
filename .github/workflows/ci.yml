@@ -14,6 +14,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: README and --help consistency
+        run: go test ./internal/cli -run TestReadmeSubcommandsMatchHelp -count=1
       - name: Run test suite
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
