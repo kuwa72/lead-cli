@@ -198,11 +198,15 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		if repo == "" {
 			repo = w.Repository
 		}
+		revertOf := res.RevertOf
+		if revertOf == "" {
+			revertOf = w.PostMergeRevertOf
+		}
 		if aerr := ledger.Append(opts.LedgerPath, ledger.Record{
 			Repo: repo, Issue: issue, Phase: ledger.PhaseMerge, Mode: w.Mode, PR: prNumber,
 			StartedAt: started, EndedAt: time.Now(),
 			Outcome:  mergeOutcome(res, err, opts),
-			RevertOf: res.RevertOf,
+			RevertOf: revertOf,
 		}); aerr != nil {
 			fmt.Fprintf(os.Stderr, "finish: ledger: %v\n", aerr)
 		}
@@ -248,9 +252,12 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		// Retry path: merge already done, skip to comment/close. A
 		// postmerge failure left the record blocked; closing here would
 		// report the reverted change as done (issue #275).
-		if w.Status == state.StatusBlocked && w.PostMergeIncident > 0 {
-			return Result{ChecksPassed: true, Merged: true, PostMergeFailed: true,
-				Message: fmt.Sprintf("PR #%d is merged, but the post-merge smoke failed and the merge was reverted; resolve incident #%d before re-running the work.", prNumber, w.PostMergeIncident)}, nil
+		if w.Status == state.StatusBlocked && w.PostMergeFailed {
+			msg := fmt.Sprintf("PR #%d is merged, but the post-merge smoke failed and the merge was reverted; resolve the incident before re-running the work.", prNumber)
+			if w.PostMergeIncident > 0 {
+				msg = fmt.Sprintf("PR #%d is merged, but the post-merge smoke failed and the merge was reverted; resolve incident #%d before re-running the work.", prNumber, w.PostMergeIncident)
+			}
+			return Result{ChecksPassed: true, Merged: true, PostMergeFailed: true, Message: msg}, nil
 		}
 		return runClosePhase(ctx, gh, store, w, prRef, prNumber, opts, false)
 	}
@@ -403,7 +410,9 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 			// untouched and must not claim a revert.
 			if pmRes.SmokeFailed {
 				w.Status = state.StatusBlocked
+				w.PostMergeFailed = true
 				w.PostMergeIncident = pmRes.Incident
+				w.PostMergeRevertOf = pmRes.RevertOf
 			}
 			if prRef != nil {
 				prRef.Status = "merged"

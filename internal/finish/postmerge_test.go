@@ -200,7 +200,7 @@ func TestPostMerge_AutoMergeFailureNeedsHuman(t *testing.T) {
 
 func TestRun_BlockedRetryDoesNotClose(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{Status: state.StatusBlocked, PostMergeIncident: 77})
+	seedWithPR(t, path, state.Workflow{Status: state.StatusBlocked, PostMergeFailed: true, PostMergeIncident: 77})
 	fake := baseFake()
 	fake.PR = ports.PRInfo{Number: 7, State: "MERGED"}
 

@@ -147,7 +147,7 @@ func PostMerge(ctx context.Context, gh ports.GhClient, opts PostMergeOptions) (P
 // it lands once checks pass. The caller's checkout and branch are untouched.
 func revertAndFile(ctx context.Context, gh ports.GhClient, opts PostMergeOptions, sha, base, dir string, smokeErr error) (PostMergeResult, error) {
 	res := PostMergeResult{SmokeFailed: true, RevertOf: sha}
-	branch := fmt.Sprintf("revert/pr-%d-%s", opts.PR, shortSHA(sha))
+	branch := fmt.Sprintf("revert/pr-%d-%s-%d", opts.PR, shortSHA(sha), time.Now().Unix())
 	var revertErr, autoMergeErr error
 	if err := opts.Git.Revert(dir, sha); err != nil {
 		revertErr = fmt.Errorf("revert %s: %w", shortSHA(sha), err)
@@ -169,7 +169,7 @@ func revertAndFile(ctx context.Context, gh ports.GhClient, opts PostMergeOptions
 	title := fmt.Sprintf("[P0] postmerge smoke failed after PR #%d", opts.PR)
 	body := incidentBody(opts, sha, base, res.RevertPR, smokeErr, revertErr, autoMergeErr)
 	labels := []string{IncidentLabel}
-	if err := ensureIncidentLabel(ctx, gh); err != nil {
+	if err := ensureIncidentLabel(ctx, gh, opts.Repo); err != nil {
 		// The incident matters more than its label: file it unlabelled.
 		labels = nil
 	}
@@ -228,15 +228,15 @@ func blockComment(opts PostMergeOptions, sha string, revertPR, incident int, rev
 
 // ensureIncidentLabel creates the incident label when the repository does
 // not have it yet; gh refuses to create an issue with a missing label.
-func ensureIncidentLabel(ctx context.Context, gh ports.GhClient) error {
-	labels, err := gh.RepoLabels(ctx, "")
+func ensureIncidentLabel(ctx context.Context, gh ports.GhClient, repo string) error {
+	labels, err := gh.RepoLabels(ctx, repo)
 	if err != nil {
 		return err
 	}
 	if slices.Contains(labels, IncidentLabel) {
 		return nil
 	}
-	return gh.RepoCreateLabel(ctx, "", ports.LabelDefinition{
+	return gh.RepoCreateLabel(ctx, repo, ports.LabelDefinition{
 		Name:        IncidentLabel,
 		Color:       "B60205",
 		Description: "Post-merge smoke failed on main (P0)",

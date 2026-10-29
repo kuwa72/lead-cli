@@ -712,17 +712,14 @@ exits non-zero and leaves the issue open.`,
 		Use:   "postmerge <issue-number>",
 		Short: "Re-run the post-merge smoke and revert main when it fails",
 		Long: `Build main at the PR's merge commit in a temporary worktree and run
-the smoke (go build plus a fast shell-test subset). A failure reverts the
-merge, pushes the revert, and files an incident issue (P0 equivalent).
+the smoke (go build plus a fast shell-test subset). A failure opens a revert
+PR against the default branch, enables auto-merge, and files an incident issue
+(P0 equivalent). The revert goes through a PR because protected main refuses
+direct pushes; if auto-merge is refused, the incident asks a human to merge it.
 Run it manually to re-check a merge that already happened; ` + "`lead finish`" + `
 runs the same check right after merging (issue #275).
-
-The revert is committed in the temporary worktree and pushed as
-HEAD:<default-branch>, so the caller's checkout and local branches are
-untouched. Branch protection that forbids direct pushes makes that push
-fail; the incident then reports that manual recovery is required.
-When the revert itself fails, main stays broken and the incident says
-manual recovery is required.`,
+When the revert itself fails, main stays broken and the incident says manual
+recovery is required.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPostmerge(cmd, deps, args[0])
@@ -2180,15 +2177,19 @@ func runPostmerge(cmd *cobra.Command, deps Deps, raw string) error {
 	}
 	if err != nil && res.SmokeFailed && w.Status != state.StatusClosed {
 		w.Status = state.StatusBlocked
+		w.PostMergeFailed = true
 		w.PostMergeIncident = res.Incident
+		w.PostMergeRevertOf = res.RevertOf
 		if uerr := store.Upsert(w); uerr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "postmerge: state: %v\n", uerr)
 		}
 	}
 	// A later success proves main is healthy again: return the issue to the
 	// queue instead of leaving it blocked forever (issue #275 F7).
-	if res.Passed && w.PostMergeIncident > 0 {
+	if res.Passed && w.PostMergeFailed {
+		w.PostMergeFailed = false
 		w.PostMergeIncident = 0
+		w.PostMergeRevertOf = ""
 		if w.Status == state.StatusBlocked {
 			w.Status = state.StatusInProgress
 		}
@@ -2207,6 +2208,7 @@ func runPostmerge(cmd *cobra.Command, deps Deps, raw string) error {
 			outcome = ledger.OutcomePostMergeFailed
 		}
 		if aerr := ledger.Append(ledger.Path(deps.stateFile()), ledger.Record{
+			Repo:  git.RepoSlug(w.Repository),
 			Issue: number, Phase: ledger.PhaseMerge, PR: pr,
 			StartedAt: started, EndedAt: time.Now(),
 			Outcome: outcome, RevertOf: res.RevertOf,

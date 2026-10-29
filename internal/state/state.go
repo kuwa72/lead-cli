@@ -74,7 +74,13 @@ type Workflow struct {
 	// PostMergeIncident is the incident issue filed when the post-merge
 	// smoke failed and the merge was reverted (issue #275). Non-zero means
 	// the PR's change is no longer on main and finish must not close it.
-	PostMergeIncident int      `json:"postmerge_incident,omitempty"`
+	PostMergeIncident int `json:"postmerge_incident,omitempty"`
+	// PostMergeFailed records the smoke failure even when filing the
+	// incident itself failed, so a retry cannot close a reverted change.
+	PostMergeFailed bool `json:"postmerge_failed,omitempty"`
+	// PostMergeRevertOf is the merge commit the revert targets; the ledger
+	// uses it to count one revert per merge.
+	PostMergeRevertOf string   `json:"postmerge_revert_of,omitempty"`
 	AgentMode         string   `json:"agent_mode,omitempty"`
 	Artifacts         []string `json:"artifacts,omitempty"`
 	// Dispatch bookkeeping (docs/rfc-inbox-ux.md §7): which headless agent
