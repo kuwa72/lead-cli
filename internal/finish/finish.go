@@ -222,18 +222,11 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 	}
 
 	// Guardrail (RFC inbox §7): a PR touching protected convention files
-	// never auto-merges. The only way past it is the human-only
-	// --override-guardrail.
+	// never auto-merges. Kept after the CI wait so the pause never claims a
+	// pass that did not happen; --override-guardrail is the only way past it.
 	guarded, err := guardrail(ctx, gh, prNumber)
 	if err != nil {
 		return Result{}, err
-	}
-	// Protected paths stop the merge unless a human passed the only
-	// override that exists (issue #278).
-	if len(guarded) > 0 && !opts.OverrideGuardrail {
-		return pause(ctx, gh, issue, Result{ChecksPassed: true, Guarded: guarded,
-			Message: fmt.Sprintf("CI passed for PR #%d, but it touches protected files (%s). A human must run `lead finish %d --merge --override-guardrail` to merge.",
-				prNumber, strings.Join(guarded, ", "), issue)})
 	}
 
 	if err := WaitChecks(ctx, gh, prNumber, opts.timeout(), opts.pollInterval(), opts.sleep); err != nil {
@@ -245,20 +238,29 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 	repo := git.RepoSlug(w.Repository)
 	switch {
 	case policy == PolicyNever:
-		return pause(ctx, gh, issue, Result{ChecksPassed: true,
-			Message: fmt.Sprintf("CI passed for PR #%d; merge policy is never, stopping.", prNumber)})
+		res := Result{ChecksPassed: true,
+			Message: fmt.Sprintf("CI passed for PR #%d; merge policy is never, stopping.", prNumber)}
+		if opts.Merge {
+			return pause(ctx, gh, issue, res)
+		}
+		return res, nil
 	case policy == PolicyConfirm && !opts.Merge:
-		return pause(ctx, gh, issue, Result{ChecksPassed: true,
-			Message: fmt.Sprintf("CI passed for PR #%d; run `lead finish %d --merge` to merge.", prNumber, issue)})
+		return Result{ChecksPassed: true,
+			Message: fmt.Sprintf("CI passed for PR #%d; run `lead finish %d --merge` to merge.", prNumber, issue)}, nil
 	case policy == PolicyAuto && !opts.Merge && repo != "":
 		allowed, err := gh.RepoAllowsAutoMerge(ctx, repo)
 		if err != nil {
 			return Result{}, fmt.Errorf("PR #%d: auto-merge check: %w", prNumber, err)
 		}
 		if !allowed {
-			return pause(ctx, gh, issue, Result{ChecksPassed: true,
-				Message: fmt.Sprintf("CI passed for PR #%d, but the repository disallows auto-merge; run `lead finish %d --merge` to merge manually.", prNumber, issue)})
+			return Result{ChecksPassed: true,
+				Message: fmt.Sprintf("CI passed for PR #%d, but the repository disallows auto-merge; run `lead finish %d --merge` to merge manually.", prNumber, issue)}, nil
 		}
+	}
+	if len(guarded) > 0 && !opts.OverrideGuardrail {
+		return pause(ctx, gh, issue, Result{ChecksPassed: true, Guarded: guarded,
+			Message: fmt.Sprintf("CI passed for PR #%d, but it touches protected files (%s). A human must run `lead finish %d --merge --override-guardrail` to merge.",
+				prNumber, strings.Join(guarded, ", "), issue)})
 	}
 
 	head, err := gh.PrHeadSHA(ctx, prNumber)
