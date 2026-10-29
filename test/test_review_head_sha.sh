@@ -129,7 +129,7 @@ printf '%s' "$HEAD_A" > "$HEAD_SHA_FILE"
 # --- 1. HEAD_A でレビュー → pass マーカーが HEAD_A に束縛される ---
 out="$(cd "$repo" && "$tmp/lead" review 7 --agent claude 2>&1)" \
   || fail "review at HEAD_A failed: $out"
-grep -qF -- "<!-- lead-review sha=$HEAD_A verdict=pass -->" "$COMMENT_FILE" \
+grep -qF -- "<!-- lead-review sha=$HEAD_A verdict=pass scenarios=0/0 -->" "$COMMENT_FILE" \
   || fail "review comment missing the HEAD_A marker: $(cat "$COMMENT_FILE")"
 
 # --- 2. レビュー後にコミットが push される（head が HEAD_B に進む） ---
@@ -150,7 +150,7 @@ case "$out" in *"lead review 7"*) ;; *) fail "stale-review: message missing the 
 # --- 3. HEAD_B で再レビュー → 一致する pass でマージ ---
 out="$(cd "$repo" && "$tmp/lead" review 7 --agent claude 2>&1)" \
   || fail "review at HEAD_B failed: $out"
-grep -qF -- "<!-- lead-review sha=$HEAD_B verdict=pass -->" "$COMMENT_FILE" \
+grep -qF -- "<!-- lead-review sha=$HEAD_B verdict=pass scenarios=0/0 -->" "$COMMENT_FILE" \
   || fail "re-review comment missing the HEAD_B marker: $(cat "$COMMENT_FILE")"
 : > "$GH_LOG"
 out="$(cd "$repo" && "$tmp/lead" finish 36 --pr 7 --merge --close --timeout 60s --poll-interval 1s)" \

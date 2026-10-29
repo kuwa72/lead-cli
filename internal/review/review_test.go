@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/scenario"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
 )
@@ -38,6 +39,50 @@ func (a *fakeAgent) Run(_ context.Context, dir string, argv []string, logPath st
 		}
 	}
 	return a.out, a.err
+}
+
+// scenarioAgent answers the reviewer on the first call and generates a
+// throwaway test runner on the second (issue #277).
+type scenarioAgent struct {
+	call   int
+	review []byte
+	runner string
+}
+
+func (a *scenarioAgent) Run(_ context.Context, dir string, argv []string, logPath string) ([]byte, error) {
+	a.call++
+	if a.call == 1 {
+		return a.review, nil
+	}
+	if len(argv) == 0 {
+		return nil, errors.New("no argv")
+	}
+	last := argv[len(argv)-1]
+	i := strings.Index(last, "file: ")
+	if i < 0 {
+		return nil, errors.New("no prompt")
+	}
+	b, err := os.ReadFile(strings.TrimSpace(last[i+len("file: "):]))
+	if err != nil {
+		return nil, err
+	}
+	out := ""
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "- 出力先: "); ok {
+			out = strings.TrimSpace(v)
+			break
+		}
+	}
+	if out == "" {
+		return nil, errors.New("no output dir in prompt")
+	}
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(out, "run.sh"), []byte(a.runner), 0o755); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 type fakeGit struct {
@@ -113,7 +158,7 @@ func TestReview_PassLabelsPRAndPostsComment(t *testing.T) {
 	if !strings.Contains(gh.PRComments[0].Body, "受入条件は満たしている") {
 		t.Errorf("comment does not carry the review body:\n%s", gh.PRComments[0].Body)
 	}
-	if want := "<!-- lead-review sha=" + testSHA + " verdict=pass -->"; !strings.Contains(gh.PRComments[0].Body, want) {
+	if want := MarkerLine(testSHA, "pass", "0/0"); !strings.Contains(gh.PRComments[0].Body, want) {
 		t.Errorf("comment missing the machine-readable marker %q:\n%s", want, gh.PRComments[0].Body)
 	}
 	if res.HeadSHA != testSHA {
@@ -534,5 +579,73 @@ func TestBuildPrompt_CarriesInputsAndChecklist(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestParseScenarioScore(t *testing.T) {
+	if p, tt, ok := ParseScenarioScore([]byte("SCENARIOS: 2/3\nVERDICT: pass\n")); !ok || p != 2 || tt != 3 {
+		t.Fatalf("ParseScenarioScore = %d/%d,%v, want 2/3,true", p, tt, ok)
+	}
+	if _, _, ok := ParseScenarioScore([]byte("no score here")); ok {
+		t.Fatal("ParseScenarioScore accepted a missing score")
+	}
+	if _, _, ok := ParseScenarioScore([]byte("SCENARIOS: 4/3")); ok {
+		t.Fatal("ParseScenarioScore accepted passed > total")
+	}
+}
+
+// issue #277: the generated scenario tests decide the verdict; a passing
+// diff review cannot rescue a failing scenario.
+func TestReview_ScenarioFailureNeedsWork(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := scenario.Save(scenario.Path(stateDir, "o/r", 246), "## Steps\n1. works\n"); err != nil {
+		t.Fatal(err)
+	}
+	gh := reviewGh()
+	r := newRunner(t, gh, &scenarioAgent{
+		review: []byte("## 所見\nno blocking findings\nVERDICT: pass"),
+		runner: "#!/bin/sh\necho 'SCENARIO 1: fail'\n",
+	})
+	r.Opts.StateDir = stateDir
+
+	res, err := r.Review(context.Background())
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if res.Passed || res.Verdict != VerdictNeedsWork {
+		t.Fatalf("Result = %+v, want needs-work", res)
+	}
+	if res.ScenariosPassed != 0 || res.ScenariosTotal != 1 {
+		t.Fatalf("scenarios = %d/%d, want 0/1", res.ScenariosPassed, res.ScenariosTotal)
+	}
+	if want := []testutil.LabelCall{{Number: 7, Label: state.ReviewNeedsWorkLabel}}; !reflect.DeepEqual(gh.AddedLabels, want) {
+		t.Errorf("added labels = %+v, want %+v", gh.AddedLabels, want)
+	}
+	if !strings.Contains(gh.PRComments[0].Body, "SCENARIO 1: fail") {
+		t.Errorf("comment lacks the per-step result:\n%s", gh.PRComments[0].Body)
+	}
+}
+
+func TestReview_ScenarioPassKeepsPass(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := scenario.Save(scenario.Path(stateDir, "o/r", 246), "## Steps\n1. works\n"); err != nil {
+		t.Fatal(err)
+	}
+	gh := reviewGh()
+	r := newRunner(t, gh, &scenarioAgent{
+		review: []byte("VERDICT: pass"),
+		runner: "#!/bin/sh\necho 'SCENARIO 1: pass'\n",
+	})
+	r.Opts.StateDir = stateDir
+
+	res, err := r.Review(context.Background())
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if !res.Passed || res.ScenariosPassed != 1 || res.ScenariosTotal != 1 {
+		t.Fatalf("Result = %+v, want pass with 1/1", res)
+	}
+	if !strings.Contains(gh.PRComments[0].Body, "SCENARIOS: 1/1") {
+		t.Errorf("comment lacks the scenario score:\n%s", gh.PRComments[0].Body)
 	}
 }

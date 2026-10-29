@@ -106,7 +106,7 @@ if out="$(cd "$repo" && "$tmp/lead" review 7 --agent claude 2>&1)"; then
   fail "needs-work review exited 0: $out"
 fi
 first_line="$(head -n 1 "$COMMENT_FILE")"
-[ "$first_line" = "<!-- lead-review sha=$HEAD_SHA verdict=needs-work -->" ] \
+[ "$first_line" = "<!-- lead-review sha=$HEAD_SHA verdict=needs-work scenarios=0/0 -->" ] \
   || fail "review comment does not start with the authoritative marker: $first_line"
 grep -q 'VERDICT: needs-work' "$COMMENT_FILE" || fail "review comment missing the verdict"
 

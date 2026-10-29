@@ -114,7 +114,7 @@ size="$(cat "$PROMPT_SIZE_FILE")"
 [ "$size" -gt 131072 ] || fail "prompt file is only $size bytes; want the full large diff"
 grep -q '^diff --git a/big.txt b/big.txt' "$PROMPT_COPY" || fail "prompt file missing the diff header"
 grep -qx 'review:pass' "$LABELS_FILE" || fail "review:pass was not applied"
-grep -qF -- "<!-- lead-review sha=$PR_SHA verdict=pass -->" "$COMMENT_FILE" \
+grep -qF -- "<!-- lead-review sha=$PR_SHA verdict=pass scenarios=0/0 -->" "$COMMENT_FILE" \
   || fail "PR comment missing the marker: $(cat "$COMMENT_FILE")"
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"
