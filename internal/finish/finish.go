@@ -201,7 +201,8 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		if aerr := ledger.Append(opts.LedgerPath, ledger.Record{
 			Repo: repo, Issue: issue, Phase: ledger.PhaseMerge, Mode: w.Mode, PR: prNumber,
 			StartedAt: started, EndedAt: time.Now(),
-			Outcome: mergeOutcome(res, err, opts), RevertOf: res.RevertOf,
+			Outcome:  mergeOutcome(res, err, opts),
+			RevertOf: res.RevertOf,
 		}); aerr != nil {
 			fmt.Fprintf(os.Stderr, "finish: ledger: %v\n", aerr)
 		}
@@ -247,9 +248,9 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		// Retry path: merge already done, skip to comment/close. A
 		// postmerge failure left the record blocked; closing here would
 		// report the reverted change as done (issue #275).
-		if w.Status == state.StatusBlocked {
+		if w.Status == state.StatusBlocked && w.PostMergeIncident > 0 {
 			return Result{ChecksPassed: true, Merged: true, PostMergeFailed: true,
-				Message: fmt.Sprintf("PR #%d is merged, but the post-merge smoke failed and the merge was reverted; resolve the incident before re-running the work.", prNumber)}, nil
+				Message: fmt.Sprintf("PR #%d is merged, but the post-merge smoke failed and the merge was reverted; resolve incident #%d before re-running the work.", prNumber, w.PostMergeIncident)}, nil
 		}
 		return runClosePhase(ctx, gh, store, w, prRef, prNumber, opts, false)
 	}
@@ -397,9 +398,13 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		pmRes, pmErr := PostMerge(ctx, gh, pm)
 		if pmErr != nil {
 			// The PR is merged on GitHub even when main was reverted, so
-			// keep that in the record; blocked keeps dispatch from retrying
-			// the issue until a human resolves the incident.
-			w.Status = state.StatusBlocked
+			// keep that in the record. Only a smoke failure blocks the
+			// issue: a setup error (worktree, merge commit) left main
+			// untouched and must not claim a revert.
+			if pmRes.SmokeFailed {
+				w.Status = state.StatusBlocked
+				w.PostMergeIncident = pmRes.Incident
+			}
 			if prRef != nil {
 				prRef.Status = "merged"
 			} else {
@@ -412,7 +417,7 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 				PostMergeFailed: pmRes.SmokeFailed, RevertOf: pmRes.RevertOf,
 				Message: pmRes.Message}, pmErr
 		}
-		if pmRes.Skipped {
+		if pmRes.Passed && pmRes.Message != "" {
 			pmNote = pmRes.Message
 		}
 	}

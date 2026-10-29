@@ -8,6 +8,9 @@
 # を検証する（grep によるソース検査なし・一時 HOME/リポジトリ）。
 set -euo pipefail
 
+# These tests exercise finish gates, not the post-merge smoke (#275).
+export LEAD_TEST_SKIP_POSTMERGE=1
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 

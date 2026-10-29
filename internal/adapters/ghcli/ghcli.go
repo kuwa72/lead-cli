@@ -330,6 +330,27 @@ func (c *Client) PrMerge(ctx context.Context, pr int, headSHA string) error {
 	return err
 }
 
+// PrCreate runs `gh pr create --head <head> --base <base> --title <t>
+// --body <b>` and returns the new PR number.
+func (c *Client) PrCreate(ctx context.Context, head, base, title, body string) (int, error) {
+	out, err := c.run(ctx, "pr", "create", "--head", head, "--base", base, "--title", title, "--body", body)
+	if err != nil {
+		return 0, err
+	}
+	url := lastNonEmptyLine(string(out))
+	n, err := numberFromIssueURL(url)
+	if err != nil {
+		return 0, fmt.Errorf("gh pr create: %w", err)
+	}
+	return n, nil
+}
+
+// PrAutoMerge runs `gh pr merge <pr> --auto --squash --delete-branch`.
+func (c *Client) PrAutoMerge(ctx context.Context, pr int) error {
+	_, err := c.run(ctx, "pr", "merge", strconv.Itoa(pr), "--auto", "--squash", "--delete-branch")
+	return err
+}
+
 // RepoAllowsAutoMerge runs `gh api repos/<repo> --jq .allow_auto_merge`.
 func (c *Client) RepoAllowsAutoMerge(ctx context.Context, repo string) (bool, error) {
 	out, err := c.run(ctx, "api", "repos/"+repo, "--jq", ".allow_auto_merge")

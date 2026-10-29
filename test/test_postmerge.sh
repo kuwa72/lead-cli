@@ -42,7 +42,10 @@ case "$1 $2" in
       *) printf '{"number":7,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}' ;;
     esac ;;
   "pr checks") printf '[{"bucket":"pass","name":"test","state":"SUCCESS"}]' ;;
-  "pr merge") printf '{"number":7,"state":"MERGED"}' ;;
+  "pr create") printf 'https://github.com/o/r/pull/201\n' ;;
+  "pr merge")
+    case "$*" in *--auto*) [ "${AUTO_MERGE_FAIL:-}" = "1" ] && { echo "auto-merge disabled" >&2; exit 1; } ;; esac
+    printf '{"number":7,"state":"MERGED"}' ;;
   "api user") printf 'lead\n' ;;
   "api repos/o/r") printf 'main\n' ;;
   "label list") printf '[{"name":"incident"}]' ;;
@@ -144,7 +147,9 @@ export LEAD_TEST_POSTMERGE_SMOKE="exit 1"
 reset_logs
 if finish_in "$repo_b" >/dev/null 2>&1; then fail "scenario B: finish exited 0 on a failing smoke"; fi
 grep -q "GITLOG revert --no-edit $SHA" "$GIT_ARGS_LOG" || fail "scenario B: revert of the merge commit not invoked: $(cat "$GIT_ARGS_LOG")"
-grep -q "GITLOG push origin HEAD:main" "$GIT_ARGS_LOG" || fail "scenario B: revert not pushed: $(cat "$GIT_ARGS_LOG")"
+grep -q "GITLOG push origin HEAD:refs/heads/revert/pr-7-" "$GIT_ARGS_LOG" || fail "scenario B: revert branch not pushed: $(cat "$GIT_ARGS_LOG")"
+grep -q "GHLOG pr create --head revert/pr-7-.* --base main" "$GH_ARGS_LOG" || fail "scenario B: revert PR not created: $(cat "$GH_ARGS_LOG")"
+grep -q "GHLOG pr merge 201 --auto --squash --delete-branch" "$GH_ARGS_LOG" || fail "scenario B: auto-merge not enabled: $(cat "$GH_ARGS_LOG")"
 grep -q "GHLOG issue create --title \[P0\] postmerge smoke failed after PR #7" "$GH_ARGS_LOG" \
   || fail "scenario B: incident issue not created: $(cat "$GH_ARGS_LOG")"
 grep -q "GHLOG issue create .*--label incident" "$GH_ARGS_LOG" || fail "scenario B: incident lacks the P0 label"
@@ -158,6 +163,7 @@ import json, sys, os
 state = json.load(open(sys.argv[1]))
 w = state["workflows"][0]
 assert w["status"] == "blocked", w
+assert w["postmerge_incident"] == 900, w
 ledger = os.path.join(os.path.dirname(sys.argv[1]), "runs.jsonl")
 recs = [json.loads(l) for l in open(ledger) if l.strip()]
 assert any(r["outcome"] == "postmerge-failed" and r.get("revert_of") for r in recs), recs
@@ -166,19 +172,27 @@ PY
 # --- C: manual `lead postmerge <n>` gives the same verdict ---
 seed c; repo_c="$repo"
 export LEAD_TEST_POSTMERGE_SMOKE="true"
-finish_in "$repo_c" >/dev/null || fail "scenario C: setup finish failed"
+finish_in "$repo_c" --no-close >/dev/null || fail "scenario C: setup finish failed"
 export LEAD_TEST_POSTMERGE_SMOKE="exit 1"
 reset_logs
 if postmerge_in "$repo_c" >/dev/null 2>&1; then fail "scenario C: postmerge exited 0 on a failing smoke"; fi
 grep -q "GITLOG revert --no-edit $SHA" "$GIT_ARGS_LOG" || fail "scenario C: manual postmerge did not revert"
-grep -q "GITLOG push origin HEAD:main" "$GIT_ARGS_LOG" || fail "scenario C: manual postmerge did not push the revert"
+grep -q "GITLOG push origin HEAD:refs/heads/revert/pr-7-" "$GIT_ARGS_LOG" || fail "scenario C: manual postmerge did not push the revert"
 grep -q "GHLOG issue create .*--label incident" "$GH_ARGS_LOG" || fail "scenario C: manual postmerge did not file an incident"
-# The success verdict is the same check with a passing smoke: no revert.
+# The success verdict is the same check with a passing smoke: no revert,
+# and the blocked issue returns to the queue (issue #275 F7).
 reset_logs
 export LEAD_TEST_POSTMERGE_SMOKE="true"
 postmerge_in "$repo_c" >/dev/null || fail "scenario C: manual postmerge failed on a passing smoke"
 grep -q "GITLOG revert" "$GIT_ARGS_LOG" && fail "scenario C: reverted on a passing manual smoke"
 grep -q "GHLOG issue create" "$GH_ARGS_LOG" && fail "scenario C: incident filed on a passing manual smoke"
+grep -q "GHLOG issue edit 36 --remove-label blocked" "$GH_ARGS_LOG" || fail "scenario C: blocked label not removed after recovery"
+grep -q "GHLOG issue edit 36 --add-label ready" "$GH_ARGS_LOG" || fail "scenario C: ready label not restored after recovery"
+python3 - "$LEAD_STATE_FILE" <<'PY' || fail "scenario C: state still marks the postmerge incident"
+import json, sys
+w = json.load(open(sys.argv[1]))["workflows"][0]
+assert not w.get("postmerge_incident"), w
+PY
 
 # --- D: revert failure → incident says manual recovery is required ---
 seed d; repo_d="$repo"
@@ -187,8 +201,19 @@ export GIT_REVERT_FAIL=1
 reset_logs
 if finish_in "$repo_d" >/dev/null 2>&1; then fail "scenario D: finish exited 0 although the revert failed"; fi
 grep -q "GITLOG push" "$GIT_ARGS_LOG" && fail "scenario D: pushed although the revert failed"
+grep -q "GHLOG pr create" "$GH_ARGS_LOG" && fail "scenario D: opened a revert PR although the revert failed"
 grep -q "手動復旧が必要" "$GH_ARGS_LOG" || fail "scenario D: incident does not demand manual recovery: $(cat "$GH_ARGS_LOG")"
 unset GIT_REVERT_FAIL
+
+# --- E: auto-merge refusal → incident asks a human to merge the revert PR ---
+seed e; repo_e="$repo"
+export LEAD_TEST_POSTMERGE_SMOKE="exit 1"
+export AUTO_MERGE_FAIL=1
+reset_logs
+if finish_in "$repo_e" >/dev/null 2>&1; then fail "scenario E: finish exited 0 although auto-merge was refused"; fi
+grep -q "GHLOG pr create --head revert/pr-7-" "$GH_ARGS_LOG" || fail "scenario E: revert PR not created"
+grep -q "手動でマージ" "$GH_ARGS_LOG" || fail "scenario E: incident does not ask for a manual merge: $(cat "$GH_ARGS_LOG")"
+unset AUTO_MERGE_FAIL
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"
 

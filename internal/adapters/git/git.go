@@ -273,9 +273,14 @@ func (r *Runner) WorktreeRemove(repoDir, path string, force bool) error {
 	return err
 }
 
-// Revert creates a revert commit for sha in dir (git revert --no-edit).
+// Revert creates a revert commit for sha in dir. A merge commit needs a
+// mainline parent, so retry with -m 1 when the plain revert refuses
+// (squash merges stay single-parent and take the first path).
 func (r *Runner) Revert(dir, sha string) error {
-	_, err := r.run(context.Background(), dir, "revert", "--no-edit", sha)
+	if _, err := r.run(context.Background(), dir, "revert", "--no-edit", sha); err == nil {
+		return nil
+	}
+	_, err := r.run(context.Background(), dir, "revert", "--no-edit", "-m", "1", sha)
 	return err
 }
 

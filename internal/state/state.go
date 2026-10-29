@@ -70,9 +70,13 @@ type Workflow struct {
 	// PolicyReason explains a MergePolicy that `lead finish` lowered itself
 	// (guardrail: PR touched protected files). Empty when the policy came
 	// from the human or the mode default.
-	PolicyReason string   `json:"policy_reason,omitempty"`
-	AgentMode    string   `json:"agent_mode,omitempty"`
-	Artifacts    []string `json:"artifacts,omitempty"`
+	PolicyReason string `json:"policy_reason,omitempty"`
+	// PostMergeIncident is the incident issue filed when the post-merge
+	// smoke failed and the merge was reverted (issue #275). Non-zero means
+	// the PR's change is no longer on main and finish must not close it.
+	PostMergeIncident int      `json:"postmerge_incident,omitempty"`
+	AgentMode         string   `json:"agent_mode,omitempty"`
+	Artifacts         []string `json:"artifacts,omitempty"`
 	// Dispatch bookkeeping (docs/rfc-inbox-ux.md §7): which headless agent
 	// ran, how many times it failed to close the issue, the last process
 	// and its log. GitHub stays the source of truth for the issue itself.

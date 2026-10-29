@@ -4,6 +4,9 @@
 # 失敗時停止、auto-merge無効時の代替表示をアサートする (grep検査なし)。
 set -euo pipefail
 
+# These tests exercise finish gates, not the post-merge smoke (#275).
+export LEAD_TEST_SKIP_POSTMERGE=1
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 

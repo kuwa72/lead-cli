@@ -90,8 +90,17 @@ func TestPostMerge_FailureRevertsPushesAndFilesIncident(t *testing.T) {
 	if len(g.reverted) != 1 || g.reverted[0] != testSHA {
 		t.Errorf("reverted = %v, want [%s]", g.reverted, testSHA)
 	}
-	if len(g.pushed) != 1 || g.pushed[0] != "origin HEAD:main" {
-		t.Errorf("pushed = %v, want [origin HEAD:main]", g.pushed)
+	if len(g.pushed) != 1 || !strings.HasPrefix(g.pushed[0], "origin HEAD:refs/heads/revert/pr-7-") {
+		t.Errorf("pushed = %v, want a revert branch", g.pushed)
+	}
+	if len(fake.PRCreates) != 1 || fake.PRCreates[0].Base != "main" {
+		t.Fatalf("pr creates = %+v, want one revert PR against main", fake.PRCreates)
+	}
+	if fake.PRCreates[0].Head != strings.TrimPrefix(g.pushed[0], "origin HEAD:refs/heads/") {
+		t.Errorf("PR head = %q, want the pushed branch", fake.PRCreates[0].Head)
+	}
+	if len(fake.AutoMergeCalls) != 1 || fake.AutoMergeCalls[0] != 201 {
+		t.Errorf("auto merges = %v, want [201]", fake.AutoMergeCalls)
 	}
 	if len(fake.Created) != 1 {
 		t.Fatalf("created = %+v, want one incident issue", fake.Created)
@@ -107,7 +116,10 @@ func TestPostMerge_FailureRevertsPushesAndFilesIncident(t *testing.T) {
 		t.Errorf("incident body = %q, want merge SHA and the smoke error", inc.Body)
 	}
 	if strings.Contains(inc.Body, "手動復旧") {
-		t.Errorf("incident body claims manual recovery although the revert was pushed: %q", inc.Body)
+		t.Errorf("incident body claims manual recovery although the revert PR was opened: %q", inc.Body)
+	}
+	if !strings.Contains(inc.Body, "auto-merge") {
+		t.Errorf("incident body = %q, want the auto-merge action", inc.Body)
 	}
 	// The reverted change must not be re-dispatched, and the issue keeps a
 	// pointer to the incident.
@@ -145,7 +157,7 @@ func TestPostMerge_RevertFailureFilesManualRecoveryIncident(t *testing.T) {
 	}
 }
 
-func TestPostMerge_NoMergeCommitSkips(t *testing.T) {
+func TestPostMerge_NoMergeCommitFails(t *testing.T) {
 	fake := baseFake()
 	g := &fakePostMergeGit{root: t.TempDir()}
 	res, err := PostMerge(context.Background(), fake, PostMergeOptions{
@@ -155,20 +167,40 @@ func TestPostMerge_NoMergeCommitSkips(t *testing.T) {
 			return nil
 		},
 	})
-	if err != nil {
-		t.Fatalf("PostMerge: %v", err)
-	}
-	if !res.Skipped || res.SmokeFailed {
-		t.Fatalf("Result = %+v, want skipped", res)
+	if err == nil {
+		t.Fatalf("PostMerge = %+v, want an error when the merge commit is missing", res)
 	}
 	if len(g.added) != 0 || len(fake.Created) != 0 {
-		t.Errorf("worktree=%v created=%+v, want none when skipping", g.added, fake.Created)
+		t.Errorf("worktree=%v created=%+v, want none", g.added, fake.Created)
+	}
+}
+
+// A protected main can refuse auto-merge too: the revert PR still exists,
+// so the incident must tell a human to merge it rather than claim success.
+func TestPostMerge_AutoMergeFailureNeedsHuman(t *testing.T) {
+	fake := baseFake()
+	fake.PRMergeCommit = testSHA
+	fake.PRAutoMergeErr = errors.New("auto-merge disabled")
+	g := &fakePostMergeGit{root: t.TempDir()}
+
+	res, err := PostMerge(context.Background(), fake, PostMergeOptions{
+		Issue: 36, PR: 7, WorkDir: "/repo", Git: g,
+		Smoke: func(ctx context.Context, dir string) error { return errors.New("build broke") },
+	})
+	if err == nil {
+		t.Fatal("PostMerge succeeded, want the auto-merge failure")
+	}
+	if res.Reverted || res.RevertPR != 201 {
+		t.Fatalf("Result = %+v, want an open revert PR that is not merged", res)
+	}
+	if len(fake.Created) != 1 || !strings.Contains(fake.Created[0].Body, "手動でマージ") {
+		t.Errorf("created = %+v, want the manual-merge incident", fake.Created)
 	}
 }
 
 func TestRun_BlockedRetryDoesNotClose(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{Status: state.StatusBlocked})
+	seedWithPR(t, path, state.Workflow{Status: state.StatusBlocked, PostMergeIncident: 77})
 	fake := baseFake()
 	fake.PR = ports.PRInfo{Number: 7, State: "MERGED"}
 
@@ -182,8 +214,21 @@ func TestRun_BlockedRetryDoesNotClose(t *testing.T) {
 	if res.Closed || len(fake.Closed) != 0 {
 		t.Fatalf("closed a reverted change on retry: result=%+v closed=%v", res, fake.Closed)
 	}
-	if !res.PostMergeFailed || !strings.Contains(res.Message, "reverted") {
-		t.Errorf("Result = %+v, want the postmerge-failed pause", res)
+	if !res.PostMergeFailed || !strings.Contains(res.Message, "incident #77") {
+		t.Errorf("Result = %+v, want the postmerge-failed pause naming incident #77", res)
+	}
+}
+
+// The real smoke command must run against this repository at least once;
+// every other test substitutes it (issue #275 review F5).
+func TestDefaultSmoke_OnThisRepository(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the CLI skeleton")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := DefaultSmoke(ctx, "../.."); err != nil {
+		t.Fatalf("DefaultSmoke on the repository: %v", err)
 	}
 }
 

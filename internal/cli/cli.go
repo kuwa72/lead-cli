@@ -2094,6 +2094,12 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 		return err
 	}
 
+	// The post-merge smoke needs a real repository (worktree add); CLI
+	// wiring tests that use a temp dir opt out with LEAD_TEST_SKIP_POSTMERGE.
+	var postMerge *finish.PostMergeOptions
+	if os.Getenv("LEAD_TEST_SKIP_POSTMERGE") == "" {
+		postMerge = &finish.PostMergeOptions{Smoke: postMergeSmoke()}
+	}
 	res, err := finish.Run(cmd.Context(), deps.gh(), &state.Store{Path: deps.stateFile()}, number, finish.Options{
 		PR: pr, Part: part, Merge: merge, Close: closeIssue, NoClose: noClose,
 		Comment: comment, Outcome: outcome, MergePolicy: policy,
@@ -2103,7 +2109,7 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 		OverrideGuardrail: overrideGuardrail,
 		Git:               deps.gitRunner(), WorkDir: workDir,
 		Timeout: timeout, PollInterval: interval,
-		PostMerge: &finish.PostMergeOptions{Smoke: postMergeSmoke()},
+		PostMerge: postMerge,
 	})
 	if res.Message != "" {
 		fmt.Fprintln(cmd.OutOrStdout(), res.Message)
@@ -2174,11 +2180,28 @@ func runPostmerge(cmd *cobra.Command, deps Deps, raw string) error {
 	}
 	if err != nil && res.SmokeFailed && w.Status != state.StatusClosed {
 		w.Status = state.StatusBlocked
+		w.PostMergeIncident = res.Incident
 		if uerr := store.Upsert(w); uerr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "postmerge: state: %v\n", uerr)
 		}
 	}
-	if !res.Skipped && (res.Passed || res.SmokeFailed) {
+	// A later success proves main is healthy again: return the issue to the
+	// queue instead of leaving it blocked forever (issue #275 F7).
+	if res.Passed && w.PostMergeIncident > 0 {
+		w.PostMergeIncident = 0
+		if w.Status == state.StatusBlocked {
+			w.Status = state.StatusInProgress
+		}
+		if uerr := store.Upsert(w); uerr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "postmerge: state: %v\n", uerr)
+		}
+		if w.Status != state.StatusClosed {
+			_ = deps.gh().IssueRemoveLabel(cmd.Context(), number, inbox.LabelBlocked)
+			_ = deps.gh().IssueAddLabel(cmd.Context(), number, inbox.LabelReady)
+			_ = deps.gh().IssueComment(cmd.Context(), number, "postmerge: 再実行が成功しました。ready に戻しました。")
+		}
+	}
+	if res.Passed || res.SmokeFailed {
 		outcome := ledger.OutcomeCompleted
 		if res.SmokeFailed {
 			outcome = ledger.OutcomePostMergeFailed
