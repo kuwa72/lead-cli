@@ -57,21 +57,13 @@ func baseFake() *testutil.FakeGhClient {
 		Checks:           []ports.PRCheck{{Name: "test", Bucket: "pass", State: "SUCCESS"}},
 		PR:               ports.PRInfo{Number: 7, State: "OPEN", Mergeable: "MERGEABLE"},
 		AutoMergeAllowed: true,
-		// risk:a keeps the pre-#245 merge fixtures merging; the risk-gate
-		// tests below opt into other label sets explicitly. issue #246:
-		// automatic merge also needs the independent review's pass, and
-		// issue #249 binds that pass to the reviewed head SHA.
+		// review markers carry the scenario score; the labels are informational
+		// since #278.
 		Issues:    map[int]ports.Issue{36: {Number: 36, Title: "x", Labels: []string{"risk:a"}}},
 		PRLabels:  []string{state.ReviewPassLabel},
 		PRHeadSHA: testSHA,
 		PRThread:  []ports.Comment{{Body: "<!-- lead-review sha=" + testSHA + " verdict=pass -->"}},
 	}
-}
-
-func riskFake(labels ...string) *testutil.FakeGhClient {
-	f := baseFake()
-	f.Issues[36] = ports.Issue{Number: 36, Title: "x", Labels: labels}
-	return f
 }
 
 func noSleep(d time.Duration) {}
@@ -363,7 +355,7 @@ func TestRun_ResearchWithoutPRNeedsOutcome(t *testing.T) {
 
 // Guardrail (RFC inbox §7, issue #93 Part B): a PR that touches protected
 // convention files must not auto-merge even under policy auto.
-func TestRun_GuardrailLowersAutoToConfirm(t *testing.T) {
+func TestRun_GuardrailStopsAutoMerge(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	seedWithPR(t, path, state.Workflow{})
 	fake := baseFake()
@@ -515,7 +507,7 @@ func TestRun_RepoURLIsReducedToSlugForAPI(t *testing.T) {
 func TestRun_CIOnlyMerges(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
+	fake := baseFake()
 
 	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
 		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
@@ -535,7 +527,7 @@ func TestRun_CIOnlyMerges(t *testing.T) {
 func TestRun_ReviewCommentLookupFailureStops(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
+	fake := baseFake()
 	fake.PRThreadErr = errors.New("comments boom")
 
 	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
@@ -553,7 +545,7 @@ func TestRun_ReviewCommentLookupFailureStops(t *testing.T) {
 func TestRun_HeadSHALookupFailureStops(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
+	fake := baseFake()
 	fake.PRHeadSHAErr = errors.New("head boom")
 
 	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{

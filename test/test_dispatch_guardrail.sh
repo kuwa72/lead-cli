@@ -42,7 +42,7 @@ export MERGED_MARK="$tmp/merged" CLOSED_MARK="$tmp/closed"
 
 # ISSUE selects the ready issue; FILES is the PR's changed-file list.
 # LABELS is the issue's risk class JSON (risk:a keeps these fixtures merging;
-# the risk gate itself is covered by test_risk_gate.sh, issue #245).
+# the risk gate itself is covered by the finish suite, issue #245).
 export ISSUE=7 FILES="internal/x.go" LABELS='[{"name":"risk:a"}]'
 
 mkdir -p "$tmp/bin"

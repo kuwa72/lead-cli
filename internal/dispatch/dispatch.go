@@ -119,11 +119,10 @@ type Launcher interface {
 type Outcome string
 
 const (
-	OutcomeCompleted     Outcome = ledger.OutcomeCompleted     // issue closed on GitHub; cleaned up
-	OutcomeRetry         Outcome = ledger.OutcomeRetry         // failed; stays ready for the next pass
-	OutcomeBlocked       Outcome = ledger.OutcomeBlocked       // failed MaxAttempts times; labelled blocked
-	OutcomeAwaitingHuman Outcome = ledger.OutcomeAwaitingHuman // CI passed; waiting for human approval (issue #245)
-	OutcomeError         Outcome = ledger.OutcomeError         // dispatch itself failed before/around launch
+	OutcomeCompleted Outcome = ledger.OutcomeCompleted // issue closed on GitHub; cleaned up
+	OutcomeRetry     Outcome = ledger.OutcomeRetry     // failed; stays ready for the next pass
+	OutcomeBlocked   Outcome = ledger.OutcomeBlocked   // failed MaxAttempts times; labelled blocked
+	OutcomeError     Outcome = ledger.OutcomeError     // dispatch itself failed before/around launch
 )
 
 // Result describes one issue handled in a pass.
@@ -925,9 +924,6 @@ func (d *Dispatcher) print(rep Report) {
 	}
 	for _, r := range rep.Results {
 		line := fmt.Sprintf("#%d %s", r.Issue, r.Outcome)
-		if r.Outcome == OutcomeAwaitingHuman {
-			line += " (human approval pending)"
-		}
 		if r.Attempts > 0 {
 			line += fmt.Sprintf(" (attempt %d)", r.Attempts)
 		}

@@ -141,7 +141,8 @@ documented in [docs/config.md](docs/config.md).
 
 `lead finish <n> --merge` merges when three checks pass (issue #278):
 
-1. CI is green — `skipping`, `neutral`, and `cancelled` do not count.
+1. CI is green — `skipping`, `fail`, and `cancel` are failures; `neutral`
+   keeps waiting and times out. `./test/run-tests.sh` must pass.
 2. The generated scenarios recorded by `lead review <pr>` are all passing
    (`SCENARIOS: n/n`). No scenario configured skips this layer. If a
    scenario file exists but no review result was recorded, finish pauses
@@ -150,9 +151,10 @@ documented in [docs/config.md](docs/config.md).
    `.claude/`, …).
 
 There is no approval step and no `risk:*` label gate any more; `review:pass`
-is advisory (it decides nothing on its own). When a check stops an attempted
-merge (`--merge` or the auto path), `lead finish` exits 0, prints the reason,
-and comments it on the issue.
+is advisory (it decides nothing on its own). When a scenario or protected
+path stops an attempted merge (`--merge` or the auto path), `lead finish`
+exits 0, prints the reason, and comments it on the issue. A failing CI check
+is an error (exit 1) and is not posted as a pause.
 
 `--override-guardrail` is the only human-only flag: it is the one way past the
 protected-file guardrail. An unattended agent must never pass it.
