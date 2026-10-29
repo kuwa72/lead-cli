@@ -47,12 +47,16 @@ type scenarioAgent struct {
 	call   int
 	review []byte
 	runner string
+	genErr error
 }
 
 func (a *scenarioAgent) Run(_ context.Context, dir string, argv []string, logPath string) ([]byte, error) {
 	a.call++
 	if a.call == 1 {
 		return a.review, nil
+	}
+	if a.genErr != nil {
+		return nil, a.genErr
 	}
 	if len(argv) == 0 {
 		return nil, errors.New("no argv")
@@ -647,5 +651,32 @@ func TestReview_ScenarioPassKeepsPass(t *testing.T) {
 	}
 	if !strings.Contains(gh.PRComments[0].Body, "SCENARIOS: 1/1") {
 		t.Errorf("comment lacks the scenario score:\n%s", gh.PRComments[0].Body)
+	}
+}
+
+// issue #278: a scenario harness failure must be recorded as an error score,
+// never as 0/0 (which finish would treat as "no scenario").
+func TestReview_ScenarioHarnessErrorWritesErrorScore(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := scenario.Save(scenario.Path(stateDir, "o/r", 246), "## Steps\n1. works\n"); err != nil {
+		t.Fatal(err)
+	}
+	gh := reviewGh()
+	r := newRunner(t, gh, &scenarioAgent{
+		review: []byte("VERDICT: pass"),
+		genErr: errors.New("agent failed"),
+	})
+	r.Opts.StateDir = stateDir
+
+	res, err := r.Review(context.Background())
+	if err == nil {
+		t.Fatal("Review succeeded despite the scenario harness failure")
+	}
+	if !res.ScenarioError {
+		t.Fatalf("Result = %+v, want ScenarioError", res)
+	}
+	if !strings.Contains(gh.PRComments[0].Body, "SCENARIOS: error") ||
+		!strings.Contains(gh.PRComments[0].Body, "scenarios=error") {
+		t.Errorf("comment lacks the error marker:\n%s", gh.PRComments[0].Body)
 	}
 }

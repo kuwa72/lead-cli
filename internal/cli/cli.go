@@ -666,34 +666,21 @@ returns to the dispatch queue.`,
 	finishCmd := &cobra.Command{
 		Use:   "finish <issue-number>",
 		Short: "Wait CI, squash-merge the PR, and close the issue",
-		Long: `Re-verify the recorded PR, wait for CI, then merge (squash) and close
-under the merge policy (RFC §7) and the issue's risk class (issue #245).
+		Long: `Re-verify the recorded PR, wait for CI, then merge (squash) and close.
 
-Risk classes (issue labels):
-  risk:a      merge after CI passes (protected-file guardrail still applies)
-  risk:b      stop and wait for human approval (the default)
-  (no label)  same as risk:b
+The merge is computed, not approved (issue #278): CI must pass (skipped or
+neutral checks do not count), every generated scenario recorded by
+` + "`lead review`" + ` must pass, and the PR must not touch protected convention
+files. ` + "`review:pass`" + ` is advisory and is not required.
 
-A risk:b issue is labelled ` + "`awaiting-human`" + `, recorded as awaiting_review,
-and left open; this is not a failure. A human merges it with --approve:
-  lead finish <n> --merge --approve
+Pauses — confirm/never policy, auto-merge-disabled repos, protected files,
+and failing or stale scenarios — exit 0 with the next step and leave the
+reason on the issue. ` + "`--override-guardrail`" + ` is the only human-only flag:
+it is the one way past the protected-file guardrail.
 
-An automatic (risk:a) merge also requires the independent reviewer's
-` + "`review:pass`" + ` verdict (issue #246), recorded as a PR comment bound to the
-head SHA the reviewer examined (issue #249). A pass for an older commit does
-not count: finish pauses and points at ` + "`lead review <pr>`" + `. The merge is
-pinned with ` + "`--match-head-commit`" + ` so a push after the check cannot slip in
-(issue #250).
-` + "`--no-review --approve`" + ` is the human-only override; --no-review alone is
-rejected.
-
-Pauses — confirm policy, never policy, auto-merge-disabled repos, missing or
-stale review, and awaiting human approval — exit 0 with the next step, not an
-error.
-
-After the merge, finish runs the post-merge smoke on main and reverts the
-merge (filing an incident issue) when it fails (issue #275). That failure
-exits non-zero and leaves the issue open.`,
+After the merge, finish runs the post-merge smoke on main and, when it fails,
+opens a revert PR (auto-merge enabled) and files an incident issue (issue
+#275). That failure exits non-zero and leaves the issue open.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFinish(cmd, deps, args[0])
@@ -702,8 +689,6 @@ exits non-zero and leaves the issue open.`,
 	finishCmd.Flags().Int("pr", 0, "use this PR number instead of the recorded one")
 	finishCmd.Flags().String("part", "", "work unit within a multi-PR issue")
 	finishCmd.Flags().Bool("merge", false, "merge after CI passes (overrides confirm pause)")
-	finishCmd.Flags().Bool("approve", false, "human-only: approve merging a risk:b issue (default risk class)")
-	finishCmd.Flags().Bool("no-review", false, "human-only: with --approve, merge without the independent review")
 	finishCmd.Flags().Bool("override-guardrail", false, "merge even though the PR touches protected convention files (human confirmation; never pass this from an unattended agent)")
 	finishCmd.Flags().Bool("close", false, "close the issue")
 	finishCmd.Flags().Bool("no-close", false, "never close the issue")
@@ -746,8 +731,9 @@ output is posted to the PR and its final line must be one of:
 The PR gets review:pass or review:needs-work (created first when the
 repository does not have them yet). Exit status is 0 for pass and
 1 for needs-work (or a missing/unrecognized verdict, which never passes).
-The comment also records the reviewed head SHA; ` + "`lead finish`" + ` merges an
-automatic (risk:a) PR only while its head still matches that SHA (issue #249).
+The comment also records the reviewed head SHA and ` + "`SCENARIOS: n/m`" + `;
+` + "`lead finish`" + ` uses the scenario score when one is configured (the diff
+verdict itself is advisory, issue #278).
 
 The reviewer runs in the PR head's worktree: a checkout already at that
 commit is reused, otherwise a temporary worktree is created under
@@ -2125,8 +2111,6 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 	pr, _ := flags.GetInt("pr")
 	part, _ := flags.GetString("part")
 	merge, _ := flags.GetBool("merge")
-	approve, _ := flags.GetBool("approve")
-	noReview, _ := flags.GetBool("no-review")
 	overrideGuardrail, _ := flags.GetBool("override-guardrail")
 	closeIssue, _ := flags.GetBool("close")
 	noClose, _ := flags.GetBool("no-close")
@@ -2149,9 +2133,7 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 	res, err := finish.Run(cmd.Context(), deps.gh(), &state.Store{Path: deps.stateFile()}, number, finish.Options{
 		PR: pr, Part: part, Merge: merge, Close: closeIssue, NoClose: noClose,
 		Comment: comment, Outcome: outcome, MergePolicy: policy,
-		Approve:           approve,
 		LedgerPath:        ledger.Path(deps.stateFile()),
-		NoReview:          noReview,
 		OverrideGuardrail: overrideGuardrail,
 		Git:               deps.gitRunner(), WorkDir: workDir,
 		Timeout: timeout, PollInterval: interval,

@@ -67,7 +67,6 @@ var RequiredIssueLabels = []ports.LabelDefinition{
 	{Name: "needs-review", Color: "FBCA04", Description: "Waiting for review"},
 	{Name: "ready", Color: "0E8A16", Description: "Ready to be worked on"},
 	{Name: "blocked", Color: "D93F0B", Description: "Blocked by another issue"},
-	{Name: state.AwaitingHumanLabel, Color: "5319E7", Description: "CI passed; waiting for human approval to merge"},
 	{Name: state.ReviewPassLabel, Color: "0E8A16", Description: "Independent review passed"},
 	{Name: state.ReviewNeedsWorkLabel, Color: "D93F0B", Description: "Independent review needs work"},
 }

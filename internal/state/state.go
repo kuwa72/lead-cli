@@ -16,14 +16,8 @@ import (
 // GitHub's open/closed; they describe local work progress.
 type Status string
 
-// AwaitingHumanLabel marks a PR whose CI passed but whose risk class needs
-// a human's approval before merge (issue #245). It is not a state label:
-// the issue keeps `ready` so the inbox still lists it.
-const AwaitingHumanLabel = "awaiting-human"
-
 // Independent review verdict labels (issue #246). They are applied to the
-// PR (gh issue edit works on PRs); `lead finish` requires review:pass for
-// an automatic (risk:a) merge.
+// PR (gh issue edit works on PRs) and are advisory since #278.
 const (
 	ReviewPassLabel      = "review:pass"
 	ReviewNeedsWorkLabel = "review:needs-work"

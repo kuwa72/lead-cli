@@ -106,62 +106,6 @@ func TestFinish_NoRecordViaCLI(t *testing.T) {
 	}
 }
 
-// issue #245: --merge alone does not merge an unlabelled (risk:b) issue;
-// the CLI reports awaiting-human and exits 0.
-func TestFinish_DefaultRiskBWaitsViaCLI(t *testing.T) {
-	stateFile := filepath.Join(t.TempDir(), "wf.json")
-	fake := seedFinishRecord(t, stateFile, nil)
-	fake.Issues[36] = ports.Issue{Number: 36, Title: "x"}
-
-	out, err := executeWith(t, Deps{Gh: fake, StateFile: stateFile}, "finish", "36", "--merge")
-	if err != nil {
-		t.Fatalf("awaiting-human pause = %v, want exit 0\n%s", err, out)
-	}
-	if len(fake.MergeCalls) != 0 {
-		t.Errorf("merges = %v, want none without --approve", fake.MergeCalls)
-	}
-	if !strings.Contains(out, "awaiting") || !strings.Contains(out, "--approve") {
-		t.Errorf("output = %q, want awaiting-human + --approve guidance", out)
-	}
-	if len(fake.AddedLabels) != 1 || fake.AddedLabels[0].Label != state.AwaitingHumanLabel {
-		t.Errorf("added labels = %+v, want awaiting-human", fake.AddedLabels)
-	}
-}
-
-// issue #245: --approve is the human confirmation that merges risk:b.
-func TestFinish_ApproveMergesViaCLI(t *testing.T) {
-	stateFile := filepath.Join(t.TempDir(), "wf.json")
-	fake := seedFinishRecord(t, stateFile, nil)
-	fake.Issues[36] = ports.Issue{Number: 36, Title: "x", Labels: []string{"risk:b", state.AwaitingHumanLabel}}
-
-	out, err := executeWith(t, Deps{Gh: fake, StateFile: stateFile}, "finish", "36", "--merge", "--approve", "--close")
-	if err != nil {
-		t.Fatalf("approved finish: %v\n%s", err, out)
-	}
-	if len(fake.MergeCalls) != 1 {
-		t.Errorf("merges = %v, want one", fake.MergeCalls)
-	}
-	if len(fake.RemovedLabels) != 1 || fake.RemovedLabels[0].Label != state.AwaitingHumanLabel {
-		t.Errorf("removed labels = %+v, want awaiting-human removed", fake.RemovedLabels)
-	}
-}
-
-// issue #249: --no-review alone is rejected, so an unattended agent cannot
-// lift the review gate without the human-only --approve.
-func TestFinish_NoReviewRequiresApproveViaCLI(t *testing.T) {
-	stateFile := filepath.Join(t.TempDir(), "wf.json")
-	fake := seedFinishRecord(t, stateFile, nil)
-	fake.PRThread = nil
-
-	out, err := executeWith(t, Deps{Gh: fake, StateFile: stateFile}, "finish", "36", "--merge", "--no-review")
-	if err == nil || !strings.Contains(err.Error(), "--approve") {
-		t.Fatalf("finish --no-review = %v, want rejection mentioning --approve\n%s", err, out)
-	}
-	if len(fake.MergeCalls) != 0 {
-		t.Errorf("merges = %v, want none", fake.MergeCalls)
-	}
-}
-
 // issue #230: the headless path merges with --merge, so the guardrail must
 // only be lifted by the explicit human flag --override-guardrail.
 func TestFinish_GuardrailNeedsExplicitOverrideViaCLI(t *testing.T) {

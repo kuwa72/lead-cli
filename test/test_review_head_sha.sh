@@ -135,7 +135,7 @@ out="$(cd "$repo" && "$tmp/lead" review 7 --agent claude 2>&1)" \
 grep -qF -- "<!-- lead-review sha=$HEAD_A verdict=pass scenarios=0/0 -->" "$COMMENT_FILE" \
   || fail "review comment missing the HEAD_A marker: $(cat "$COMMENT_FILE")"
 
-# --- 2. レビュー後にコミットが push される（head が HEAD_B に進む） ---
+# --- 2. review は助言: 0/0 の古い pass はマージを止めない ---
 echo y >> "$repo/f.txt"
 git -C "$repo" commit -qam head-b
 HEAD_B="$(git -C "$repo" rev-parse HEAD)"
@@ -144,24 +144,10 @@ printf '%s' "$HEAD_B" > "$HEAD_SHA_FILE"
 : > "$GH_LOG"
 out="$(cd "$repo" && "$tmp/lead" finish 36 --pr 7 --merge --close --timeout 60s --poll-interval 1s)" \
   || fail "stale-review finish exited non-zero: $out"
-[ -f "$MERGED_MARK" ] && fail "stale-review: PR merged with a pass for an older head"
-grep -q '^GH pr merge ' "$GH_LOG" && fail "stale-review: gh pr merge was called: $(cat "$GH_LOG")"
-[ -f "$CLOSED_MARK" ] && fail "stale-review: issue was closed without merging"
-case "$out" in *"re-review"*) ;; *) fail "stale-review: message missing re-review: $out";; esac
-case "$out" in *"lead review 7"*) ;; *) fail "stale-review: message missing the re-review step: $out";; esac
-
-# --- 3. HEAD_B で再レビュー → 一致する pass でマージ ---
-out="$(cd "$repo" && "$tmp/lead" review 7 --agent claude 2>&1)" \
-  || fail "review at HEAD_B failed: $out"
-grep -qF -- "<!-- lead-review sha=$HEAD_B verdict=pass scenarios=0/0 -->" "$COMMENT_FILE" \
-  || fail "re-review comment missing the HEAD_B marker: $(cat "$COMMENT_FILE")"
-: > "$GH_LOG"
-out="$(cd "$repo" && "$tmp/lead" finish 36 --pr 7 --merge --close --timeout 60s --poll-interval 1s)" \
-  || fail "matching-review finish failed: $out"
-[ -f "$MERGED_MARK" ] || fail "matching-review: PR was not merged"
-[ -f "$CLOSED_MARK" ] || fail "matching-review: issue was not closed"
+[ -f "$MERGED_MARK" ] || fail "stale-review: a 0/0 advisory marker blocked the merge"
+[ -f "$CLOSED_MARK" ] || fail "stale-review: issue was not closed"
 grep -qx "GH pr merge 7 --squash --delete-branch --match-head-commit $HEAD_B" "$GH_LOG" \
-  || fail "matching-review: squash merge not invoked: $(cat "$GH_LOG")"
+  || fail "stale-review: squash merge not invoked: $(cat "$GH_LOG")"
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"
 

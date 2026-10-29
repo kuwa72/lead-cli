@@ -119,11 +119,10 @@ type Launcher interface {
 type Outcome string
 
 const (
-	OutcomeCompleted     Outcome = ledger.OutcomeCompleted     // issue closed on GitHub; cleaned up
-	OutcomeRetry         Outcome = ledger.OutcomeRetry         // failed; stays ready for the next pass
-	OutcomeBlocked       Outcome = ledger.OutcomeBlocked       // failed MaxAttempts times; labelled blocked
-	OutcomeAwaitingHuman Outcome = ledger.OutcomeAwaitingHuman // CI passed; waiting for human approval (issue #245)
-	OutcomeError         Outcome = ledger.OutcomeError         // dispatch itself failed before/around launch
+	OutcomeCompleted Outcome = ledger.OutcomeCompleted // issue closed on GitHub; cleaned up
+	OutcomeRetry     Outcome = ledger.OutcomeRetry     // failed; stays ready for the next pass
+	OutcomeBlocked   Outcome = ledger.OutcomeBlocked   // failed MaxAttempts times; labelled blocked
+	OutcomeError     Outcome = ledger.OutcomeError     // dispatch itself failed before/around launch
 )
 
 // Result describes one issue handled in a pass.
@@ -258,9 +257,6 @@ func (d *Dispatcher) Once(ctx context.Context) (Report, error) {
 		}
 		if ok && w.Status == state.StatusBlocked {
 			continue // local blocked state wins until a human re-readies it
-		}
-		if ok && w.Status == state.StatusAwaitingReview {
-			continue // awaiting-human stays ready on GitHub but is not redispatchable
 		}
 		picks = append(picks, s.Number)
 	}
@@ -777,35 +773,6 @@ func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, rep
 		return res
 	}
 
-	// Awaiting human (issue #245): finish stopped cleanly because the issue
-	// is risk:b and CI passed. That is not a failed attempt: clean the
-	// worktree, keep the record for the inbox, and do not label it blocked.
-	if viewErr == nil && slices.Contains(after.Labels, state.AwaitingHumanLabel) {
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		if worktree != "" {
-			if err := d.Git.WorktreeRemove(repoRoot, worktree, true); err != nil {
-				res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: awaiting human, but worktree cleanup failed: %w", number, err)
-				return res
-			}
-		}
-		w, ok, err := d.Store.Get(number, "")
-		if err != nil {
-			res.Outcome, res.Err = OutcomeError, err
-			return res
-		}
-		if ok {
-			w.PID = 0
-			w.Status = state.StatusAwaitingReview
-			if err := d.Store.Upsert(w); err != nil {
-				res.Outcome, res.Err = OutcomeError, err
-				return res
-			}
-		}
-		res.Outcome = OutcomeAwaitingHuman
-		return res
-	}
-
 	cause := "agent exited without closing the issue"
 	switch {
 	case waitErr != nil:
@@ -957,9 +924,6 @@ func (d *Dispatcher) print(rep Report) {
 	}
 	for _, r := range rep.Results {
 		line := fmt.Sprintf("#%d %s", r.Issue, r.Outcome)
-		if r.Outcome == OutcomeAwaitingHuman {
-			line += " (human approval pending)"
-		}
 		if r.Attempts > 0 {
 			line += fmt.Sprintf(" (attempt %d)", r.Attempts)
 		}
@@ -1001,8 +965,8 @@ func BuildPrompt(iss ports.Issue) string {
 4. git push -u origin <現在のブランチ> し、gh pr create --fill --base main で PR を作る。PR 本文に Issue の受入条件をチェックリストとして転記し、Closes #%d を含める。
 5. bin/ci-wait <PR番号>（なければ gh pr checks）で CI が全て pass するまで待つ。
 6. lead review <PR番号> を実行する。VERDICT: pass なら次へ進む。VERDICT: needs-work なら所見に従って修正し、最大2周まで再レビューする（3周目はしない）。2周で通らなければ、所見を gh issue comment %d --body に貼って終了する。
-7. lead finish %d --merge でマージと Issue クローズまで行う。gh pr merge を直接実行しない（規約ファイル保護とリスク分級のガードレールを必ず通すため）。レビューを省略するフラグは人間専用であり、付けてはならない。finish が規約ファイル保護・レビュー未実施・承認待ち（risk:b / ラベルなし）で停止したら、--override-guardrail や --approve を付けずにそのまま終了する。
-8. gh issue view %d --json state で closed になったことを確認する。closed でない場合は自分で close せず、原因と試したことを gh issue comment %d --body に書いて終了する（承認待ちで停止した場合は、その旨をコメントして終了する）。
+7. lead finish %d --merge でマージと Issue クローズまで行う。gh pr merge を直接実行しない（規約ファイル保護のガードレールを必ず通すため）。finish が規約ファイル保護・シナリオ不合格で停止したら、--override-guardrail を付けずに理由を Issue にコメントして終了する。
+8. gh issue view %d --json state で closed になったことを確認する。closed でない場合は自分で close せず、原因と試したことを gh issue comment %d --body に書いて終了する。
 
 AGENTS.md、.claude/、.devin/ などプロジェクト規約ファイルは、この Issue で明示されていない限り編集しない。
 `, iss.Number, iss.Number, iss.Number, iss.Number, iss.Number)

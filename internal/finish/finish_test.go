@@ -3,6 +3,7 @@ package finish
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/kuwa72/lead-cli/internal/ledger"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/scenario"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
 )
@@ -55,21 +57,13 @@ func baseFake() *testutil.FakeGhClient {
 		Checks:           []ports.PRCheck{{Name: "test", Bucket: "pass", State: "SUCCESS"}},
 		PR:               ports.PRInfo{Number: 7, State: "OPEN", Mergeable: "MERGEABLE"},
 		AutoMergeAllowed: true,
-		// risk:a keeps the pre-#245 merge fixtures merging; the risk-gate
-		// tests below opt into other label sets explicitly. issue #246:
-		// automatic merge also needs the independent review's pass, and
-		// issue #249 binds that pass to the reviewed head SHA.
+		// review markers carry the scenario score; the labels are informational
+		// since #278.
 		Issues:    map[int]ports.Issue{36: {Number: 36, Title: "x", Labels: []string{"risk:a"}}},
 		PRLabels:  []string{state.ReviewPassLabel},
 		PRHeadSHA: testSHA,
 		PRThread:  []ports.Comment{{Body: "<!-- lead-review sha=" + testSHA + " verdict=pass -->"}},
 	}
-}
-
-func riskFake(labels ...string) *testutil.FakeGhClient {
-	f := baseFake()
-	f.Issues[36] = ports.Issue{Number: 36, Title: "x", Labels: labels}
-	return f
 }
 
 func noSleep(d time.Duration) {}
@@ -361,7 +355,7 @@ func TestRun_ResearchWithoutPRNeedsOutcome(t *testing.T) {
 
 // Guardrail (RFC inbox §7, issue #93 Part B): a PR that touches protected
 // convention files must not auto-merge even under policy auto.
-func TestRun_GuardrailLowersAutoToConfirm(t *testing.T) {
+func TestRun_GuardrailStopsAutoMerge(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	seedWithPR(t, path, state.Workflow{})
 	fake := baseFake()
@@ -382,18 +376,12 @@ func TestRun_GuardrailLowersAutoToConfirm(t *testing.T) {
 	if !reflect.DeepEqual(res.Guarded, []string{"AGENTS.md", ".github/workflows/ci.yml"}) {
 		t.Errorf("Guarded = %q", res.Guarded)
 	}
-	for _, want := range []string{"AGENTS.md", ".github/workflows/ci.yml", "confirm", "lead finish 36 --merge"} {
+	for _, want := range []string{"AGENTS.md", ".github/workflows/ci.yml", "protected files", "--override-guardrail"} {
 		if !strings.Contains(res.Message, want) {
 			t.Errorf("message %q lacks %q", res.Message, want)
 		}
 	}
 	got := loadOne(t, path)
-	if got.MergePolicy != "confirm" {
-		t.Errorf("recorded merge_policy = %q, want confirm", got.MergePolicy)
-	}
-	if !strings.Contains(got.PolicyReason, "AGENTS.md") || !strings.Contains(got.PolicyReason, "#7") {
-		t.Errorf("recorded policy_reason = %q, want the PR and files named", got.PolicyReason)
-	}
 	if got.Status != state.StatusInProgress {
 		t.Errorf("status = %q, want still in_progress", got.Status)
 	}
@@ -420,9 +408,6 @@ func TestRun_GuardrailMergeFlagDoesNotOverride(t *testing.T) {
 	if !strings.Contains(res.Message, "--override-guardrail") {
 		t.Errorf("message %q lacks the human override hint", res.Message)
 	}
-	if got := loadOne(t, path); !strings.Contains(got.PolicyReason, ".claude/settings.json") {
-		t.Errorf("policy_reason = %q, want the guardrail reason kept for audit", got.PolicyReason)
-	}
 }
 
 func TestRun_GuardrailOverrideMerges(t *testing.T) {
@@ -439,9 +424,6 @@ func TestRun_GuardrailOverrideMerges(t *testing.T) {
 	}
 	if !res.Merged || len(fake.MergeCalls) != 1 {
 		t.Errorf("Result = %+v merges=%v; explicit --override-guardrail is the human confirmation", res, fake.MergeCalls)
-	}
-	if got := loadOne(t, path); !strings.Contains(got.PolicyReason, ".claude/settings.json") {
-		t.Errorf("policy_reason = %q, want the guardrail reason kept for audit", got.PolicyReason)
 	}
 }
 
@@ -521,66 +503,16 @@ func TestRun_RepoURLIsReducedToSlugForAPI(t *testing.T) {
 	}
 }
 
-// issue #245: an unlabelled issue is risk:b — CI passes, but the merge
-// waits for a human. This is not a failure: exit cleanly, label the issue,
-// record awaiting_review, and leave it open.
-func TestRun_UnlabelledDefaultsToAwaitingHuman(t *testing.T) {
+// CI alone is enough: review:pass is advisory since #278.
+func TestRun_CIOnlyMerges(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake() // no labels
+	fake := baseFake()
 
 	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
 		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
 	})
-	if err != nil {
-		t.Fatalf("awaiting-human pause = %v, want clean pause", err)
-	}
-	if !res.ChecksPassed || res.Merged || res.Closed || !res.AwaitingHuman {
-		t.Errorf("Result = %+v, want checks passed + awaiting human, no merge/close", res)
-	}
-	if len(fake.MergeCalls) != 0 || len(fake.Closed) != 0 {
-		t.Errorf("merges = %v closed = %v; risk:b must not merge or close", fake.MergeCalls, fake.Closed)
-	}
-	if !reflect.DeepEqual(fake.AddedLabels, []testutil.LabelCall{{Number: 36, Label: state.AwaitingHumanLabel}}) {
-		t.Errorf("added labels = %+v, want awaiting-human on #36", fake.AddedLabels)
-	}
-	if !strings.Contains(res.Message, "awaiting") || !strings.Contains(res.Message, "--approve") {
-		t.Errorf("message = %q, want awaiting-human + --approve guidance", res.Message)
-	}
-	got := loadOne(t, path)
-	if got.Status != state.StatusAwaitingReview {
-		t.Errorf("recorded status = %q, want awaiting_review", got.Status)
-	}
-}
-
-// issue #245: risk:b behaves like unlabelled — no merge without --approve.
-func TestRun_RiskBWaitsForHuman(t *testing.T) {
-	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:b")
-
-	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
-		Merge: true, Timeout: time.Minute, Sleep: noSleep,
-	})
-	if err != nil || res.Merged || !res.AwaitingHuman {
-		t.Fatalf("Result = %+v, %v; want awaiting human without merge", res, err)
-	}
-	if len(fake.MergeCalls) != 0 {
-		t.Errorf("merges = %v, want none for risk:b", fake.MergeCalls)
-	}
-}
-
-// issue #245: risk:a merges without human approval (the protected-file
-// guardrail still applies separately).
-func TestRun_RiskAMerges(t *testing.T) {
-	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
-
-	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
-		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
-	})
-	if err != nil || !res.Merged || res.AwaitingHuman {
+	if err != nil || !res.Merged {
 		t.Fatalf("Result = %+v, %v; want risk:a merge", res, err)
 	}
 	if !reflect.DeepEqual(fake.MergeCalls, []int{7}) || !reflect.DeepEqual(fake.Closed, []int{36}) {
@@ -588,168 +520,14 @@ func TestRun_RiskAMerges(t *testing.T) {
 	}
 }
 
-// issue #246/#249: automatic merge (risk:a) also requires the independent
-// review's pass on the current head. Without any verdict marker finish
-// pauses (not an error) and merges nothing.
-func TestRun_RiskANeedsReviewPass(t *testing.T) {
-	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
-	fake.PRLabels = nil
-	fake.PRThread = nil
-
-	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
-		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
-	})
-	if err != nil {
-		t.Fatalf("review pause = %v, want a clean pause", err)
-	}
-	if res.Merged || len(fake.MergeCalls) != 0 {
-		t.Fatalf("Result = %+v merges = %v; want no merge without a review pass", res, fake.MergeCalls)
-	}
-	for _, want := range []string{"no review pass", "lead review"} {
-		if !strings.Contains(res.Message, want) {
-			t.Errorf("pause message missing %q: %s", want, res.Message)
-		}
-	}
-}
-
-// issue #250: a pass marker posted by another gh user is not accepted when
-// the current login is known.
-func TestRun_ForeignReviewMarkerDoesNotMerge(t *testing.T) {
-	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
-	fake.ApiUserLogin = "octocat"
-	fake.PRThread = []ports.Comment{
-		{Author: "mallory", Body: "<!-- lead-review sha=" + testSHA + " verdict=pass -->"},
-	}
-
-	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
-		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
-	})
-	if err != nil {
-		t.Fatalf("review pause = %v, want a clean pause", err)
-	}
-	if res.Merged || len(fake.MergeCalls) != 0 {
-		t.Fatalf("Result = %+v merges = %v; want no merge from another author's marker", res, fake.MergeCalls)
-	}
-	for _, want := range []string{"no review pass", "lead review"} {
-		if !strings.Contains(res.Message, want) {
-			t.Errorf("pause message missing %q: %s", want, res.Message)
-		}
-	}
-}
-
-// issue #249: a review:pass label alone is not enough — the pass must come
-// from a review comment. A stale label on a PR with no marker stops.
-func TestRun_ReviewPassLabelAloneDoesNotMerge(t *testing.T) {
-	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
-	fake.PRThread = nil
-
-	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
-		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
-	})
-	if err != nil {
-		t.Fatalf("review pause = %v, want a clean pause", err)
-	}
-	if res.Merged || len(fake.MergeCalls) != 0 {
-		t.Fatalf("Result = %+v merges = %v; want no merge from the label alone", res, fake.MergeCalls)
-	}
-}
-
-// issue #249: a pass for an older commit must not merge the new head.
-func TestRun_ReviewStaleHeadStops(t *testing.T) {
-	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
-	fake.PRHeadSHA = "fedcba9876543210fedcba9876543210fedcba98"
-
-	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
-		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
-	})
-	if err != nil {
-		t.Fatalf("stale review pause = %v, want a clean pause", err)
-	}
-	if res.Merged || len(fake.MergeCalls) != 0 {
-		t.Fatalf("Result = %+v merges = %v; want no merge when the review is stale", res, fake.MergeCalls)
-	}
-	for _, want := range []string{"re-review", "lead review 7"} {
-		if !strings.Contains(res.Message, want) {
-			t.Errorf("pause message missing %q: %s", want, res.Message)
-		}
-	}
-}
-
-// issue #249: the newest marker decides — a later needs-work wins over an
-// earlier pass on the same head.
-func TestRun_NewestNeedsWorkStops(t *testing.T) {
-	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
-	fake.PRThread = []ports.Comment{
-		{Body: "<!-- lead-review sha=" + testSHA + " verdict=pass -->"},
-		{Body: "<!-- lead-review sha=" + testSHA + " verdict=needs-work -->"},
-	}
-
-	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
-		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
-	})
-	if err != nil {
-		t.Fatalf("needs-work pause = %v, want a clean pause", err)
-	}
-	if res.Merged || len(fake.MergeCalls) != 0 {
-		t.Fatalf("Result = %+v merges = %v; want no merge after needs-work", res, fake.MergeCalls)
-	}
-}
-
-// --no-review is a human-only override; it requires --approve so an
-// unattended agent cannot lift the review gate alone (issue #249).
-func TestRun_NoReviewRequiresApprove(t *testing.T) {
-	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
-	fake.PRThread = nil
-
-	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
-		Merge: true, Close: true, NoReview: true, Timeout: time.Minute, Sleep: noSleep,
-	})
-	if err == nil || !strings.Contains(err.Error(), "--approve") {
-		t.Fatalf("err = %v, want --no-review without --approve rejected", err)
-	}
-	if len(fake.MergeCalls) != 0 {
-		t.Errorf("merged with --no-review alone")
-	}
-}
-
-// --no-review --approve is the human-only combination that keeps a risk:a
-// merge moving without the independent review.
-func TestRun_RiskANoReviewFlagMerges(t *testing.T) {
-	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
-	fake.PRLabels = nil
-	fake.PRThread = nil
-
-	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
-		Merge: true, Close: true, NoReview: true, Approve: true, Timeout: time.Minute, Sleep: noSleep,
-	})
-	if err != nil || !res.Merged {
-		t.Fatalf("Result = %+v, %v; want --no-review --approve to merge", res, err)
-	}
-	if !reflect.DeepEqual(fake.MergeCalls, []int{7}) {
-		t.Errorf("merges = %v, want PR 7", fake.MergeCalls)
-	}
-}
-
+// issue #246/#249/#250/#278: review markers still provide the scenario
+// score; a failed comment or head lookup fails closed.
 // A failed PR-comment lookup cannot prove a review pass, so finish must
 // stop (fail closed).
 func TestRun_ReviewCommentLookupFailureStops(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
+	fake := baseFake()
 	fake.PRThreadErr = errors.New("comments boom")
 
 	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
@@ -767,7 +545,7 @@ func TestRun_ReviewCommentLookupFailureStops(t *testing.T) {
 func TestRun_HeadSHALookupFailureStops(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	seedWithPR(t, path, state.Workflow{})
-	fake := riskFake("risk:a")
+	fake := baseFake()
 	fake.PRHeadSHAErr = errors.New("head boom")
 
 	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
@@ -778,48 +556,6 @@ func TestRun_HeadSHALookupFailureStops(t *testing.T) {
 	}
 	if len(fake.MergeCalls) != 0 {
 		t.Errorf("merged despite an unknown head SHA")
-	}
-}
-
-// issue #245: a human approval merges a risk:b PR and clears awaiting-human.
-func TestRun_ApproveMergesAndClearsAwaitingLabel(t *testing.T) {
-	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{Status: state.StatusAwaitingReview})
-	fake := riskFake("risk:b", state.AwaitingHumanLabel)
-
-	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
-		Merge: true, Approve: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
-	})
-	if err != nil || !res.Merged || res.AwaitingHuman {
-		t.Fatalf("Result = %+v, %v; want approved merge", res, err)
-	}
-	if !reflect.DeepEqual(fake.MergeCalls, []int{7}) {
-		t.Errorf("merges = %v, want PR 7", fake.MergeCalls)
-	}
-	if !reflect.DeepEqual(fake.RemovedLabels, []testutil.LabelCall{{Number: 36, Label: state.AwaitingHumanLabel}}) {
-		t.Errorf("removed labels = %+v, want awaiting-human removed", fake.RemovedLabels)
-	}
-	if got := loadOne(t, path); got.Status != state.StatusClosed {
-		t.Errorf("recorded status = %q, want closed", got.Status)
-	}
-}
-
-// issue #245: labels come from `gh issue view`; a failure there must stop
-// before merging (fail closed on unknown risk).
-func TestRun_LabelLookupFailureStops(t *testing.T) {
-	path := t.TempDir() + "/wf.json"
-	seedWithPR(t, path, state.Workflow{})
-	fake := baseFake()
-	fake.ViewErr = errors.New("gh boom")
-
-	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
-		Merge: true, Timeout: time.Minute, Sleep: noSleep,
-	})
-	if err == nil || !strings.Contains(err.Error(), "gh boom") {
-		t.Fatalf("err = %v, want label lookup failure surfaced", err)
-	}
-	if len(fake.MergeCalls) != 0 {
-		t.Errorf("merged despite unknown risk class")
 	}
 }
 
@@ -876,7 +612,115 @@ func TestMergeOutcome_BlockedIsNotCompleted(t *testing.T) {
 	if got := mergeOutcome(Result{}, errors.New("boom"), Options{}); got != ledger.OutcomeError {
 		t.Fatalf("outcome = %q, want error", got)
 	}
-	if got := mergeOutcome(Result{AwaitingHuman: true}, nil, Options{}); got != ledger.OutcomeAwaitingHuman {
-		t.Fatalf("outcome = %q, want awaiting", got)
+}
+
+// issue #278: a scenario score recorded by `lead review` gates the merge
+// even when the diff review passed.
+func TestRun_ScenarioFailureStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.PRThread = []ports.Comment{{Body: "<!-- lead-review sha=" + testSHA + " verdict=pass scenarios=1/2 -->"}}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil {
+		t.Fatalf("scenario pause = %v, want a clean pause", err)
+	}
+	if res.Merged || len(fake.MergeCalls) != 0 {
+		t.Fatalf("Result = %+v merges=%v; want no merge at 1/2", res, fake.MergeCalls)
+	}
+	if !strings.Contains(res.Message, "1/2") {
+		t.Errorf("message = %q, want the scenario score", res.Message)
+	}
+	if len(fake.Comments) != 1 {
+		t.Errorf("comments = %+v, want the pause reason on the issue", fake.Comments)
+	}
+}
+
+func TestRun_ScenarioStaleHeadStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.PRThread = []ports.Comment{{Body: "<!-- lead-review sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa verdict=pass scenarios=1/1 -->"}}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || res.Merged {
+		t.Fatalf("Result = %+v, %v; want a stale-scenario pause", res, err)
+	}
+	if len(fake.MergeCalls) != 0 {
+		t.Errorf("merged with a scenario recorded for another head")
+	}
+}
+
+func TestRun_ScenarioPassMerges(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.PRThread = []ports.Comment{{Body: "<!-- lead-review sha=" + testSHA + " verdict=needs-work scenarios=2/2 -->"}}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || !res.Merged {
+		t.Fatalf("Result = %+v, %v; want a merge: the diff review is advisory", res, err)
+	}
+}
+
+// A scenario harness failure is not "no scenario": finish must fail closed.
+func TestRun_ScenarioHarnessErrorStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.PRThread = []ports.Comment{{Body: "<!-- lead-review sha=" + testSHA + " verdict=needs-work scenarios=error -->"}}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || res.Merged {
+		t.Fatalf("Result = %+v, %v; want a harness-error pause", res, err)
+	}
+	if !strings.Contains(res.Message, "harness") {
+		t.Errorf("message = %q, want the harness failure", res.Message)
+	}
+}
+
+// A scenario file without a review result must not merge (forgotten review).
+func TestRun_ScenarioFileWithoutReviewStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	scenarioPath := scenario.Path(filepath.Dir(path), "o/r", 36)
+	if err := scenario.Save(scenarioPath, "## Steps\n1. `lead x` → exit 0\n"); err != nil {
+		t.Fatal(err)
+	}
+	fake := baseFake()
+	fake.PRThread = []ports.Comment{{Body: "<!-- lead-review sha=" + testSHA + " verdict=pass scenarios=0/0 -->"}}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || res.Merged {
+		t.Fatalf("Result = %+v, %v; want a missing-review pause", res, err)
+	}
+	if !strings.Contains(res.Message, "lead review") {
+		t.Errorf("message = %q, want the review step", res.Message)
+	}
+}
+
+// A 0/0 marker is advisory: a later head does not block the merge.
+func TestRun_ZeroScenarioIgnoresHead(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.PRThread = []ports.Comment{{Body: "<!-- lead-review sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa verdict=pass scenarios=0/0 -->"}}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || !res.Merged {
+		t.Fatalf("Result = %+v, %v; want a merge with a 0/0 marker", res, err)
 	}
 }
