@@ -8,7 +8,7 @@
 4. `git push -u origin $(git branch --show-current)` でブランチを push する。
 5. `gh pr create --fill` で PR を作成する。
 6. `bin/ci-wait <pr-number>`（または `gh pr checks`）で CI が pass するまで待つ。
-7. CI 通過後に `lead review <pr-number>` でシナリオ生成テストを実行する。`SCENARIOS: n/m` が m/m になるまで所見に従って直す。diff レビューは助言で、合否はシナリオが決める。
+7. CI 通過後に `lead review <pr-number>` でシナリオ生成テストを実行する。`SCENARIOS: n/m` が m/m になるまで所見に従って直す（2周上限は無い）。diff レビューは助言で、合否はシナリオが決める。
 8. `lead finish <issue-number> --merge` でマージと Issue クローズまで行う（`gh pr merge` を直接実行しない）。CI pass・生成シナリオ全 pass・規約ファイル非該当のときだけマージされる。承認ステップは無い。
 9. 関連 Issue が closed になったことを確認する。
 

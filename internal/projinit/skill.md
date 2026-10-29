@@ -58,10 +58,9 @@ If the issue number is omitted, ask the user for one or run `lead run` to open t
    lead review <pr-number>
    ```
 
-   `VERDICT: pass` moves on. `VERDICT: needs-work` means fix the findings and
-   re-review; do at most two review rounds (never a third). If the second round
-   still needs work, post the findings to the issue with
-   `gh issue comment <issue-number> --body` and stop.
+   Fix until `SCENARIOS: n/m` is m/m. There is no two-round cap; the diff
+   verdict is advisory. If the scenario cannot be made to pass, post the
+   findings to the issue with `gh issue comment <issue-number> --body` and stop.
 
 7. Merge and close through `lead finish` (it enforces the computed gate):
 
