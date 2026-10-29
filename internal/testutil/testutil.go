@@ -130,6 +130,10 @@ type FakeGhClient struct {
 	PRHeadSHA      string
 	PRHeadSHAErr   error
 	PRHeadSHACalls []int
+	// PRMergeCommit feeds PrMergeCommit (post-merge smoke, issue #275);
+	// PRMergeCommitErr fails every call.
+	PRMergeCommit    string
+	PRMergeCommitErr error
 	// PRThread feeds PrComments (the PR's existing comments); PRThreadErr
 	// fails every call.
 	PRThread      []ports.Comment
@@ -168,9 +172,15 @@ type FakeGhClient struct {
 	// MergeHeads parallels MergeCalls with each --match-head-commit value
 	// (issue #250).
 	MergeHeads []string
-	Closed     []int
-	Browsed    []int
-	Comments   []IssueComment
+	// PRCreates records PrCreate calls; NextPR is the returned number.
+	PRCreates      []PrCreateCall
+	PRCreateErr    error
+	NextPR         int
+	AutoMergeCalls []int
+	PRAutoMergeErr error
+	Closed         []int
+	Browsed        []int
+	Comments       []IssueComment
 
 	// Labeled feeds ListByLabel: label → summaries.
 	Labeled        map[string][]ports.IssueSummary
@@ -242,6 +252,14 @@ type CreateCall struct {
 	Title  string
 	Body   string
 	Labels []string
+}
+
+// PrCreateCall records one PrCreate invocation.
+type PrCreateCall struct {
+	Head  string
+	Base  string
+	Title string
+	Body  string
 }
 
 // EditCall records one IssueEdit invocation.
@@ -491,6 +509,14 @@ func (f *FakeGhClient) PrHeadSHA(ctx context.Context, pr int) (string, error) {
 	return f.PRHeadSHA, nil
 }
 
+// PrMergeCommit returns PRMergeCommit (or PRMergeCommitErr).
+func (f *FakeGhClient) PrMergeCommit(ctx context.Context, pr int) (string, error) {
+	if f.PRMergeCommitErr != nil {
+		return "", f.PRMergeCommitErr
+	}
+	return f.PRMergeCommit, nil
+}
+
 // PrComments returns PRThread (or PRThreadErr) and records the call.
 func (f *FakeGhClient) PrComments(ctx context.Context, pr int) ([]ports.Comment, error) {
 	f.PRThreadCalls = append(f.PRThreadCalls, pr)
@@ -521,6 +547,24 @@ func (f *FakeGhClient) PrMerge(ctx context.Context, pr int, headSHA string) erro
 	f.MergeCalls = append(f.MergeCalls, pr)
 	f.MergeHeads = append(f.MergeHeads, headSHA)
 	return f.MergeErr
+}
+
+// PrCreate records the call and returns NextPR (default 201).
+func (f *FakeGhClient) PrCreate(ctx context.Context, head, base, title, body string) (int, error) {
+	f.PRCreates = append(f.PRCreates, PrCreateCall{Head: head, Base: base, Title: title, Body: body})
+	if f.PRCreateErr != nil {
+		return 0, f.PRCreateErr
+	}
+	if f.NextPR <= 0 {
+		f.NextPR = 201
+	}
+	return f.NextPR, nil
+}
+
+// PrAutoMerge records the call.
+func (f *FakeGhClient) PrAutoMerge(ctx context.Context, pr int) error {
+	f.AutoMergeCalls = append(f.AutoMergeCalls, pr)
+	return f.PRAutoMergeErr
 }
 
 // RepoAllowsAutoMerge returns the canned repo setting.

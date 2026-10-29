@@ -689,7 +689,11 @@ rejected.
 
 Pauses — confirm policy, never policy, auto-merge-disabled repos, missing or
 stale review, and awaiting human approval — exit 0 with the next step, not an
-error.`,
+error.
+
+After the merge, finish runs the post-merge smoke on main and reverts the
+merge (filing an incident issue) when it fails (issue #275). That failure
+exits non-zero and leaves the issue open.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFinish(cmd, deps, args[0])
@@ -708,6 +712,26 @@ error.`,
 	finishCmd.Flags().String("merge-policy", "", "policy override (auto|confirm|never)")
 	finishCmd.Flags().Duration("timeout", 0, "CI wait cap (default 30m)")
 	finishCmd.Flags().Duration("poll-interval", 0, "CI poll interval (default 10s)")
+
+	postmergeCmd := &cobra.Command{
+		Use:   "postmerge <issue-number>",
+		Short: "Re-run the post-merge smoke and revert main when it fails",
+		Long: `Build main at the PR's merge commit in a temporary worktree and run
+the smoke (go build plus a fast shell-test subset). A failure opens a revert
+PR against the default branch, enables auto-merge, and files an incident issue
+(P0 equivalent). The revert goes through a PR because protected main refuses
+direct pushes; if auto-merge is refused, the incident asks a human to merge it.
+Run it manually to re-check a merge that already happened; ` + "`lead finish`" + `
+runs the same check right after merging (issue #275).
+When the revert itself fails, main stays broken and the incident says manual
+recovery is required.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runPostmerge(cmd, deps, args[0])
+		},
+	}
+	postmergeCmd.Flags().Int("pr", 0, "PR number (default: the issue's recorded PR)")
+	postmergeCmd.Flags().Duration("timeout", 0, "smoke cap (default 10m)")
 
 	reviewCmd := &cobra.Command{
 		Use:   "review <pr-number>",
@@ -851,7 +875,7 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, statsCmd, cleanCmd, peekCmd, stopCmd, finishCmd, reviewCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, statsCmd, cleanCmd, peekCmd, stopCmd, finishCmd, postmergeCmd, reviewCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	root.AddCommand(newCmd, readyCmd, scenarioCmd)
 	return root
@@ -2116,6 +2140,12 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 		return err
 	}
 
+	// The post-merge smoke needs a real repository (worktree add); CLI
+	// wiring tests that use a temp dir opt out with LEAD_TEST_SKIP_POSTMERGE.
+	var postMerge *finish.PostMergeOptions
+	if os.Getenv("LEAD_TEST_SKIP_POSTMERGE") == "" {
+		postMerge = &finish.PostMergeOptions{Smoke: postMergeSmoke()}
+	}
 	res, err := finish.Run(cmd.Context(), deps.gh(), &state.Store{Path: deps.stateFile()}, number, finish.Options{
 		PR: pr, Part: part, Merge: merge, Close: closeIssue, NoClose: noClose,
 		Comment: comment, Outcome: outcome, MergePolicy: policy,
@@ -2125,9 +2155,115 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 		OverrideGuardrail: overrideGuardrail,
 		Git:               deps.gitRunner(), WorkDir: workDir,
 		Timeout: timeout, PollInterval: interval,
+		PostMerge: postMerge,
 	})
 	if res.Message != "" {
 		fmt.Fprintln(cmd.OutOrStdout(), res.Message)
+	}
+	return err
+}
+
+// postMergeSmoke returns the smoke override for LEAD_TEST_POSTMERGE_SMOKE
+// (headless shell tests); nil means finish.DefaultSmoke.
+func postMergeSmoke() func(context.Context, string) error {
+	raw := os.Getenv("LEAD_TEST_POSTMERGE_SMOKE")
+	if raw == "" {
+		return nil
+	}
+	return func(ctx context.Context, dir string) error {
+		cmd := exec.CommandContext(ctx, "sh", "-c", raw)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("smoke %q: %w: %s", raw, err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+}
+
+// runPostmerge implements `lead postmerge <issue>`: re-run the post-merge
+// smoke for the issue's merged PR (issue #275).
+func runPostmerge(cmd *cobra.Command, deps Deps, raw string) error {
+	number, err := strconv.Atoi(raw)
+	if err != nil || number <= 0 {
+		return fmt.Errorf("invalid issue number %q", raw)
+	}
+	pr, _ := cmd.Flags().GetInt("pr")
+	timeout, _ := cmd.Flags().GetDuration("timeout")
+	workDir, err := deps.workDir()
+	if err != nil {
+		return err
+	}
+	store := &state.Store{Path: deps.stateFile()}
+	w, ok, err := store.Get(number, "")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("no workflow for #%d; run `lead run %d` first", number, number)
+	}
+	if pr == 0 {
+		for _, p := range w.PullRequests {
+			if p.Status == "merged" {
+				pr = p.Number
+			}
+		}
+		if pr == 0 && len(w.PullRequests) > 0 {
+			pr = w.PullRequests[len(w.PullRequests)-1].Number
+		}
+	}
+	if pr == 0 {
+		return fmt.Errorf("no PR recorded for #%d; pass --pr", number)
+	}
+
+	started := time.Now()
+	res, err := finish.PostMerge(cmd.Context(), deps.gh(), finish.PostMergeOptions{
+		Issue: number, PR: pr, WorkDir: workDir, Git: deps.gitRunner(),
+		Repo: git.RepoSlug(w.Repository), Smoke: postMergeSmoke(), Timeout: timeout,
+	})
+	if res.Message != "" {
+		fmt.Fprintln(cmd.OutOrStdout(), res.Message)
+	}
+	if err != nil && res.SmokeFailed && w.Status != state.StatusClosed {
+		w.Status = state.StatusBlocked
+		w.PostMergeFailed = true
+		w.PostMergeIncident = res.Incident
+		w.PostMergeRevertOf = res.RevertOf
+		if uerr := store.Upsert(w); uerr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "postmerge: state: %v\n", uerr)
+		}
+	}
+	// A later success proves main is healthy again: return the issue to the
+	// queue instead of leaving it blocked forever (issue #275 F7).
+	if res.Passed && w.PostMergeFailed {
+		w.PostMergeFailed = false
+		w.PostMergeIncident = 0
+		w.PostMergeRevertOf = ""
+		if w.Status == state.StatusBlocked {
+			w.Status = state.StatusInProgress
+		}
+		if uerr := store.Upsert(w); uerr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "postmerge: state: %v\n", uerr)
+		}
+		if w.Status != state.StatusClosed {
+			_ = deps.gh().IssueRemoveLabel(cmd.Context(), number, inbox.LabelBlocked)
+			_ = deps.gh().IssueAddLabel(cmd.Context(), number, inbox.LabelReady)
+			_ = deps.gh().IssueComment(cmd.Context(), number, "postmerge: 再実行が成功しました。ready に戻しました。")
+		}
+	}
+	if res.Passed || res.SmokeFailed {
+		outcome := ledger.OutcomeCompleted
+		if res.SmokeFailed {
+			outcome = ledger.OutcomePostMergeFailed
+		}
+		if aerr := ledger.Append(ledger.Path(deps.stateFile()), ledger.Record{
+			Repo:  git.RepoSlug(w.Repository),
+			Issue: number, Phase: ledger.PhaseMerge, PR: pr,
+			StartedAt: started, EndedAt: time.Now(),
+			Outcome: outcome, RevertOf: res.RevertOf,
+		}); aerr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "postmerge: ledger: %v\n", aerr)
+		}
 	}
 	return err
 }

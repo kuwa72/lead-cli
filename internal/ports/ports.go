@@ -72,6 +72,10 @@ type GhClient interface {
 	// PrHeadSHA mirrors `gh pr view <pr> --json headRefOid` (review gate
 	// bound to the reviewed commit, issue #249).
 	PrHeadSHA(ctx context.Context, pr int) (string, error)
+	// PrMergeCommit mirrors `gh pr view <pr> --json mergeCommit` and
+	// returns the commit the merge landed on main ("" when not merged).
+	// The post-merge smoke reverts this commit (issue #275).
+	PrMergeCommit(ctx context.Context, pr int) (string, error)
 	// PrComments mirrors `gh pr view <pr> --json comments` (review verdict
 	// markers, issue #249).
 	PrComments(ctx context.Context, pr int) ([]Comment, error)
@@ -85,6 +89,13 @@ type GhClient interface {
 	// the head with --match-head-commit when headSHA is non-empty (TOCTOU
 	// between the review gate and the merge, issue #250).
 	PrMerge(ctx context.Context, pr int, headSHA string) error
+	// PrCreate mirrors `gh pr create --head <head> --base <base> --title <t>
+	// --body <b>` and returns the new PR number. The post-merge revert uses
+	// it because protected main rejects direct pushes (issue #275).
+	PrCreate(ctx context.Context, head, base, title, body string) (int, error)
+	// PrAutoMerge mirrors `gh pr merge <pr> --auto --squash --delete-branch`:
+	// the PR merges once its checks pass.
+	PrAutoMerge(ctx context.Context, pr int) error
 	// RepoAllowsAutoMerge mirrors `gh api repos/<owner>/<repo> --jq .allow_auto_merge`.
 	RepoAllowsAutoMerge(ctx context.Context, repo string) (bool, error)
 	// IssueClose mirrors `gh issue close <n>`.

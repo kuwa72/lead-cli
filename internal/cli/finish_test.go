@@ -15,6 +15,11 @@ const testHeadSHA = "0123456789abcdef0123456789abcdef01234567"
 // seedFinishRecord stores an in-progress workflow attached to PR 7.
 func seedFinishRecord(t *testing.T, stateFile string, mutate func(*state.Workflow)) *testutil.FakeGhClient {
 	t.Helper()
+	// The fake git runner cannot build a real worktree; keep the smoke
+	// deterministic for the CLI wiring tests. The smoke itself is covered
+	// in internal/finish.
+	t.Setenv("LEAD_TEST_POSTMERGE_SMOKE", "true")
+	t.Setenv("LEAD_TEST_SKIP_POSTMERGE", "1")
 	w := state.Workflow{
 		Repository:   "o/r",
 		Issue:        36,
@@ -33,6 +38,7 @@ func seedFinishRecord(t *testing.T, stateFile string, mutate func(*state.Workflo
 		Checks:           []ports.PRCheck{{Name: "test", Bucket: "pass", State: "SUCCESS"}},
 		PR:               ports.PRInfo{Number: 7, State: "OPEN", Mergeable: "MERGEABLE"},
 		AutoMergeAllowed: true,
+		PRMergeCommit:    testHeadSHA,
 		Issues:           map[int]ports.Issue{36: {Number: 36, Title: "x", Labels: []string{"risk:a"}}},
 		PRLabels:         []string{state.ReviewPassLabel},
 		PRHeadSHA:        testHeadSHA,

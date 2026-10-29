@@ -53,6 +53,7 @@ Sections:
 | `lead new` | create an issue from a validated template (`--ready` enqueues it directly) |
 | `lead ready <n>` | validate an existing issue body and move it to `ready` |
 | `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
+| `lead postmerge <n>` | re-run the post-merge smoke; revert main and file an incident when it fails |
 | `lead review <pr>` | run an independent headless review; label `review:pass` / `review:needs-work` |
 | `lead scenario` | store issue scenarios outside the worktree; generate and run throwaway tests (`add` / `list` / `run`) |
 | `lead clean <n>` | remove the workflow worktree and state |

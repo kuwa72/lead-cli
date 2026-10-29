@@ -150,6 +150,18 @@ type Stats struct {
 func Aggregate(recs []Record) Stats {
 	var s Stats
 	var durations []time.Duration
+	// The same revert can be recorded by finish and by a manual
+	// `lead postmerge` retry; count the merge commit once (issue #275 F8).
+	seenReverts := map[string]bool{}
+	countRevert := func(r Record) {
+		if r.RevertOf != "" {
+			if seenReverts[r.RevertOf] {
+				return
+			}
+			seenReverts[r.RevertOf] = true
+		}
+		s.Reverts++
+	}
 	for _, r := range recs {
 		if r.Phase == PhaseMerge {
 			// A merge event: contributes scenarios/reverts, not attempts.
@@ -158,7 +170,7 @@ func Aggregate(recs []Record) Stats {
 				s.ScenarioAll += total
 			}
 			if r.Outcome == OutcomePostMergeFailed {
-				s.Reverts++
+				countRevert(r)
 			}
 			continue
 		}
@@ -170,7 +182,7 @@ func Aggregate(recs []Record) Stats {
 			s.Awaiting++
 		case OutcomePostMergeFailed:
 			s.Failed++
-			s.Reverts++
+			countRevert(r)
 		default:
 			s.Failed++
 		}

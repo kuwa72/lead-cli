@@ -9,6 +9,9 @@
 # をアサートする（grep検査なし・実HOME/実リポジトリに触れない）。
 set -euo pipefail
 
+# This test exercises dispatch/finish gates, not the post-merge smoke (#275).
+export LEAD_TEST_SKIP_POSTMERGE=1
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 

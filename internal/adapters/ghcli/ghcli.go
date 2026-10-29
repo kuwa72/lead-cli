@@ -253,6 +253,24 @@ func (c *Client) PrHeadSHA(ctx context.Context, pr int) (string, error) {
 	return raw.HeadRefOID, nil
 }
 
+// PrMergeCommit runs `gh pr view <pr> --json mergeCommit` and returns the
+// commit the merge landed on main (empty when the PR is not merged).
+func (c *Client) PrMergeCommit(ctx context.Context, pr int) (string, error) {
+	out, err := c.run(ctx, "pr", "view", strconv.Itoa(pr), "--json", "mergeCommit")
+	if err != nil {
+		return "", err
+	}
+	var raw struct {
+		MergeCommit struct {
+			OID string `json:"oid"`
+		} `json:"mergeCommit"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return "", fmt.Errorf("gh pr view %d: decode JSON: %w", pr, err)
+	}
+	return raw.MergeCommit.OID, nil
+}
+
 // PrComments runs `gh pr view <pr> --json comments` and returns the PR's
 // conversation comments (review verdict markers, issue #249).
 func (c *Client) PrComments(ctx context.Context, pr int) ([]ports.Comment, error) {
@@ -309,6 +327,27 @@ func (c *Client) PrMerge(ctx context.Context, pr int, headSHA string) error {
 		args = append(args, "--match-head-commit", headSHA)
 	}
 	_, err := c.run(ctx, args...)
+	return err
+}
+
+// PrCreate runs `gh pr create --head <head> --base <base> --title <t>
+// --body <b>` and returns the new PR number.
+func (c *Client) PrCreate(ctx context.Context, head, base, title, body string) (int, error) {
+	out, err := c.run(ctx, "pr", "create", "--head", head, "--base", base, "--title", title, "--body", body)
+	if err != nil {
+		return 0, err
+	}
+	url := lastNonEmptyLine(string(out))
+	n, err := numberFromIssueURL(url)
+	if err != nil {
+		return 0, fmt.Errorf("gh pr create: %w", err)
+	}
+	return n, nil
+}
+
+// PrAutoMerge runs `gh pr merge <pr> --auto --squash --delete-branch`.
+func (c *Client) PrAutoMerge(ctx context.Context, pr int) error {
+	_, err := c.run(ctx, "pr", "merge", strconv.Itoa(pr), "--auto", "--squash", "--delete-branch")
 	return err
 }
 
