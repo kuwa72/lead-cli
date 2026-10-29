@@ -101,7 +101,7 @@ clear_log
 out="$("$tmp/lead" enable --yes)" || fail "re-enable failed"
 case "$out" in *"no changes"*) ;; *) fail "re-enable not idempotent: $out";; esac
 case "$(cat "$GH_ARG_LOG")" in *"create"*) fail "re-enable recreated labels";; esac
-[ "$(label_count)" = "6" ] || fail "label count changed on re-enable"
+[ "$(label_count)" = "5" ] || fail "label count changed on re-enable"
 
 # --- 6. gh failure: --write still installs locally with a skip warning ---
 set_labels ''
