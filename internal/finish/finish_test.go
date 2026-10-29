@@ -3,6 +3,7 @@ package finish
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/kuwa72/lead-cli/internal/ledger"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/scenario"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
 )
@@ -673,5 +675,60 @@ func TestRun_ScenarioPassMerges(t *testing.T) {
 	})
 	if err != nil || !res.Merged {
 		t.Fatalf("Result = %+v, %v; want a merge: the diff review is advisory", res, err)
+	}
+}
+
+// A scenario harness failure is not "no scenario": finish must fail closed.
+func TestRun_ScenarioHarnessErrorStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.PRThread = []ports.Comment{{Body: "<!-- lead-review sha=" + testSHA + " verdict=needs-work scenarios=error -->"}}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || res.Merged {
+		t.Fatalf("Result = %+v, %v; want a harness-error pause", res, err)
+	}
+	if !strings.Contains(res.Message, "harness") {
+		t.Errorf("message = %q, want the harness failure", res.Message)
+	}
+}
+
+// A scenario file without a review result must not merge (forgotten review).
+func TestRun_ScenarioFileWithoutReviewStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	scenarioPath := scenario.Path(filepath.Dir(path), "o/r", 36)
+	if err := scenario.Save(scenarioPath, "## Steps\n1. `lead x` → exit 0\n"); err != nil {
+		t.Fatal(err)
+	}
+	fake := baseFake()
+	fake.PRThread = []ports.Comment{{Body: "<!-- lead-review sha=" + testSHA + " verdict=pass scenarios=0/0 -->"}}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || res.Merged {
+		t.Fatalf("Result = %+v, %v; want a missing-review pause", res, err)
+	}
+	if !strings.Contains(res.Message, "lead review") {
+		t.Errorf("message = %q, want the review step", res.Message)
+	}
+}
+
+// A 0/0 marker is advisory: a later head does not block the merge.
+func TestRun_ZeroScenarioIgnoresHead(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	fake.PRThread = []ports.Comment{{Body: "<!-- lead-review sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa verdict=pass scenarios=0/0 -->"}}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil || !res.Merged {
+		t.Fatalf("Result = %+v, %v; want a merge with a 0/0 marker", res, err)
 	}
 }

@@ -703,8 +703,9 @@ output is posted to the PR and its final line must be one of:
 The PR gets review:pass or review:needs-work (created first when the
 repository does not have them yet). Exit status is 0 for pass and
 1 for needs-work (or a missing/unrecognized verdict, which never passes).
-The comment also records the reviewed head SHA; ` + "`lead finish`" + ` merges an
-automatic (risk:a) PR only while its head still matches that SHA (issue #249).
+The comment also records the reviewed head SHA and ` + "`SCENARIOS: n/m`" + `;
+` + "`lead finish`" + ` uses the scenario score when one is configured (the diff
+verdict itself is advisory, issue #278).
 
 The reviewer runs in the PR head's worktree: a checkout already at that
 commit is reused, otherwise a temporary worktree is created under

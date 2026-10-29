@@ -109,9 +109,12 @@ type Result struct {
 	// when the issue has no scenario (issue #277).
 	ScenariosPassed int
 	ScenariosTotal  int
-	Output          string
-	LogPath         string
-	Message         string
+	// ScenarioError is true when the scenario harness itself failed; the
+	// marker then carries scenarios=error so finish fails closed.
+	ScenarioError bool
+	Output        string
+	LogPath       string
+	Message       string
 }
 
 // Review gathers the PR/issue/CI context, runs the independent reviewer,
@@ -230,6 +233,7 @@ func (r *Runner) Review(ctx context.Context) (Result, error) {
 		res.Verdict = VerdictNeedsWork
 	}
 	if scErr != nil {
+		res.ScenarioError = true
 		res.Output = strings.TrimRight(string(out), "\n") + "\n\n## シナリオ実行\n\ngenerated tests failed to run: " + scErr.Error()
 	} else if total > 0 {
 		res.Output = strings.TrimRight(string(out), "\n") + "\n\n" + scenarioSummary(scRes)
@@ -411,9 +415,13 @@ func verdictLabelDefinition(name string) (ports.LabelDefinition, bool) {
 // (head SHA + verdict, issue #249), a verdict header, and the reviewer's
 // full output.
 func CommentBody(res Result) string {
-	return fmt.Sprintf("%s\n## lead review: PR #%d\n\nVERDICT: %s\nSCENARIOS: %d/%d\n\n%s",
-		MarkerLine(res.HeadSHA, res.Verdict, fmt.Sprintf("%d/%d", res.ScenariosPassed, res.ScenariosTotal)),
-		res.PR, res.Verdict, res.ScenariosPassed, res.ScenariosTotal, strings.TrimRight(res.Output, "\n"))
+	score := fmt.Sprintf("%d/%d", res.ScenariosPassed, res.ScenariosTotal)
+	if res.ScenarioError {
+		score = "error"
+	}
+	return fmt.Sprintf("%s\n## lead review: PR #%d\n\nVERDICT: %s\nSCENARIOS: %s\n\n%s",
+		MarkerLine(res.HeadSHA, res.Verdict, score),
+		res.PR, res.Verdict, score, strings.TrimRight(res.Output, "\n"))
 }
 
 // MarkerLine renders the marker finish reads back:
@@ -432,7 +440,7 @@ type Marker struct {
 // markerPattern matches a review marker. The verdict is captured verbatim
 // so an unknown verdict (including "invalid") still supersedes an older
 // pass; finish treats anything but pass as blocking.
-var markerPattern = regexp.MustCompile(`<!--\s*lead-review\s+sha=([0-9a-fA-F]{40})\s+verdict=([a-z-]+)(?:\s+scenarios=(\d+/\d+))?\s*-->`)
+var markerPattern = regexp.MustCompile(`<!--\s*lead-review\s+sha=([0-9a-fA-F]{40})\s+verdict=([a-z-]+)(?:\s+scenarios=(\d+/\d+|error))?\s*-->`)
 
 // LatestMarker returns the newest review marker across the PR's comments.
 // Comments come oldest-first from gh, so the scan runs backwards.
