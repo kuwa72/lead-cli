@@ -574,7 +574,7 @@ func (d *Dispatcher) reconnect(ctx context.Context, opts Options) ([]Running, []
 					continue
 				}
 				res := d.evaluate(ctx, opts, w.Issue, repoRoot, w.Worktree, w.LogPath, reason)
-				d.recordRun(opts, w.Issue, w.StartedAt, w.Agent, res)
+				d.recordRun(opts, w.Issue, w.StartedAt, w.Agent, RepoKey(w.Repository), res)
 				settled = append(settled, res)
 				continue
 			}
@@ -583,7 +583,7 @@ func (d *Dispatcher) reconnect(ctx context.Context, opts Options) ([]Running, []
 		}
 		gone := fmt.Errorf("agent process %d is gone without closing the issue", w.PID)
 		res := d.evaluate(ctx, opts, w.Issue, repoRoot, w.Worktree, w.LogPath, gone)
-		d.recordRun(opts, w.Issue, w.StartedAt, w.Agent, res)
+		d.recordRun(opts, w.Issue, w.StartedAt, w.Agent, RepoKey(w.Repository), res)
 		settled = append(settled, res)
 	}
 	return running, settled, nil
@@ -669,13 +669,20 @@ func (d *Dispatcher) RunningCount() (int, error) {
 func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res Result) {
 	res = Result{Issue: number}
 	started := time.Now()
+	repo := ""
+	if root, err := d.Git.RepoRoot(opts.WorkDir); err == nil {
+		repo = RepoKey(d.Git.OriginURL(root))
+	}
 	defer func() {
-		// On cancellation reconnect owns the record: the PID is still in
-		// the state file and would otherwise be counted twice.
+		// On cancellation reconnect owns the record only while the PID is
+		// still in the state file. evaluate's failure path clears the PID,
+		// and then this defer is the only place the attempt can be recorded.
 		if ctx.Err() != nil {
-			return
+			if w, ok, err := d.Store.Get(number, ""); err == nil && ok && w.PID > 0 {
+				return
+			}
 		}
-		d.recordRun(opts, number, started, opts.Agent, res)
+		d.recordRun(opts, number, started, opts.Agent, repo, res)
 	}()
 
 	iss, err := d.Gh.View(ctx, number)
@@ -725,12 +732,13 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res 
 
 // recordRun appends one ledger line for a finished run (issue #274). The
 // history workflows.json deletes on completion lives here.
-func (d *Dispatcher) recordRun(opts Options, number int, started time.Time, agent string, res Result) {
+func (d *Dispatcher) recordRun(opts Options, number int, started time.Time, agent, repo string, res Result) {
 	if opts.LedgerPath == "" {
 		return
 	}
 	attempts := res.Attempts
 	if err := ledger.Append(opts.LedgerPath, ledger.Record{
+		Repo:      repo,
 		Issue:     number,
 		Phase:     ledger.PhaseRun,
 		Agent:     agent,

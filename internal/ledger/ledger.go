@@ -51,13 +51,25 @@ type Record struct {
 	Outcome   string    `json:"outcome"`
 	Attempts  int       `json:"attempts,omitempty"`
 	PR        int       `json:"pr,omitempty"`
-	Review    string    `json:"review,omitempty"`
 	// Scenarios is "passed/total" (e.g. "3/4"); empty when none ran.
 	Scenarios string `json:"scenarios,omitempty"`
-	HeadSHA   string `json:"head_sha,omitempty"`
-	DiffLines int    `json:"diff_lines,omitempty"`
-	Files     int    `json:"files,omitempty"`
 	RevertOf  string `json:"revert_of,omitempty"`
+}
+
+// ForRepo keeps the records that belong to repo. Records without a repo
+// (hand-written or pre-#274 history) are kept: the filter must not make an
+// existing ledger disappear. repo == "" keeps everything.
+func ForRepo(recs []Record, repo string) []Record {
+	if repo == "" {
+		return recs
+	}
+	kept := recs[:0]
+	for _, r := range recs {
+		if r.Repo == "" || r.Repo == repo {
+			kept = append(kept, r)
+		}
+	}
+	return kept
 }
 
 // Path returns the ledger next to the state file.

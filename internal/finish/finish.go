@@ -184,8 +184,12 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		if opts.LedgerPath == "" {
 			return
 		}
+		repo := git.RepoSlug(w.Repository)
+		if repo == "" {
+			repo = w.Repository
+		}
 		if aerr := ledger.Append(opts.LedgerPath, ledger.Record{
-			Issue: issue, Phase: ledger.PhaseMerge, Mode: w.Mode, PR: prNumber,
+			Repo: repo, Issue: issue, Phase: ledger.PhaseMerge, Mode: w.Mode, PR: prNumber,
 			StartedAt: started, EndedAt: time.Now(),
 			Outcome: mergeOutcome(res, err, opts),
 		}); aerr != nil {

@@ -613,11 +613,10 @@ touches $HOME. Repository issue labels are kept.`,
 		Long: `Aggregate the run history (issue #274).
 
 dispatch appends one line per run to ` + "`runs.jsonl`" + ` next to the state
-file; workflows.json only holds live work. stats reports runs, completed,
-failed, awaiting human, success rate, and median duration. Merge events
-contribute reverts and scenario counts once a later step records them.
---json prints the same numbers for scripts (success_rate is a ratio,
-median_duration_seconds is a number).`,
+file; workflows.json only holds live work. stats reports this repository's
+runs, completed, failed, awaiting human, median duration, and
+success rate (completed / runs). --json prints the same numbers for
+scripts (success_rate is a ratio, median_duration_seconds is a number).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStats(cmd, deps)
 		},
@@ -1591,7 +1590,13 @@ func runStats(cmd *cobra.Command, deps Deps) error {
 	if err != nil {
 		return err
 	}
-	s := ledger.Aggregate(recs)
+	repo := ""
+	if cwd, derr := deps.workDir(); derr == nil {
+		if root, rerr := deps.gitRunner().RepoRoot(cwd); rerr == nil {
+			repo = dispatch.RepoKey(deps.gitRunner().OriginURL(root))
+		}
+	}
+	s := ledger.Aggregate(ledger.ForRepo(recs, repo))
 	out := cmd.OutOrStdout()
 	if asJSON {
 		raw, err := json.MarshalIndent(s, "", "  ")

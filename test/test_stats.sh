@@ -34,6 +34,7 @@ cat > "$tmp/state/runs.jsonl" <<'EOF'
 {"issue":1,"phase":"merge","outcome":"completed","scenarios":"1/1"}
 {"issue":2,"phase":"merge","outcome":"completed","scenarios":"2/2"}
 {"issue":3,"phase":"merge","outcome":"paused","scenarios":"1/2"}
+{"repo":"other/repo","issue":9,"phase":"run","agent":"devin","outcome":"blocked","started_at":"2026-10-29T04:00:00Z","ended_at":"2026-10-29T04:10:00Z"}
 EOF
 
 out="$("$tmp/lead" stats)"
