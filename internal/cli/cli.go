@@ -673,7 +673,9 @@ returns to the dispatch queue.`,
 The merge is computed, not approved (issue #278): CI must pass (skipped or
 neutral checks do not count), every generated scenario recorded by
 ` + "`lead review`" + ` must pass, and the PR must not touch protected convention
-files. ` + "`review:pass`" + ` is advisory and is not required.
+files. ` + "`review:pass`" + ` is advisory and is not required. An issue body with
+` + "`## シナリオ`" + ` but no stored scenario also pauses: ` + "`lead ready`" + ` freezes it
+before implementation (issue #295).
 
 Pauses — confirm/never policy, auto-merge-disabled repos, protected files,
 and failing or stale scenarios — exit 0 with the next step and leave the
