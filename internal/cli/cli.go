@@ -865,7 +865,25 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, statsCmd, cleanCmd, peekCmd, stopCmd, finishCmd, postmergeCmd, reviewCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
+	landCmd := &cobra.Command{
+		Use:   "land <issue-number>",
+		Short: "Review then finish a dispatched PR (orchestrator step)",
+		Long: `Run the landing station for a dispatched issue: ` + "`lead review <pr>`" + ` first,
+then ` + "`lead finish <issue> --merge`" + ` only when the review passed. This is what
+` + "`lead dispatch`" + ` runs after the implementation agent stops at the PR, so
+the implementer does not judge or merge its own work (issue #298).
+
+The PR is resolved from the workflow branch unless --pr is given. Review
+failure stops before finish; finish pauses (scenario/protected path) leave
+the issue open for the dispatcher to retry or block.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runLand(cmd, deps, args[0])
+		},
+	}
+	landCmd.Flags().Int("pr", 0, "PR number (default: resolve from the workflow branch)")
+
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, statsCmd, cleanCmd, peekCmd, stopCmd, finishCmd, postmergeCmd, reviewCmd, landCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	root.AddCommand(newCmd, readyCmd, scenarioCmd)
 	return root
@@ -1009,6 +1027,7 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		},
 	}
 	opts.RunningCount = d.RunningCount
+	d.Land = landRunner(cmd, cwd)
 	opts.OnSettingsChange = func(c inbox.Config) {
 		cfg.Agent = c.Agent
 		cfg.AgentMode = c.AgentMode
@@ -1438,6 +1457,7 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 		Launcher: deps.launcher(),
 		Out:      cmd.OutOrStdout(),
 		Notify:   notify.New(notify.Options{Disabled: cfg.NotifyDisabled}),
+		Land:     landRunner(cmd, cwd),
 		Opts: dispatch.Options{
 			Parallel:   parallel,
 			Agent:      agentName,
@@ -1457,6 +1477,27 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return d.Loop(ctx, interval)
+}
+
+// landRunner runs `lead land` in this binary for a dispatched issue. The
+// subprocess keeps review/finish on the same CLI path a human would use;
+// LEAD_LAND_BIN substitutes a fake in tests (issues #298).
+func landRunner(cmd *cobra.Command, cwd string) func(context.Context, int, int) error {
+	return func(ctx context.Context, issue, pr int) error {
+		bin := os.Getenv("LEAD_LAND_BIN")
+		if bin == "" {
+			var err error
+			bin, err = os.Executable()
+			if err != nil {
+				return err
+			}
+		}
+		c := exec.CommandContext(ctx, bin, "land", strconv.Itoa(issue), "--pr", strconv.Itoa(pr))
+		c.Dir = cwd
+		c.Stdout = io.Discard
+		c.Stderr = cmd.ErrOrStderr()
+		return c.Run()
+	}
 }
 
 // runWork implements `lead run <number>` (and the hidden `work` alias):
@@ -2324,6 +2365,58 @@ func runReview(cmd *cobra.Command, deps Deps, raw string) error {
 		return fmt.Errorf("%w (PR #%d; see the PR comment)", review.ErrNeedsWork, pr)
 	}
 	return nil
+}
+
+// runLand implements `lead land <issue>` (issue #298): the orchestrator's
+// landing station. Review first; finish only when the review passed. The two
+// steps are separate CLI processes so this stays a thin, testable seam
+// (LEAD_LAND_BIN replaces the binary in tests).
+func runLand(cmd *cobra.Command, deps Deps, raw string) error {
+	issue, err := strconv.Atoi(raw)
+	if err != nil || issue <= 0 {
+		return fmt.Errorf("land: invalid issue number %q", raw)
+	}
+	pr, _ := cmd.Flags().GetInt("pr")
+	if pr == 0 {
+		w, ok, err := (&state.Store{Path: deps.stateFile()}).Get(issue, "")
+		if err != nil {
+			return fmt.Errorf("land: %w", err)
+		}
+		if !ok || w.Branch == "" {
+			return fmt.Errorf("land: no workflow for #%d; pass --pr", issue)
+		}
+		pr, err = deps.gh().PrNumberForBranch(cmd.Context(), w.Branch)
+		if err != nil {
+			return fmt.Errorf("land: PR for %s: %w", w.Branch, err)
+		}
+		if pr == 0 {
+			return fmt.Errorf("land: no open PR for %s; pass --pr", w.Branch)
+		}
+	}
+	bin := os.Getenv("LEAD_LAND_BIN")
+	if bin == "" {
+		bin, err = os.Executable()
+		if err != nil {
+			return fmt.Errorf("land: %w", err)
+		}
+	}
+	workDir, err := deps.workDir()
+	if err != nil {
+		return err
+	}
+	run := func(args ...string) error {
+		c := exec.CommandContext(cmd.Context(), bin, args...)
+		c.Dir = workDir
+		c.Stdout, c.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+		if err := c.Run(); err != nil {
+			return fmt.Errorf("land: %s: %w", strings.Join(args, " "), err)
+		}
+		return nil
+	}
+	if err := run("review", strconv.Itoa(pr), "--issue", strconv.Itoa(issue)); err != nil {
+		return err
+	}
+	return run("finish", strconv.Itoa(issue), "--merge", "--pr", strconv.Itoa(pr))
 }
 
 // runScenarioAdd stores one scenario outside the repository (issue #276).

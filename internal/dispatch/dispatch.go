@@ -162,6 +162,9 @@ type Dispatcher struct {
 	Launcher Launcher
 	Opts     Options
 	Out      io.Writer // pass summaries; nil = silent
+	// Land runs after the implementation agent stops at the PR (issue #298).
+	// Nil means no landing (tests and callers that only launch agents).
+	Land func(ctx context.Context, issue, pr int) error
 	// ProcessAlive reports whether pid still exists on this host (reconnect,
 	// RFC §7). Nil means signal 0 via the OS.
 	ProcessAlive func(pid int) bool
@@ -205,19 +208,9 @@ func (d *Dispatcher) Preflight(ctx context.Context) error {
 			fmt.Fprintln(d.Out, "  - "+m)
 		}
 	}
-	// Headless agents merge through `lead finish` (issue #230), so the
-	// binary must be reachable from the worktree.
-	if _, err := d.lookPath()("lead"); err != nil && d.Out != nil {
-		fmt.Fprintln(d.Out, "dispatch: WARNING: `lead` is not on PATH; headless agents merge through `lead finish` and will fail (install lead or add it to PATH)")
-	}
+	// Headless agents stop at the PR; `lead land` runs in this process
+	// (issue #298), so no PATH lookup of `lead` is required here.
 	return nil
-}
-
-func (d *Dispatcher) lookPath() func(string) (string, error) {
-	if d.LookPath != nil {
-		return d.LookPath
-	}
-	return exec.LookPath
 }
 
 // Once runs a single dispatch pass: reconnect to agents left running by an
@@ -764,6 +757,21 @@ func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, rep
 	res := Result{Issue: number, Worktree: worktree, LogPath: logPath}
 
 	after, viewErr := d.Gh.View(ctx, number)
+	landed := false
+	if viewErr == nil && !strings.EqualFold(after.State, "CLOSED") && d.Land != nil {
+		d.mu.Lock()
+		w, ok, werr := d.Store.Get(number, "")
+		d.mu.Unlock()
+		if werr == nil && ok && w.Branch != "" {
+			if pr, perr := d.Gh.PrNumberForBranch(ctx, w.Branch); perr == nil && pr > 0 {
+				landed = true
+				if lerr := d.Land(ctx, number, pr); lerr != nil {
+					waitErr = fmt.Errorf("land: %w", lerr)
+				}
+				after, viewErr = d.Gh.View(ctx, number)
+			}
+		}
+	}
 	if viewErr == nil && strings.EqualFold(after.State, "CLOSED") {
 		d.mu.Lock()
 		defer d.mu.Unlock()
@@ -782,6 +790,9 @@ func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, rep
 	}
 
 	cause := "agent exited without closing the issue"
+	if landed && waitErr == nil {
+		cause = "review/finish did not close the issue (see land output)"
+	}
 	switch {
 	case waitErr != nil:
 		cause = waitErr.Error()
@@ -965,19 +976,16 @@ func BuildPrompt(iss ports.Issue) string {
 ---
 ## 完了定義（lead dispatch）
 
-この Issue はヘッドレスで担当している。途中で人間の確認は入らない。次をすべて自分で完了させること。
+この Issue の実装と PR 作成までをヘッドレスで担当する。review と merge はオーケストレーターが行うので、次を守ること。
 
 1. 現在のディレクトリ（この Issue 専用の worktree・ブランチ）で作業する。main には直接 push しない。
 2. TDD: 先に失敗するテストを追加して Red を確認し、実装して Green にする。
 3. リポジトリのテストをすべてパスさせる（./test/run-tests.sh、なければ go test ./... 等プロジェクト固有のコマンド）。
 4. git push -u origin <現在のブランチ> し、gh pr create --fill --base main で PR を作る。PR 本文に Issue の受入条件をチェックリストとして転記し、Closes #%d を含める。
-5. bin/ci-wait <PR番号>（なければ gh pr checks）で CI が全て pass するまで待つ。
-6. lead review <PR番号> を実行し、SCENARIOS が m/m になるまで所見に従って修正・再実行する（2周上限は無い）。diff review の verdict は助言。シナリオを m/m にできない原因が残る場合は、所見を gh issue comment %d --body に貼って終了する。
-7. lead finish %d --merge でマージと Issue クローズまで行う。gh pr merge を直接実行しない（規約ファイル保護のガードレールを必ず通すため）。finish が規約ファイル保護・シナリオ不合格で停止したら、--override-guardrail を付けずに理由を Issue にコメントして終了する。
-8. gh issue view %d --json state で closed になったことを確認する。closed でない場合は自分で close せず、原因と試したことを gh issue comment %d --body に書いて終了する。
+5. PR を作ったら終了する。review と merge はオーケストレーターが行う。あなたはマージも Issue の close もしない（open のまま残す）。
 
 AGENTS.md、.claude/、.devin/ などプロジェクト規約ファイルは、この Issue で明示されていない限り編集しない。
-`, iss.Number, iss.Number, iss.Number, iss.Number, iss.Number)
+`, iss.Number)
 	return b.String()
 }
 

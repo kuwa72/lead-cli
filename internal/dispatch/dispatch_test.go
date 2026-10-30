@@ -109,9 +109,8 @@ func newFixture(t *testing.T, ready ...int) (*Dispatcher, *testutil.FakeGhClient
 	l := &fakeLauncher{}
 	d := &Dispatcher{
 		Gh: gh, Git: git, Launcher: l,
-		Store:    &state.Store{Path: filepath.Join(t.TempDir(), "workflows.json")},
-		Opts:     Options{Parallel: 2, Agent: "claude", LogDir: filepath.Join(t.TempDir(), "logs"), WorkDir: root},
-		LookPath: func(string) (string, error) { return "/usr/local/bin/lead", nil },
+		Store: &state.Store{Path: filepath.Join(t.TempDir(), "workflows.json")},
+		Opts:  Options{Parallel: 2, Agent: "claude", LogDir: filepath.Join(t.TempDir(), "logs"), WorkDir: root},
 	}
 	return d, gh, git, l
 }
@@ -142,7 +141,7 @@ func TestOnce_CompletedIssueCleansUp(t *testing.T) {
 		t.Errorf("argv head = %q, want %q", c.Argv[:3], wantHead)
 	}
 	prompt := c.Argv[3]
-	for _, want := range []string{"Issue #7: dispatch me", "body", "gh pr create", "closed"} {
+	for _, want := range []string{"Issue #7: dispatch me", "body", "gh pr create", "終了する"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q:\n%s", want, prompt)
 		}
@@ -158,6 +157,46 @@ func TestOnce_CompletedIssueCleansUp(t *testing.T) {
 	}
 	if _, ok, _ := d.Store.Get(7, ""); ok {
 		t.Errorf("state record for #7 still present after completion")
+	}
+}
+
+// issue #298: the dispatcher reviews and merges after the agent stops at
+// the PR, instead of letting the implementer do it.
+func TestOnce_LandsAfterAgentStopsAtPR(t *testing.T) {
+	d, gh, git, l := newFixture(t, 7)
+	var landed []int
+	d.Land = func(ctx context.Context, issue, pr int) error {
+		landed = append(landed, issue, pr)
+		iss := gh.Issues[7]
+		iss.State = "CLOSED"
+		gh.Issues[7] = iss
+		return nil
+	}
+	l.OnWait = func(c launchCall) error {
+		w, ok, err := d.Store.Get(7, "")
+		if err != nil || !ok {
+			t.Fatalf("state before land = %+v, %v, %v", w, ok, err)
+		}
+		gh.PRByBranch = map[string]int{w.Branch: 70}
+		return nil
+	}
+
+	rep, err := d.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if !reflect.DeepEqual(landed, []int{7, 70}) {
+		t.Errorf("land calls = %v, want [7 70]", landed)
+	}
+	if len(rep.Results) != 1 || rep.Results[0].Outcome != OutcomeCompleted {
+		t.Fatalf("results = %+v, want one completed", rep.Results)
+	}
+	wantDir := filepath.Join(git.root, ".worktrees", "issue-7")
+	if !reflect.DeepEqual(git.Removed, []string{wantDir}) {
+		t.Errorf("worktree removed = %q, want %q", git.Removed, []string{wantDir})
+	}
+	if _, ok, _ := d.Store.Get(7, ""); ok {
+		t.Error("state record for #7 still present after landing")
 	}
 }
 
@@ -479,22 +518,6 @@ func TestPreflight_ProtectedRepoPasses(t *testing.T) {
 	}
 }
 
-// issue #230: headless agents merge through `lead finish`, so a missing
-// lead binary is worth warning about before any agent starts.
-func TestPreflight_WarnsWhenLeadIsNotOnPath(t *testing.T) {
-	d, gh, _, _ := newFixture(t)
-	protectedFake(gh)
-	d.LookPath = func(string) (string, error) { return "", errors.New("not found") }
-	var out strings.Builder
-	d.Out = &out
-	if err := d.Preflight(context.Background()); err != nil {
-		t.Fatalf("Preflight = %v, want nil (warning only)", err)
-	}
-	if !strings.Contains(out.String(), "lead finish") {
-		t.Errorf("warning = %q, want the lead finish dependency named", out.String())
-	}
-}
-
 func TestPreflight_NoOriginRefuses(t *testing.T) {
 	d, gh, git, _ := newFixture(t)
 	protectedFake(gh)
@@ -524,24 +547,18 @@ func TestBuildPrompt_Golden(t *testing.T) {
 	testutil.AssertGoldenString(t, "testdata/prompt.golden", got)
 }
 
-// issue #246: the completion definition routes through the independent
-// review and never teaches the agent a human-only skip flag.
-func TestBuildPrompt_IncludesReviewStep(t *testing.T) {
+// issue #298: the implementer stops at the PR; the orchestrator owns
+// review and merge, so the prompt must not teach either step.
+func TestBuildPrompt_StopsAtPullRequest(t *testing.T) {
 	got := BuildPrompt(ports.Issue{Number: 42, Title: "feat: thing", Body: "b"})
-	for _, want := range []string{
-		"lead review <PR番号>",
-		"SCENARIOS",
-		"m/m",
-		"2周上限は無い",
-		"gh issue comment 42 --body",
-	} {
+	for _, want := range []string{"gh pr create", "終了する", "オーケストレーター"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"--no-review", "--approve", "awaiting-human"} {
+	for _, forbidden := range []string{"lead review", "lead finish", "gh pr merge", "SCENARIOS", "--approve", "--no-review", "awaiting-human"} {
 		if strings.Contains(got, forbidden) {
-			t.Errorf("prompt must not mention the removed %s flag:\n%s", forbidden, got)
+			t.Errorf("prompt must not mention %q:\n%s", forbidden, got)
 		}
 	}
 }

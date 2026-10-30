@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# issue #230: ヘッドレス dispatch の完了定義が `lead finish` 経由になり、
+# issue #298: dispatch は実装エージェントを PR で止め、land（review→finish）で
 # 規約ファイル保護のガードレールを迂回できないことを振る舞いで検証する。
 # 一時 HOME・一時リポジトリ・ダミー gh・ダミーエージェントを使い、
-#   - プロンプトが `lead finish <issue> --merge` を指示し `gh pr merge` を禁止する
+#   - プロンプトが実装者に review / merge を指示しない（orchestrator が land する）
 #   - 規約ファイル（AGENTS.md 等）を含む PR は finish が停止し、gh pr merge /
 #     gh issue close が呼ばれず Issue は open のまま dispatch が retry する
 #   - 規約ファイルを含まない PR は finish がマージ・クローズし completed になる
@@ -83,17 +83,23 @@ esac
 EOF
 cat > "$tmp/bin/claude" <<'EOF'
 #!/bin/sh
-# Headless agent stub: record the launch prompt, then follow the completion
-# definition's merge step through `lead finish`.
+# Headless agent stub: record the launch prompt and stop at the PR.
 for a in "$@"; do printf '%s\n' "$a" >> "$PROMPT_LOG"; done
-"$LEAD_BIN" finish "$ISSUE" --merge >> "$FINISH_LOG" 2>&1
+exit 0
 EOF
 chmod +x "$tmp/bin/gh" "$tmp/bin/claude"
+cat > "$tmp/bin/land" <<'SCRIPT'
+#!/bin/sh
+# Orchestrator landing stub: use the real finish gate for the guardrail.
+"$LEAD_BIN" finish "$2" --merge >> "$FINISH_LOG" 2>&1
+SCRIPT
+chmod +x "$tmp/bin/land"
 export PATH="$tmp/bin:$PATH"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 ln -sf "$tmp/lead" "$tmp/bin/lead"
 export LEAD_BIN="$tmp/lead"
+export LEAD_LAND_BIN="$tmp/bin/land"
 
 # --- 1. 規約ファイルを含む PR は自動マージされない --------------------------
 export ISSUE=7 FILES="AGENTS.md .github/workflows/ci.yml"
@@ -101,7 +107,8 @@ rm -f "$MERGED_MARK" "$CLOSED_MARK"
 : > "$GH_LOG"; : > "$PROMPT_LOG"; : > "$FINISH_LOG"
 out="$(cd "$repo" && "$tmp/lead" dispatch --once --parallel 1 --agent claude 2>&1)" || fail "dispatch exited non-zero: $out"
 
-grep -q 'lead finish 7 --merge' "$PROMPT_LOG" || fail "prompt does not route the merge through lead finish: $(cat "$PROMPT_LOG")"
+grep -q 'lead finish' "$PROMPT_LOG" && fail "prompt still routes the merge through lead finish: $(cat "$PROMPT_LOG")"
+grep -q '終了する' "$PROMPT_LOG" || fail "prompt does not stop the agent at the PR: $(cat "$PROMPT_LOG")"
 grep -q 'gh pr merge --squash' "$PROMPT_LOG" && fail "prompt still instructs a direct gh pr merge"
 grep -q 'gh issue close' "$PROMPT_LOG" && fail "prompt still instructs a direct gh issue close"
 

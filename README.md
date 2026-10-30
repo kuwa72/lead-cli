@@ -55,6 +55,7 @@ Sections:
 | `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
 | `lead postmerge <n>` | re-run the post-merge smoke; revert main and file an incident when it fails |
 | `lead review <pr>` | run an independent headless review; label `review:pass` / `review:needs-work` |
+| `lead land <n>` | review then finish a dispatched PR (orchestrator step; `--pr` overrides) |
 | `lead scenario` | store issue scenarios outside the worktree; generate and run throwaway tests (`add` / `list` / `run`) |
 | `lead clean <n>` | remove the workflow worktree and state |
 | `lead peek <n>` | open the running agent log with `$PAGER` |
@@ -157,6 +158,10 @@ is advisory (it decides nothing on its own). When a scenario or protected
 path stops an attempted merge (`--merge` or the auto path), `lead finish`
 exits 0, prints the reason, and comments it on the issue. A failing CI check
 is an error (exit 1) and is not posted as a pause.
+
+`lead dispatch` stops the implementation agent at the PR and then runs
+`lead land <issue> --pr <pr>`: review first, finish only when the review
+passed. The implementer never judges or merges its own work (issue #298).
 
 `--override-guardrail` is the only human-only flag: it is the one way past the
 protected-file guardrail. An unattended agent must never pass it.
