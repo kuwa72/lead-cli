@@ -84,6 +84,10 @@ If the issue number is omitted, ask the user for one or run `lead run` to open t
 
 9. Report the PR URL and merge commit to the user.
 
+Under headless `lead dispatch`, the agent stops at PR creation: `lead land`
+runs `lead review` and `lead finish --merge` as the orchestrator. The
+dispatch prompt wins over this interactive flow when they differ.
+
 ## Rules
 
 - Work on the `issue/<number>-<slug>` branch. Do not push to `main`.

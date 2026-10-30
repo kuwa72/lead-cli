@@ -1027,7 +1027,7 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		},
 	}
 	opts.RunningCount = d.RunningCount
-	d.Land = landRunner(cmd, cwd, filepath.Join(filepath.Dir(deps.stateFile()), "logs"))
+	d.Land = landRunner(cwd, filepath.Join(filepath.Dir(deps.stateFile()), "logs"))
 	opts.OnSettingsChange = func(c inbox.Config) {
 		cfg.Agent = c.Agent
 		cfg.AgentMode = c.AgentMode
@@ -1457,7 +1457,7 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 		Launcher: deps.launcher(),
 		Out:      cmd.OutOrStdout(),
 		Notify:   notify.New(notify.Options{Disabled: cfg.NotifyDisabled}),
-		Land:     landRunner(cmd, cwd, filepath.Join(filepath.Dir(stateFile), "logs")),
+		Land:     landRunner(cwd, filepath.Join(filepath.Dir(stateFile), "logs")),
 		Opts: dispatch.Options{
 			Parallel:   parallel,
 			Agent:      agentName,
@@ -1482,20 +1482,20 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 // landRunner runs `lead land` in this binary for a dispatched issue. The
 // subprocess keeps review/finish on the same CLI path a human would use;
 // LEAD_LAND_BIN substitutes a fake in tests (issues #298).
-func landRunner(cmd *cobra.Command, cwd, logDir string) func(context.Context, int, int) error {
+func landRunner(cwd, logDir string) func(context.Context, int, int) error {
 	return func(ctx context.Context, issue, pr int) error {
 		bin := os.Getenv("LEAD_LAND_BIN")
 		if bin == "" {
 			var err error
 			bin, err = os.Executable()
 			if err != nil {
-				return err
+				return fmt.Errorf("land: executable: %w", err)
 			}
 		}
 		if err := os.MkdirAll(logDir, 0o755); err != nil {
 			return fmt.Errorf("land: log dir: %w", err)
 		}
-		logPath := filepath.Join(logDir, fmt.Sprintf("land-%d-%s.log", issue, time.Now().UTC().Format("20060102T150405Z")))
+		logPath := filepath.Join(logDir, fmt.Sprintf("land-%d-%s.log", issue, time.Now().UTC().Format("20060102T150405.000000000Z")))
 		f, err := os.Create(logPath)
 		if err != nil {
 			return fmt.Errorf("land: log: %w", err)

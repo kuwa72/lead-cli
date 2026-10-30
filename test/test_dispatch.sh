@@ -66,6 +66,7 @@ case "$1 $2" in
       echo "gh: Branch not protected (HTTP 404)" >&2; exit 1
     fi ;;
   "api repos/o/r/rules/branches/main") printf '[]' ;;
+  "pr list") printf '9\n' ;;
   *) echo "unexpected gh call: $*" >&2; exit 3 ;;
 esac
 EOF
@@ -74,10 +75,17 @@ cat > "$tmp/bin/claude" <<'EOF'
 for a in "$@"; do printf '<%s>\n' "$a" >> "$AGENT_LOG"; done
 printf 'CWD=%s\n' "$(pwd)" >> "$AGENT_LOG"
 [ -n "${AGENT_FAIL:-}" ] && exit 1
+if [ "${AGENT_CLOSE:-1}" = "1" ]; then touch "$CLOSED_MARK"; fi
+exit 0
+EOF
+cat > "$tmp/bin/land" <<'EOF'
+#!/bin/sh
+printf 'LAND %s\n' "$*" >> "$LAND_LOG"
 touch "$CLOSED_MARK"
 EOF
-chmod +x "$tmp/bin/gh" "$tmp/bin/claude"
+chmod +x "$tmp/bin/gh" "$tmp/bin/claude" "$tmp/bin/land"
 export PATH="$tmp/bin:$PATH"
+export LEAD_LAND_BIN="$tmp/bin/land" LAND_LOG="$tmp/land.log"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 
@@ -119,6 +127,15 @@ import json, sys
 recs = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 assert recs[-1]["issue"] == 7 and recs[-1]["outcome"] == "completed", recs[-1]
 PY
+
+# --- 1.5 agent stops at the PR; dispatch runs land ---------------------------
+rm -f "$CLOSED_MARK"; : > "$AGENT_LOG"; : > "$LAND_LOG"
+out="$(cd "$repo" && AGENT_CLOSE=0 "$tmp/lead" dispatch --once --parallel 1 --agent claude 2>&1)" \
+  || fail "dispatch with landing exited non-zero: $out"
+grep -qxF 'LAND land 7 --pr 9' "$LAND_LOG" || fail "land was not called with issue/pr: $(cat "$LAND_LOG") state=$(cat "$LEAD_STATE_FILE" 2>/dev/null) gh=$(cat "$GH_LOG")"
+grep -q 'lead review' "$AGENT_LOG" && fail "prompt still tells the implementer to review"
+grep -q 'lead finish' "$AGENT_LOG" && fail "prompt still tells the implementer to finish"
+case "$out" in *"#7"*"completed"*) ;; *) fail "landing run did not complete: $out";; esac
 
 # --- 2. failure path: 3 attempts → blocked, then no re-dispatch ---------------
 rm -f "$CLOSED_MARK"; : > "$AGENT_LOG"; : > "$GH_LOG"

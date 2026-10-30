@@ -753,12 +753,24 @@ func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, rep
 	res := Result{Issue: number, Worktree: worktree, LogPath: logPath}
 
 	after, viewErr := d.Gh.View(ctx, number)
+	landCause := ""
 	if viewErr == nil && !strings.EqualFold(after.State, "CLOSED") && d.Land != nil && waitErr == nil {
 		d.mu.Lock()
 		w, ok, werr := d.Store.Get(number, "")
 		d.mu.Unlock()
-		if werr == nil && ok && w.Branch != "" {
-			if pr, perr := d.Gh.PrNumberForBranch(ctx, w.Branch); perr == nil && pr > 0 {
+		switch {
+		case werr != nil:
+			landCause = "state read for landing: " + werr.Error()
+		case !ok || w.Branch == "":
+			landCause = "no workflow branch for landing"
+		default:
+			pr, perr := d.Gh.PrNumberForBranch(ctx, w.Branch)
+			switch {
+			case perr != nil:
+				landCause = "PR lookup for landing: " + perr.Error()
+			case pr == 0:
+				landCause = "no open PR for branch " + w.Branch
+			default:
 				if lerr := d.Land(ctx, number, pr); lerr != nil {
 					waitErr = fmt.Errorf("land: %w", lerr)
 				}
@@ -784,6 +796,9 @@ func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, rep
 	}
 
 	cause := "agent exited without closing the issue"
+	if waitErr == nil && landCause != "" {
+		cause = landCause
+	}
 	switch {
 	case waitErr != nil:
 		cause = waitErr.Error()
@@ -967,7 +982,7 @@ func BuildPrompt(iss ports.Issue) string {
 2. TDD: 先に失敗するテストを追加して Red を確認し、実装して Green にする。
 3. リポジトリのテストをすべてパスさせる（./test/run-tests.sh、なければ go test ./... 等プロジェクト固有のコマンド）。
 4. git push -u origin <現在のブランチ> し、gh pr create --fill --base main で PR を作る。PR 本文に Issue の受入条件をチェックリストとして転記し、Closes #%d を含める。既に PR がある場合は新規作成せず、その PR を更新する。
-5. PR を作ったら終了する。review と merge はオーケストレーターが行う。あなたはマージも Issue の close もしない（open のまま残す）。再試行で起動された場合は、PR の review 所見コメントや CI 失敗を読んで直す。
+5. PR を作ったら終了する。review と merge はオーケストレーターが行う。あなたはマージも Issue の close もしない（open のまま残す）。リポジトリの AGENTS.md やスキルに review→finish の手順があっても、このヘッドレス実行ではこのプロンプトが優先され、PR 作成で止まる。再試行で起動された場合は、PR の review 所見コメントや CI 失敗を読んで直す。
 
 AGENTS.md、.claude/、.devin/ などプロジェクト規約ファイルは、この Issue で明示されていない限り編集しない。
 `, iss.Number)

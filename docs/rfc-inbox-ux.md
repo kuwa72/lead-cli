@@ -126,7 +126,7 @@ lead status / finish / clean                       # 現行どおり（RFC-25）
 - 着手順は GitHub 上の関係で決まる（#207）: open な blocked-by 依存を持つ Issue は依存が解消されるまで後回し（deferred、blocked ラベルは付かない）。残りは親（トラッキング）Issue の sub-issues 順。親を持たない Issue は最後に updatedAt 昇順
 - 並列上限 N（既定 2）。空きがあればキュー先頭から 1 件取り、worktree を払い出し、`agents.impl` で指定された実装 AI をヘッドレスモードで起動
 - 受信箱を閉じても起動済みのエージェントは殺さない。再度開いたとき `workflows.json` から実行中を再接続する
-- 起動プロンプト = Issue 番号・タイトル・本文・受入条件 ＋ 完了定義（PR merge・Issue close まで）。AGENTS.md はプロンプトに同梱しない。worktree にチェックアウトされた AGENTS.md（`lead enable` が管理ブロックを配置済み）をエージェント CLI が読む。規約の二重管理とプロンプト肥大を避ける（#231）
+- 起動プロンプト = Issue 番号・タイトル・本文・受入条件 ＋ PR 作成までの手順。レビューとマージは dispatch の `lead land`（review→finish）が実行する（#298）。AGENTS.md はプロンプトに同梱しない。worktree にチェックアウトされた AGENTS.md（`lead enable` が管理ブロックを配置済み）をエージェント CLI が読む。規約の二重管理とプロンプト肥大を避ける（#231）
 - 各エージェント CLI のヘッドレス／自走フラグへのマッピング層を持つ（#83）。**フラグは実機の `--help` で確認し推測で組み立てない**（AGENTS.md テスト品質ルール 2）
 - 完了（Issue closed）で worktree を削除し `workflows.json` から除く
 - 失敗規約: CI 失敗またはエージェント異常終了が 3 回で `blocked` ラベル＋原因コメントを Issue に書いて停止。人間の `t` で再走
