@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
+	"github.com/kuwa72/lead-cli/internal/issuecheck"
 	"github.com/kuwa72/lead-cli/internal/watchdog"
 )
 
@@ -90,6 +91,35 @@ func Load(path string) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// EnsureFromIssue freezes the issue body's `## シナリオ` section as a stored
+// scenario before implementation starts (issue #295). An existing file is
+// never overwritten: the scenario is the fixed acceptance test for that issue.
+// A body without a section is a no-op, so legacy issues keep the 0/0 path.
+func EnsureFromIssue(stateDir, repoSlug string, issue int, body string) (bool, error) {
+	path := Path(stateDir, repoSlug, issue)
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("scenario: stat %s: %w", path, err)
+	}
+	section, ok := issuecheck.ScenarioSection(body)
+	if !ok {
+		return false, nil
+	}
+	section = strings.TrimSpace(section)
+	if section == "" {
+		return false, fmt.Errorf("scenario: issue #%d has an empty ## シナリオ section", issue)
+	}
+	doc := "## Steps\n\n" + section + "\n"
+	if len(Parse(doc).Steps) == 0 {
+		return false, fmt.Errorf("scenario: issue #%d has no runnable steps under ## シナリオ", issue)
+	}
+	if err := Save(path, doc); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Entry is one stored scenario.

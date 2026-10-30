@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
+	"github.com/kuwa72/lead-cli/internal/issuecheck"
 	"github.com/kuwa72/lead-cli/internal/ledger"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/review"
@@ -308,6 +309,17 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: scenario file %s: %w", prNumber, scenarioFile, statErr)
 	}
 	hasScenario := statErr == nil
+	// A body with a scenario section is a promise that verification exists.
+	// Without a stored scenario the old 0/0 path would merge it unverified
+	// (issue #295); fail closed instead.
+	bodyHasScenario := false
+	if !hasScenario {
+		iss, err := gh.View(ctx, issue)
+		if err != nil {
+			return Result{ChecksPassed: true}, fmt.Errorf("issue #%d: read body (scenario gate): %w", issue, err)
+		}
+		_, bodyHasScenario = issuecheck.ScenarioSection(iss.Body)
+	}
 	comments, err := gh.PrComments(ctx, prNumber)
 	if err != nil {
 		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: comments (scenario gate): %w", prNumber, err)
@@ -338,6 +350,9 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 	case hasScenario:
 		return pause(ctx, gh, issue, Result{ChecksPassed: true,
 			Message: fmt.Sprintf("CI passed for PR #%d, but this issue has a scenario with no passing review result; run `lead review %d` first.", prNumber, prNumber)})
+	case bodyHasScenario:
+		return pause(ctx, gh, issue, Result{ChecksPassed: true,
+			Message: fmt.Sprintf("CI passed for PR #%d, but the issue has a `## シナリオ` and no stored scenario; run `lead ready %d` or `lead scenario add %d` first.", prNumber, issue, issue)})
 	}
 	if err := gh.PrMerge(ctx, prNumber, head); err != nil {
 		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: merge: %w", prNumber, err)

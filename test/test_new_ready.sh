@@ -31,6 +31,7 @@ repo="$tmp/repo"
 git init -q -b main "$repo" || fail "git init failed"
 git -C "$repo" config user.email "t@t"
 git -C "$repo" config user.name "t"
+git -C "$repo" remote add origin git@github.com:o/r.git
 echo x > "$repo/f.txt"
 git -C "$repo" add . && git -C "$repo" commit -qm init
 
@@ -172,6 +173,8 @@ out="$(LEAD_TEST_TTY=1 BODY_SRC="$tmp/valid.md" EDITOR="$tmp/bin/editor" "$tmp/l
 grep -q '^GH issue create --title feat(cli): add lead new --body .* --label risk:a --label ready$' "$GH_LOG" \
   || fail "ready create with risk:a missing: $(cat "$GH_LOG")"
 grep -q 'needs-review' "$GH_LOG" && fail "--ready must not add needs-review: $(cat "$GH_LOG")"
+[ -f "$tmp/state/scenarios/o_r/101.md" ] || fail "--ready did not freeze the scenario outside the worktree"
+grep -q '^## Steps$' "$tmp/state/scenarios/o_r/101.md" || fail "frozen scenario lacks ## Steps"
 
 # --- 5. --body-file is non-interactive and derives the title from the heading -
 : > "$GH_LOG"; : > "$EDITOR_LOG"
@@ -186,6 +189,8 @@ out="$("$tmp/lead" ready 42 2>&1)" || fail "lead ready 42 exited non-zero: $out"
 grep -qxF 'GH issue edit 42 --add-label risk:b' "$GH_LOG" || fail "risk:b not added: $(cat "$GH_LOG")"
 grep -qxF 'GH issue edit 42 --add-label ready' "$GH_LOG" || fail "ready not added: $(cat "$GH_LOG")"
 grep -qxF 'GH issue edit 42 --remove-label needs-review' "$GH_LOG" || fail "needs-review not removed: $(cat "$GH_LOG")"
+[ -f "$tmp/state/scenarios/o_r/42.md" ] || fail "lead ready did not freeze the scenario"
+grep -q '^## Steps$' "$tmp/state/scenarios/o_r/42.md" || fail "frozen scenario lacks ## Steps"
 
 # --- 7. lead ready <n>: invalid body changes no labels ------------------------
 : > "$GH_LOG"
@@ -223,6 +228,7 @@ out="$("$tmp/lead" ready 45 --risk b 2>&1)" || fail "lead ready 45 --risk b exit
 grep -qxF 'GH issue edit 45 --add-label risk:b' "$GH_LOG" || fail "risk:b not added for english body: $(cat "$GH_LOG")"
 grep -qxF 'GH issue edit 45 --add-label ready' "$GH_LOG" || fail "ready not added for english body: $(cat "$GH_LOG")"
 grep -qxF 'GH issue edit 45 --remove-label needs-review' "$GH_LOG" || fail "needs-review not removed for english body: $(cat "$GH_LOG")"
+[ -f "$tmp/state/scenarios/o_r/45.md" ] || fail "english scenario was not frozen"
 
 # --- 11. English body with no risk label and no --risk is still rejected -----
 : > "$GH_LOG"
@@ -242,5 +248,6 @@ set -e
 [ "$status" -eq 1 ] || fail "no-scenario ready exit = $status, want 1: $out"
 case "$out" in *"シナリオ"*) ;; *) fail "no-scenario ready does not list シナリオ: $out";; esac
 grep -q '^GH issue edit' "$GH_LOG" && fail "no-scenario ready must not change labels: $(cat "$GH_LOG")"
+[ ! -e "$tmp/state/scenarios/o_r/46.md" ] || fail "no-scenario ready must not freeze a scenario"
 
 echo "new/ready tests passed"

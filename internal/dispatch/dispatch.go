@@ -37,6 +37,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/logtail"
 	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/scenario"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/watchdog"
 	"github.com/kuwa72/lead-cli/internal/workflow"
@@ -684,6 +685,10 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res 
 	iss, err := d.Gh.View(ctx, number)
 	if err != nil {
 		res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: view: %w", number, err)
+		return res
+	}
+	if _, err := scenario.EnsureFromIssue(filepath.Dir(d.Store.Path), repo, number, iss.Body); err != nil {
+		res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: freeze scenario: %w", number, err)
 		return res
 	}
 

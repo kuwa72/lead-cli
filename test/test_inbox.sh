@@ -243,7 +243,7 @@ tr '\n' ' ' < "$GH_LOG" | grep -q 'issue create.*#7' \
 
 # --- 12. p under HERDR_ENV=1: pager (less) opens the log, herdr stays silent ---
 : > "$HERDR_LOG"; : > "$PAGER_LOG"
-HERDR_ENV=1 LEAD_TEST_INBOX_KEYS='j,j,j,p,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless p failed"
+HERDR_ENV=1 PAGER= LEAD_TEST_INBOX_KEYS='j,j,j,p,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless p failed"
 [ ! -s "$HERDR_LOG" ] || fail "p must not invoke herdr: $(cat "$HERDR_LOG")"
 grep -qxF '</logs/issue-9.log>' "$PAGER_LOG" || fail "p did not open the log via pager: $(cat "$PAGER_LOG")"
 

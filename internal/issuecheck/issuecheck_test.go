@@ -322,6 +322,21 @@ func TestCheck_AcceptsEnglishHeadingsAndBoldScope(t *testing.T) {
 
 // issue #264: an English body still needs somewhere to state what is out of
 // scope; acceptance criteria alone is not enough.
+// issue #295: `lead ready` freezes the scenario written in the issue body.
+func TestScenarioSection_ReturnsTheBodySection(t *testing.T) {
+	body := "# title\n\n## シナリオ\n\n1. `lead ready 42` → ready が付く\n2. `go test ./...` が通る\n\n## メモ\n\n- ignored\n"
+	got, ok := ScenarioSection(body)
+	if !ok {
+		t.Fatal("ScenarioSection did not find ## シナリオ")
+	}
+	if !strings.Contains(got, "lead ready 42") || strings.Contains(got, "ignored") {
+		t.Errorf("section = %q, want the scenario lines only", got)
+	}
+	if _, ok := ScenarioSection("# title\n\n## 受入条件\n\n- [ ] x\n"); ok {
+		t.Error("ScenarioSection found a section in a body without one")
+	}
+}
+
 func TestCheck_RejectsEnglishBodyWithoutScope(t *testing.T) {
 	body := `# title
 

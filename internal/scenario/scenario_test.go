@@ -307,3 +307,51 @@ func TestRunTimesOutHangingTests(t *testing.T) {
 		t.Fatalf("timeout took %s, want a bounded wait", elapsed)
 	}
 }
+
+// issue #295: ready freezes the issue body's ## シナリオ as a ## Steps
+// scenario outside the worktree; a second ready must not overwrite it.
+func TestEnsureFromIssue_FreezesOnce(t *testing.T) {
+	stateDir := t.TempDir()
+	body := "# title\n\n## シナリオ\n\n1. `lead ready 42` → ready が付く\n2. `go test ./...` が通る\n"
+	created, err := EnsureFromIssue(stateDir, "o/r", 42, body)
+	if err != nil {
+		t.Fatalf("EnsureFromIssue: %v", err)
+	}
+	if !created {
+		t.Fatal("EnsureFromIssue did not create the scenario")
+	}
+	path := Path(stateDir, "o/r", 42)
+	raw, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !strings.HasPrefix(raw, "## Steps\n\n1.") {
+		t.Errorf("stored scenario = %q, want a ## Steps document", raw)
+	}
+	if got := len(Parse(raw).Steps); got != 2 {
+		t.Errorf("parsed steps = %d, want 2", got)
+	}
+
+	created, err = EnsureFromIssue(stateDir, "o/r", 42, "# title\n\n## シナリオ\n\n1. `different`\n")
+	if err != nil {
+		t.Fatalf("second EnsureFromIssue: %v", err)
+	}
+	if created {
+		t.Error("EnsureFromIssue overwrote an existing scenario")
+	}
+	raw, _ = Load(path)
+	if !strings.Contains(raw, "lead ready 42") {
+		t.Errorf("frozen scenario changed: %q", raw)
+	}
+}
+
+func TestEnsureFromIssue_NoSectionIsANoop(t *testing.T) {
+	stateDir := t.TempDir()
+	created, err := EnsureFromIssue(stateDir, "o/r", 43, "# title\n\n## 受入条件\n\n- [ ] x\n")
+	if err != nil || created {
+		t.Fatalf("EnsureFromIssue(no section) = %v, %v; want false, nil", created, err)
+	}
+	if _, err := os.Stat(Path(stateDir, "o/r", 43)); !os.IsNotExist(err) {
+		t.Errorf("no-section issue got a scenario file: %v", err)
+	}
+}

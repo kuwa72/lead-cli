@@ -17,6 +17,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/ledger"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/scenario"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/testutil"
 )
@@ -1358,5 +1359,34 @@ func TestOnce_RecordsReconnectedSettleInLedger(t *testing.T) {
 	}
 	if len(recs) != 1 {
 		t.Fatalf("records after second reconnect = %d, want 1", len(recs))
+	}
+}
+
+// issue #295: dispatch freezes the issue body's scenario before the agent
+// starts, so the implementation cannot influence it.
+func TestOnce_FreezesBodyScenarioBeforeLaunch(t *testing.T) {
+	d, gh, _, l := newFixture(t, 7)
+	iss := gh.Issues[7]
+	iss.Body = "# x\n\n## シナリオ\n\n1. `go test ./...` が通る\n"
+	gh.Issues[7] = iss
+	l.OnWait = func(c launchCall) error {
+		path := scenario.Path(filepath.Dir(d.Store.Path), "o/r", 7)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("scenario not frozen before launch: %v", err)
+		} else if !strings.Contains(string(raw), "## Steps") {
+			t.Errorf("frozen scenario = %q, want ## Steps", raw)
+		}
+		iss := gh.Issues[7]
+		iss.State = "CLOSED"
+		gh.Issues[7] = iss
+		return nil
+	}
+
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(l.Calls) != 1 {
+		t.Fatalf("launch calls = %d, want 1", len(l.Calls))
 	}
 }
