@@ -13,6 +13,6 @@ Issue #42: feat: thing
 2. TDD: 先に失敗するテストを追加して Red を確認し、実装して Green にする。
 3. リポジトリのテストをすべてパスさせる（./test/run-tests.sh、なければ go test ./... 等プロジェクト固有のコマンド）。
 4. git push -u origin <現在のブランチ> し、gh pr create --fill --base main で PR を作る。PR 本文に Issue の受入条件をチェックリストとして転記し、Closes #42 を含める。既に PR がある場合は新規作成せず、その PR を更新する。
-5. PR を作ったら終了する。review と merge はオーケストレーターが行う。あなたはマージも Issue の close もしない（open のまま残す）。
+5. PR を作ったら終了する。review と merge はオーケストレーターが行う。あなたはマージも Issue の close もしない（open のまま残す）。再試行で起動された場合は、PR の review 所見コメントや CI 失敗を読んで直す。
 
 AGENTS.md、.claude/、.devin/ などプロジェクト規約ファイルは、この Issue で明示されていない限り編集しない。

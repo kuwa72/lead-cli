@@ -101,6 +101,9 @@ func (o *Options) sleep(d time.Duration) {
 // (issue #273). Empty check lists keep waiting (checks not registered yet,
 // like bin/ci-wait).
 func WaitChecks(ctx context.Context, gh ports.GhClient, pr int, timeout, interval time.Duration, sleep func(time.Duration)) error {
+	if sleep == nil {
+		sleep = time.Sleep
+	}
 	deadline := time.Now().Add(timeout)
 	for {
 		if err := ctx.Err(); err != nil {

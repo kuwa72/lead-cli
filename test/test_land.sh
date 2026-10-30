@@ -38,6 +38,17 @@ fi
 exit 0
 EOF
 chmod +x "$tmp/bin/fake-lead"
+cat > "$tmp/bin/gh" <<'EOF'
+#!/bin/sh
+if [ "$1 $2" = "issue view" ]; then
+  printf '{"number":42,"title":"land","body":"","state":"CLOSED","labels":[]}'
+else
+  echo "unexpected gh call: $*" >&2
+  exit 3
+fi
+EOF
+chmod +x "$tmp/bin/gh"
+export PATH="$tmp/bin:$PATH"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
 cd "$repo"

@@ -2389,7 +2389,7 @@ func runLand(cmd *cobra.Command, deps Deps, raw string) error {
 	}
 	pr, _ := cmd.Flags().GetInt("pr")
 	if pr < 0 {
-		return fmt.Errorf("land: --pr must be positive, got %d", pr)
+		return fmt.Errorf("land: --pr must not be negative, got %d", pr)
 	}
 	if pr == 0 {
 		w, ok, err := (&state.Store{Path: deps.stateFile()}).Get(issue, "")
@@ -2416,7 +2416,7 @@ func runLand(cmd *cobra.Command, deps Deps, raw string) error {
 	}
 	workDir, err := deps.workDir()
 	if err != nil {
-		return err
+		return fmt.Errorf("land: working directory: %w", err)
 	}
 	run := func(args ...string) error {
 		c := exec.CommandContext(cmd.Context(), bin, args...)
@@ -2437,7 +2437,20 @@ func runLand(cmd *cobra.Command, deps Deps, raw string) error {
 	if err := run("review", strconv.Itoa(pr), "--issue", strconv.Itoa(issue)); err != nil {
 		return err
 	}
-	return run("finish", strconv.Itoa(issue), "--merge", "--pr", strconv.Itoa(pr))
+	if err := run("finish", strconv.Itoa(issue), "--merge", "--pr", strconv.Itoa(pr)); err != nil {
+		return err
+	}
+	// finish exits 0 on a pause (scenario/protected path). For the dispatcher
+	// that is a failed landing, not a success: leave the issue open and say so
+	// so the cause reaches the retry/blocked comment.
+	iss, err := deps.gh().View(cmd.Context(), issue)
+	if err != nil {
+		return fmt.Errorf("land: re-check #%d: %w", issue, err)
+	}
+	if !strings.EqualFold(iss.State, "CLOSED") {
+		return fmt.Errorf("land: #%d is still open after finish (see the issue comment for the pause reason)", issue)
+	}
+	return nil
 }
 
 // runScenarioAdd stores one scenario outside the repository (issue #276).
