@@ -12,6 +12,8 @@
 8. `lead finish <issue-number> --merge` でマージと Issue クローズまで行う（`gh pr merge` を直接実行しない）。CI pass・生成シナリオ全 pass・規約ファイル非該当のときだけマージされる。承認ステップは無い。
 9. 関連 Issue が closed になったことを確認する。
 
+ヘッドレス dispatch では、実装エージェントは PR 作成までで停止する。レビューとマージはオーケストレーター（`lead land`）が実行するので、dispatch のプロンプトが本ブロックより優先される。
+
 停止時の扱い：
 
 - `--override-guardrail` は人間専用（human-only）のフラグで、エージェントは付けない。規約ファイル保護を解除できる唯一の手段。

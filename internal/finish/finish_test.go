@@ -751,3 +751,18 @@ func TestRun_ScenarioInBodyWithoutStoredScenarioPauses(t *testing.T) {
 		t.Errorf("pause comment = %+v, want a scenario explanation", fake.Comments)
 	}
 }
+
+// issue #298 review: callers such as `lead land` pass nil for the sleep
+// function; pending checks must not panic.
+func TestWaitChecks_NilSleepDefaultsToTimeSleep(t *testing.T) {
+	fake := &testutil.FakeGhClient{ChecksSeq: [][]ports.PRCheck{
+		{{Name: "test", Bucket: "pending"}},
+		{{Name: "test", Bucket: "pass"}},
+	}}
+	if err := WaitChecks(context.Background(), fake, 7, time.Second, time.Millisecond, nil); err != nil {
+		t.Fatalf("WaitChecks(nil sleep) = %v, want nil", err)
+	}
+	if fake.ChecksCalls != 2 {
+		t.Errorf("check polls = %d, want 2 (pending then pass)", fake.ChecksCalls)
+	}
+}

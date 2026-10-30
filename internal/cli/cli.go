@@ -408,10 +408,10 @@ Git and GitHub.`,
 		Long: `Foreground dispatcher (docs/rfc-inbox-ux.md §7). Each pass lists open
 issues labelled "ready", skips locally blocked ones, and for up to
 --parallel of them creates a worktree and runs the agent non-interactively
-with the issue and completion definition as its prompt. When the agent
-returns and the issue is closed on GitHub, the worktree and state record
-are removed. Otherwise the attempt is counted; after 3 failures the issue
-is relabelled "blocked" with the cause posted as a comment.
+with the issue as its prompt. The agent stops at the pull request; dispatch
+then runs ` + "`lead land`" + ` (review -> finish) and the issue is closed. If
+landing fails, the attempt is counted; after 3 failures the issue is
+relabelled "blocked" with the cause posted as a comment.
 Without --once the pass repeats every --interval until Ctrl-C; running
 agents are not killed on exit.`,
 		Args: cobra.NoArgs,
@@ -865,7 +865,25 @@ Single-run CLI mode keeps working without any server. Stops on SIGINT/SIGTERM.`,
 		},
 	}
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, statsCmd, cleanCmd, peekCmd, stopCmd, finishCmd, postmergeCmd, reviewCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
+	landCmd := &cobra.Command{
+		Use:   "land <issue-number>",
+		Short: "Review then finish a dispatched PR (orchestrator step)",
+		Long: `Run the landing station for a dispatched issue: ` + "`lead review <pr>`" + ` first,
+then ` + "`lead finish <issue> --merge`" + ` only when the review passed. This is what
+` + "`lead dispatch`" + ` runs after the implementation agent stops at the PR, so
+the implementer does not judge or merge its own work (issue #298).
+
+The PR is resolved from the workflow branch unless --pr is given. Review
+failure stops before finish; finish pauses (scenario/protected path) leave
+the issue open for the dispatcher to retry or block.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runLand(cmd, deps, args[0])
+		},
+	}
+	landCmd.Flags().Int("pr", 0, "PR number (default: resolve from the workflow branch)")
+
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, statsCmd, cleanCmd, peekCmd, stopCmd, finishCmd, postmergeCmd, reviewCmd, landCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	root.AddCommand(newCmd, readyCmd, scenarioCmd)
 	return root
@@ -1009,6 +1027,7 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		},
 	}
 	opts.RunningCount = d.RunningCount
+	d.Land = landRunner(cwd, filepath.Join(filepath.Dir(deps.stateFile()), "logs"))
 	opts.OnSettingsChange = func(c inbox.Config) {
 		cfg.Agent = c.Agent
 		cfg.AgentMode = c.AgentMode
@@ -1438,6 +1457,7 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 		Launcher: deps.launcher(),
 		Out:      cmd.OutOrStdout(),
 		Notify:   notify.New(notify.Options{Disabled: cfg.NotifyDisabled}),
+		Land:     landRunner(cwd, filepath.Join(filepath.Dir(stateFile), "logs")),
 		Opts: dispatch.Options{
 			Parallel:   parallel,
 			Agent:      agentName,
@@ -1457,6 +1477,38 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return d.Loop(ctx, interval)
+}
+
+// landRunner runs `lead land` in this binary for a dispatched issue. The
+// subprocess keeps review/finish on the same CLI path a human would use;
+// LEAD_LAND_BIN substitutes a fake in tests (issues #298).
+func landRunner(cwd, logDir string) func(context.Context, int, int) error {
+	return func(ctx context.Context, issue, pr int) error {
+		bin := os.Getenv("LEAD_LAND_BIN")
+		if bin == "" {
+			var err error
+			bin, err = os.Executable()
+			if err != nil {
+				return fmt.Errorf("land: executable: %w", err)
+			}
+		}
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
+			return fmt.Errorf("land: log dir: %w", err)
+		}
+		logPath := filepath.Join(logDir, fmt.Sprintf("land-%d-%s.log", issue, time.Now().UTC().Format("20060102T150405.000000000Z")))
+		f, err := os.Create(logPath)
+		if err != nil {
+			return fmt.Errorf("land: log: %w", err)
+		}
+		defer f.Close()
+		c := exec.CommandContext(ctx, bin, "land", strconv.Itoa(issue), "--pr", strconv.Itoa(pr))
+		c.Dir = cwd
+		c.Stdout, c.Stderr = f, f
+		if err := c.Run(); err != nil {
+			return fmt.Errorf("land failed (log: %s): %w", logPath, err)
+		}
+		return nil
+	}
 }
 
 // runWork implements `lead run <number>` (and the hidden `work` alias):
@@ -2322,6 +2374,81 @@ func runReview(cmd *cobra.Command, deps Deps, raw string) error {
 	}
 	if !res.Passed {
 		return fmt.Errorf("%w (PR #%d; see the PR comment)", review.ErrNeedsWork, pr)
+	}
+	return nil
+}
+
+// runLand implements `lead land <issue>` (issue #298): the orchestrator's
+// landing station. Review first; finish only when the review passed. The two
+// steps are separate CLI processes so this stays a thin, testable seam
+// (LEAD_LAND_BIN replaces the binary in tests).
+func runLand(cmd *cobra.Command, deps Deps, raw string) error {
+	issue, err := strconv.Atoi(raw)
+	if err != nil || issue <= 0 {
+		return fmt.Errorf("land: invalid issue number %q", raw)
+	}
+	pr, _ := cmd.Flags().GetInt("pr")
+	if pr < 0 {
+		return fmt.Errorf("land: --pr must not be negative, got %d", pr)
+	}
+	if pr == 0 {
+		w, ok, err := (&state.Store{Path: deps.stateFile()}).Get(issue, "")
+		if err != nil {
+			return fmt.Errorf("land: %w", err)
+		}
+		if !ok || w.Branch == "" {
+			return fmt.Errorf("land: no workflow for #%d; pass --pr", issue)
+		}
+		pr, err = deps.gh().PrNumberForBranch(cmd.Context(), w.Branch)
+		if err != nil {
+			return fmt.Errorf("land: PR for %s: %w", w.Branch, err)
+		}
+		if pr == 0 {
+			return fmt.Errorf("land: no open PR for %s; pass --pr", w.Branch)
+		}
+	}
+	bin := os.Getenv("LEAD_LAND_BIN")
+	if bin == "" {
+		bin, err = os.Executable()
+		if err != nil {
+			return fmt.Errorf("land: %w", err)
+		}
+	}
+	workDir, err := deps.workDir()
+	if err != nil {
+		return fmt.Errorf("land: working directory: %w", err)
+	}
+	run := func(args ...string) error {
+		c := exec.CommandContext(cmd.Context(), bin, args...)
+		c.Dir = workDir
+		c.Stdout, c.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+		if err := c.Run(); err != nil {
+			return fmt.Errorf("land: %s: %w", strings.Join(args, " "), err)
+		}
+		return nil
+	}
+	// Review reads the CI result; wait for it before asking for a verdict.
+	// Tests use a fake lead binary and set LEAD_TEST_SKIP_LAND_CI.
+	if os.Getenv("LEAD_TEST_SKIP_LAND_CI") == "" {
+		if err := finish.WaitChecks(cmd.Context(), deps.gh(), pr, finish.DefaultTimeout, finish.DefaultPollInterval, nil); err != nil {
+			return fmt.Errorf("land: CI: %w", err)
+		}
+	}
+	if err := run("review", strconv.Itoa(pr), "--issue", strconv.Itoa(issue)); err != nil {
+		return err
+	}
+	if err := run("finish", strconv.Itoa(issue), "--merge", "--pr", strconv.Itoa(pr)); err != nil {
+		return err
+	}
+	// finish exits 0 on a pause (scenario/protected path). For the dispatcher
+	// that is a failed landing, not a success: leave the issue open and say so
+	// so the cause reaches the retry/blocked comment.
+	iss, err := deps.gh().View(cmd.Context(), issue)
+	if err != nil {
+		return fmt.Errorf("land: re-check #%d: %w", issue, err)
+	}
+	if !strings.EqualFold(iss.State, "CLOSED") {
+		return fmt.Errorf("land: #%d is still open after finish (see the issue comment for the pause reason)", issue)
 	}
 	return nil
 }

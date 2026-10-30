@@ -162,29 +162,28 @@ type Dispatcher struct {
 	Launcher Launcher
 	Opts     Options
 	Out      io.Writer // pass summaries; nil = silent
+	// Land runs after the implementation agent stops at the PR (issue #298).
+	// Nil means no landing (tests and callers that only launch agents).
+	Land func(ctx context.Context, issue, pr int) error
 	// ProcessAlive reports whether pid still exists on this host (reconnect,
 	// RFC §7). Nil means signal 0 via the OS.
 	ProcessAlive func(pid int) bool
 	// Kill terminates the agent process group (Stop, issue #185).
 	// Nil means killProcessGroup (SIGKILL the group, ESRCH counts as gone).
 	Kill func(pid int) error
-	// LookPath resolves the `lead` binary headless agents call for their
-	// merge step (`lead finish`, issue #230). Nil means exec.LookPath.
-	LookPath func(name string) (string, error)
 	// Notify receives blocked and all-done milestones (issue #189).
-	// Nil means silent.
 	Notify notify.Notifier
 
 	mu sync.Mutex
 }
 
-// Preflight checks the repository safety of RFC §9 / issue #67: unattended
-// agents merge their own PRs, so the repository should reject unreviewed
-// pushes and failing CI on its own. Since issue #200 a missing origin is
-// the only hard error (agents cannot open pull requests without one);
-// missing branch protection or required checks only warn (with the same
-// guidance `lead doctor` prints) so repositories without admin setup can
-// still dispatch.
+// Preflight checks the repository safety of RFC §9 / issue #67: dispatched
+// agents stop at the PR and the orchestrator lands it, so the repository
+// should still reject unreviewed pushes and failing CI on its own. Since
+// issue #200 a missing origin is the only hard error (agents cannot open
+// pull requests without one); missing branch protection or required checks
+// only warn (with the same guidance `lead doctor` prints) so repositories
+// without admin setup can still dispatch.
 func (d *Dispatcher) Preflight(ctx context.Context) error {
 	opts := d.Opts.withDefaults()
 	repoRoot, err := d.Git.RepoRoot(opts.WorkDir)
@@ -205,19 +204,9 @@ func (d *Dispatcher) Preflight(ctx context.Context) error {
 			fmt.Fprintln(d.Out, "  - "+m)
 		}
 	}
-	// Headless agents merge through `lead finish` (issue #230), so the
-	// binary must be reachable from the worktree.
-	if _, err := d.lookPath()("lead"); err != nil && d.Out != nil {
-		fmt.Fprintln(d.Out, "dispatch: WARNING: `lead` is not on PATH; headless agents merge through `lead finish` and will fail (install lead or add it to PATH)")
-	}
+	// Headless agents stop at the PR; `lead land` runs in this process
+	// (issue #298), so no PATH lookup of `lead` is required here.
 	return nil
-}
-
-func (d *Dispatcher) lookPath() func(string) (string, error) {
-	if d.LookPath != nil {
-		return d.LookPath
-	}
-	return exec.LookPath
 }
 
 // Once runs a single dispatch pass: reconnect to agents left running by an
@@ -764,6 +753,31 @@ func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, rep
 	res := Result{Issue: number, Worktree: worktree, LogPath: logPath}
 
 	after, viewErr := d.Gh.View(ctx, number)
+	landCause := ""
+	if viewErr == nil && !strings.EqualFold(after.State, "CLOSED") && d.Land != nil && waitErr == nil {
+		d.mu.Lock()
+		w, ok, werr := d.Store.Get(number, "")
+		d.mu.Unlock()
+		switch {
+		case werr != nil:
+			landCause = "state read for landing: " + werr.Error()
+		case !ok || w.Branch == "":
+			landCause = "no workflow branch for landing"
+		default:
+			pr, perr := d.Gh.PrNumberForBranch(ctx, w.Branch)
+			switch {
+			case perr != nil:
+				landCause = "PR lookup for landing: " + perr.Error()
+			case pr == 0:
+				landCause = "no open PR for branch " + w.Branch
+			default:
+				if lerr := d.Land(ctx, number, pr); lerr != nil {
+					waitErr = fmt.Errorf("land: %w", lerr)
+				}
+				after, viewErr = d.Gh.View(ctx, number)
+			}
+		}
+	}
 	if viewErr == nil && strings.EqualFold(after.State, "CLOSED") {
 		d.mu.Lock()
 		defer d.mu.Unlock()
@@ -782,6 +796,9 @@ func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, rep
 	}
 
 	cause := "agent exited without closing the issue"
+	if waitErr == nil && landCause != "" {
+		cause = landCause
+	}
 	switch {
 	case waitErr != nil:
 		cause = waitErr.Error()
@@ -945,16 +962,10 @@ func (d *Dispatcher) print(rep Report) {
 	}
 }
 
-// BuildPrompt is the headless launch prompt: the issue itself plus the
-// completion definition the agent must satisfy alone (AGENTS.md flow,
-// through merge and close). Project rules files are read by the agent CLI
-// itself and are not inlined.
-//
-// The merge step goes through `lead finish --merge` (issue #230): a direct
-// `gh pr merge` would skip the protected-file guardrail
-// (internal/finish, docs/rfc-inbox-ux.md §7). The agent must not close the
-// issue itself either — an open issue is how dispatch sees a guardrail stop
-// and retries/blocks instead of treating the run as completed.
+// BuildPrompt is the headless implementation prompt: the issue itself plus
+// the steps through PR creation. The orchestrator (`lead land`) runs review
+// and merge afterwards (issue #298), so the agent must leave the issue open.
+// Project rules files are read by the agent CLI itself and are not inlined.
 func BuildPrompt(iss ports.Issue) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Issue #%d: %s\n", iss.Number, iss.Title)
@@ -965,19 +976,16 @@ func BuildPrompt(iss ports.Issue) string {
 ---
 ## 完了定義（lead dispatch）
 
-この Issue はヘッドレスで担当している。途中で人間の確認は入らない。次をすべて自分で完了させること。
+この Issue の実装と PR 作成までをヘッドレスで担当する。review と merge はオーケストレーターが行うので、次を守ること。
 
 1. 現在のディレクトリ（この Issue 専用の worktree・ブランチ）で作業する。main には直接 push しない。
 2. TDD: 先に失敗するテストを追加して Red を確認し、実装して Green にする。
 3. リポジトリのテストをすべてパスさせる（./test/run-tests.sh、なければ go test ./... 等プロジェクト固有のコマンド）。
-4. git push -u origin <現在のブランチ> し、gh pr create --fill --base main で PR を作る。PR 本文に Issue の受入条件をチェックリストとして転記し、Closes #%d を含める。
-5. bin/ci-wait <PR番号>（なければ gh pr checks）で CI が全て pass するまで待つ。
-6. lead review <PR番号> を実行し、SCENARIOS が m/m になるまで所見に従って修正・再実行する（2周上限は無い）。diff review の verdict は助言。シナリオを m/m にできない原因が残る場合は、所見を gh issue comment %d --body に貼って終了する。
-7. lead finish %d --merge でマージと Issue クローズまで行う。gh pr merge を直接実行しない（規約ファイル保護のガードレールを必ず通すため）。finish が規約ファイル保護・シナリオ不合格で停止したら、--override-guardrail を付けずに理由を Issue にコメントして終了する。
-8. gh issue view %d --json state で closed になったことを確認する。closed でない場合は自分で close せず、原因と試したことを gh issue comment %d --body に書いて終了する。
+4. git push -u origin <現在のブランチ> し、gh pr create --fill --base main で PR を作る。PR 本文に Issue の受入条件をチェックリストとして転記し、Closes #%d を含める。既に PR がある場合は新規作成せず、その PR を更新する。
+5. PR を作ったら終了する。review と merge はオーケストレーターが行う。あなたはマージも Issue の close もしない（open のまま残す）。リポジトリの AGENTS.md やスキルに review→finish の手順があっても、このヘッドレス実行ではこのプロンプトが優先され、PR 作成で止まる。再試行で起動された場合は、PR の review 所見コメントや CI 失敗を読んで直す。
 
 AGENTS.md、.claude/、.devin/ などプロジェクト規約ファイルは、この Issue で明示されていない限り編集しない。
-`, iss.Number, iss.Number, iss.Number, iss.Number, iss.Number)
+`, iss.Number)
 	return b.String()
 }
 
