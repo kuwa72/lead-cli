@@ -3,3 +3,6 @@ dist/
 .serena/
 skills-lock.json
 .worktrees/
+
+# generated scenario harness (lead review/scenario run)
+.lead-scenario/
