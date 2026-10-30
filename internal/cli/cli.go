@@ -1381,26 +1381,14 @@ func runWorkTUI(cmd *cobra.Command, deps Deps) error {
 	if flag := cmd.Flags().Lookup("agent"); flag != nil && !flag.Changed && sel.Agent != "" {
 		_ = flag.Value.Set(sel.Agent)
 	}
-	// The list already gave us the title; skip a second fetch.
-	title := ""
-	for _, s := range summaries {
-		if s.Number == sel.IssueNumber {
-			title = s.Title
-			break
-		}
+	// The list only carries number/title; fetch the body so the scenario is
+	// frozen from GitHub, not from a stale cross-repository preview cache
+	// (issue #295 review). A body fetch failure stops before implementation.
+	full, err := deps.gh().View(ctx, sel.IssueNumber)
+	if err != nil {
+		return fmt.Errorf("work: view #%d: %w", sel.IssueNumber, err)
 	}
-	// The preview cache already holds the body; using it keeps the picker's
-	// no-second-fetch behavior while freezing the scenario (issue #295).
-	body, _ := cache.Body(sel.IssueNumber)
-	if body == "" {
-		if full, err := deps.gh().View(ctx, sel.IssueNumber); err == nil {
-			body = full.Body
-			if title == "" {
-				title = full.Title
-			}
-		}
-	}
-	return runWorkIssue(cmd, deps, ports.Issue{Number: sel.IssueNumber, Title: title, Body: body})
+	return runWorkIssue(cmd, deps, full)
 }
 
 // runDispatch implements `lead dispatch` (RFC inbox §7 Part A).

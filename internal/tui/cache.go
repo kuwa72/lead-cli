@@ -53,39 +53,21 @@ func (c *Cache) path(number int) string {
 
 // Get returns the cached preview text (hit=false on miss/expiry/corruption).
 func (c *Cache) Get(number int) (text string, ok bool) {
-	e, ok := c.cached(number)
-	if !ok {
-		return "", false
-	}
-	return fmt.Sprintf("#%d %s\n\n%s", e.Number, e.Title, e.Body), true
-}
-
-// Body returns the cached issue body. The work picker uses it to freeze the
-// scenario without a second gh call on a cache hit (issue #295).
-func (c *Cache) Body(number int) (string, bool) {
-	e, ok := c.cached(number)
-	if !ok {
-		return "", false
-	}
-	return e.Body, true
-}
-
-func (c *Cache) cached(number int) (cacheEntry, bool) {
 	if c.disabled() {
-		return cacheEntry{}, false
+		return "", false
 	}
 	raw, err := os.ReadFile(c.path(number))
 	if err != nil {
-		return cacheEntry{}, false
+		return "", false
 	}
 	var e cacheEntry
 	if err := json.Unmarshal(raw, &e); err != nil {
-		return cacheEntry{}, false
+		return "", false
 	}
 	if e.Number != number || time.Since(e.FetchedAt) > c.ttl() {
-		return cacheEntry{}, false
+		return "", false
 	}
-	return e, true
+	return fmt.Sprintf("#%d %s\n\n%s", e.Number, e.Title, e.Body), true
 }
 
 // Set stores a preview.

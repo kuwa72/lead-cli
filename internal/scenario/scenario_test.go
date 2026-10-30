@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -353,5 +354,45 @@ func TestEnsureFromIssue_NoSectionIsANoop(t *testing.T) {
 	}
 	if _, err := os.Stat(Path(stateDir, "o/r", 43)); !os.IsNotExist(err) {
 		t.Errorf("no-section issue got a scenario file: %v", err)
+	}
+}
+
+// issue #295 review: ready and dispatch can race; the freeze must be
+// write-once, with exactly one creator.
+func TestEnsureFromIssue_ConcurrentWritesOnce(t *testing.T) {
+	stateDir := t.TempDir()
+	body := "# x\n\n## シナリオ\n\n1. `go test ./...` が通る\n"
+	var wg sync.WaitGroup
+	created := make(chan bool, 8)
+	errs := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := EnsureFromIssue(stateDir, "o/r", 44, body)
+			created <- ok
+			if err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(created)
+	close(errs)
+	n := 0
+	for ok := range created {
+		if ok {
+			n++
+		}
+	}
+	for err := range errs {
+		t.Errorf("EnsureFromIssue: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("creators = %d, want exactly 1", n)
+	}
+	raw, err := Load(Path(stateDir, "o/r", 44))
+	if err != nil || !strings.Contains(raw, "## Steps") {
+		t.Errorf("frozen scenario = %q, %v", raw, err)
 	}
 }
