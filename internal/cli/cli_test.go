@@ -161,8 +161,13 @@ func runningHeadlessDeps(t *testing.T, startedAgo time.Duration, logAge time.Dur
 	}
 }
 
+// activityAge is mid-way through the "5m" bucket: ages truncate to whole
+// minutes and filesystem mtimes may be rounded forward, so an exact 5m can
+// render "4m" (issue #300).
+const activityAge = 5*time.Minute + 30*time.Second
+
 func TestInboxRunningRowShowsActivity(t *testing.T) {
-	out, err := runLeadCmd(t, runningHeadlessDeps(t, 90*time.Minute, 5*time.Minute))
+	out, err := runLeadCmd(t, runningHeadlessDeps(t, 90*time.Minute, activityAge))
 	if err != nil {
 		t.Fatalf("headless inbox: %v\n%s", err, out)
 	}
@@ -174,7 +179,7 @@ func TestInboxRunningRowShowsActivity(t *testing.T) {
 
 func TestInboxRunningPreviewShowsActivity(t *testing.T) {
 	t.Setenv("LEAD_TEST_INBOX_WIDTH", "200")
-	out, err := runLeadCmd(t, runningHeadlessDeps(t, 90*time.Minute, 5*time.Minute))
+	out, err := runLeadCmd(t, runningHeadlessDeps(t, 90*time.Minute, activityAge))
 	if err != nil {
 		t.Fatalf("headless inbox: %v\n%s", err, out)
 	}
