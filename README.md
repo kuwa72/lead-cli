@@ -146,7 +146,9 @@ documented in [docs/config.md](docs/config.md).
 2. The generated scenarios recorded by `lead review <pr>` are all passing
    (`SCENARIOS: n/n`). No scenario configured skips this layer. If a
    scenario file exists but no review result was recorded, finish pauses
-   instead of merging.
+   instead of merging. `lead ready` freezes the issue body's `## シナリオ`
+   before implementation; a body that declares one but has no stored
+   scenario also pauses.
 3. The PR does not touch protected convention files (`AGENTS.md`, `.github/`,
    `.claude/`, …).
 

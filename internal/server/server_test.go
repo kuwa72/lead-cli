@@ -242,3 +242,24 @@ func initGitRepo(t *testing.T) string {
 }
 
 func testStore(path string) *state.Store { return &state.Store{Path: path} }
+
+// issue #295: the socket work.dispatch path freezes the body scenario too.
+func TestWorkDispatch_FreezesBodyScenario(t *testing.T) {
+	deps, fake, stateFile := testDeps(t)
+	repo := initGitRepo(t)
+	deps.WorkDir = repo
+	iss := fake.Issues[36]
+	iss.Body = "# x\n\n## シナリオ\n\n1. `go test ./...` が通る\n"
+	fake.Issues[36] = iss
+	sock, _ := serve(t, deps)
+
+	_ = callOp(t, sock, "work.dispatch", map[string]any{"issue": 36})
+	path := filepath.Join(filepath.Dir(stateFile), "scenarios", "local", "36.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("scenario not frozen: %v", err)
+	}
+	if !strings.Contains(string(raw), "## Steps") {
+		t.Errorf("scenario = %q, want ## Steps", raw)
+	}
+}

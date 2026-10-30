@@ -19,7 +19,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kuwa72/lead-cli/internal/adapters/git"
 	"github.com/kuwa72/lead-cli/internal/ports"
+	"github.com/kuwa72/lead-cli/internal/scenario"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/workflow"
 )
@@ -231,6 +233,13 @@ func (s *Server) workDispatch(ctx context.Context, args json.RawMessage) (json.R
 	iss, err := s.deps.Gh.View(ctx, a.Issue)
 	if err != nil {
 		return nil, err
+	}
+	slug := ""
+	if root, err := s.deps.Git.RepoRoot(s.deps.WorkDir); err == nil {
+		slug = git.RepoSlug(s.deps.Git.OriginURL(root))
+	}
+	if _, err := scenario.EnsureFromIssue(filepath.Dir(s.deps.StateFile), slug, a.Issue, iss.Body); err != nil {
+		return nil, fmt.Errorf("work.dispatch: freeze scenario: %w", err)
 	}
 	res, err := workflow.Start(ctx, s.deps.Git, s.store(), workflow.StartOptions{
 		Issue: iss, Mode: a.Mode, Branch: a.Branch, Part: a.Part,

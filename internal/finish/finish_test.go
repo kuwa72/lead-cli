@@ -724,3 +724,30 @@ func TestRun_ZeroScenarioIgnoresHead(t *testing.T) {
 		t.Fatalf("Result = %+v, %v; want a merge with a 0/0 marker", res, err)
 	}
 }
+
+// issue #295: an issue body that carries ## シナリオ must not merge with no
+// stored scenario/review result (the old 0/0 path).
+func TestRun_ScenarioInBodyWithoutStoredScenarioPauses(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	seedWithPR(t, path, state.Workflow{})
+	fake := baseFake()
+	iss := fake.Issues[36]
+	iss.Body = "# x\n\n## シナリオ\n\n1. `go test ./...` が通る\n"
+	fake.Issues[36] = iss
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Merged || len(fake.MergeCalls) != 0 {
+		t.Errorf("merged with no stored scenario: res=%+v merges=%v", res, fake.MergeCalls)
+	}
+	if !strings.Contains(res.Message, "scenario") {
+		t.Errorf("message does not explain the missing scenario: %q", res.Message)
+	}
+	if len(fake.Comments) != 1 || !strings.Contains(fake.Comments[0].Body, "scenario") {
+		t.Errorf("pause comment = %+v, want a scenario explanation", fake.Comments)
+	}
+}

@@ -492,8 +492,10 @@ section (` + "`## シナリオ`" + ` or ` + "`## Scenarios`" + `) with at least 
 containing a backtick-quoted command or a test path, and a risk
 label (risk:a or risk:b). Use --risk to apply the classification when the
 issue has none. On success it labels the issue risk:* and ready and removes
-needs-review. On failure it changes no labels, lists the missing items, and
-exits 1.`,
+needs-review. It also freezes the issue's scenario outside the worktree so
+the implementation agent cannot edit it (issue #295); an existing frozen
+scenario is never overwritten. On failure it changes no labels, lists the
+missing items, and exits 1.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runReady(cmd, deps, args[0])
@@ -671,7 +673,9 @@ returns to the dispatch queue.`,
 The merge is computed, not approved (issue #278): CI must pass (skipped or
 neutral checks do not count), every generated scenario recorded by
 ` + "`lead review`" + ` must pass, and the PR must not touch protected convention
-files. ` + "`review:pass`" + ` is advisory and is not required.
+files. ` + "`review:pass`" + ` is advisory and is not required. An issue body with
+` + "`## シナリオ`" + ` but no stored scenario also pauses: ` + "`lead ready`" + ` freezes it
+before implementation (issue #295).
 
 Pauses — confirm/never policy, auto-merge-disabled repos, protected files,
 and failing or stale scenarios — exit 0 with the next step and leave the
@@ -1141,6 +1145,14 @@ func runNew(cmd *cobra.Command, deps Deps) error {
 	if err != nil {
 		return fmt.Errorf("lead new: %w", err)
 	}
+	if ready {
+		if _, err := scenario.EnsureFromIssue(filepath.Dir(deps.stateFile()), deps.repoSlug(), ref.Number, body); err != nil {
+			// Never leave an issue ready without the frozen acceptance test.
+			_ = deps.gh().IssueRemoveLabel(cmd.Context(), ref.Number, inbox.LabelReady)
+			_ = deps.gh().IssueAddLabel(cmd.Context(), ref.Number, inbox.LabelNeedsReview)
+			return fmt.Errorf("lead new: #%d created but the scenario was not frozen: %w", ref.Number, err)
+		}
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), "created #%d %s\n", ref.Number, ref.URL)
 	return nil
 }
@@ -1225,6 +1237,9 @@ func runReady(cmd *cobra.Command, deps Deps, raw string) error {
 	}
 
 	ctx := cmd.Context()
+	if _, err := scenario.EnsureFromIssue(filepath.Dir(deps.stateFile()), deps.repoSlug(), n, iss.Body); err != nil {
+		return fmt.Errorf("lead ready: %w", err)
+	}
 	risk := issuecheck.RiskFromLabels(checkLabels)
 	if err := deps.gh().IssueAddLabel(ctx, n, risk); err != nil {
 		return fmt.Errorf("lead ready: add %s: %w", risk, err)
@@ -1368,15 +1383,14 @@ func runWorkTUI(cmd *cobra.Command, deps Deps) error {
 	if flag := cmd.Flags().Lookup("agent"); flag != nil && !flag.Changed && sel.Agent != "" {
 		_ = flag.Value.Set(sel.Agent)
 	}
-	// The list already gave us the title; skip a second fetch.
-	title := ""
-	for _, s := range summaries {
-		if s.Number == sel.IssueNumber {
-			title = s.Title
-			break
-		}
+	// The list only carries number/title; fetch the body so the scenario is
+	// frozen from GitHub, not from a stale cross-repository preview cache
+	// (issue #295 review). A body fetch failure stops before implementation.
+	full, err := deps.gh().View(ctx, sel.IssueNumber)
+	if err != nil {
+		return fmt.Errorf("work: view #%d: %w", sel.IssueNumber, err)
 	}
-	return runWorkIssue(cmd, deps, ports.Issue{Number: sel.IssueNumber, Title: title})
+	return runWorkIssue(cmd, deps, full)
 }
 
 // runDispatch implements `lead dispatch` (RFC inbox §7 Part A).
@@ -1486,6 +1500,9 @@ func runWorkIssue(cmd *cobra.Command, deps Deps, iss ports.Issue) error {
 		return fmt.Errorf("work #%d: working directory: %w", iss.Number, err)
 	}
 	store := &state.Store{Path: deps.stateFile()}
+	if _, err := scenario.EnsureFromIssue(filepath.Dir(store.Path), deps.repoSlug(), iss.Number, iss.Body); err != nil {
+		return fmt.Errorf("work #%d: freeze scenario: %w", iss.Number, err)
+	}
 	res, err := workflow.Start(cmd.Context(), deps.gitRunner(), store, workflow.StartOptions{
 		Issue: iss, Mode: mode, Branch: branchFlag, Part: part,
 		Worktree: worktreeOpt, WorkDir: cwd, AgentMode: agentMode,

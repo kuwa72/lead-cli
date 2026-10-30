@@ -120,6 +120,13 @@ func Check(body string, labels []string) []string {
 	return missing
 }
 
+// ScenarioSection returns the lines under `## シナリオ` / `## Scenarios`.
+// It is exported for lead ready and dispatch, which freeze the scenario
+// outside the worktree before an agent starts (issue #295).
+func ScenarioSection(body string) (string, bool) {
+	return sectionAny(body, ScenarioHeadings)
+}
+
 // Message renders missing items as the human-facing bullet list.
 func Message(missing []string) string {
 	var b strings.Builder

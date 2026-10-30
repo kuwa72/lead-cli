@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -305,5 +306,93 @@ func TestRunTimesOutHangingTests(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Fatalf("timeout took %s, want a bounded wait", elapsed)
+	}
+}
+
+// issue #295: ready freezes the issue body's ## シナリオ as a ## Steps
+// scenario outside the worktree; a second ready must not overwrite it.
+func TestEnsureFromIssue_FreezesOnce(t *testing.T) {
+	stateDir := t.TempDir()
+	body := "# title\n\n## シナリオ\n\n1. `lead ready 42` → ready が付く\n2. `go test ./...` が通る\n"
+	created, err := EnsureFromIssue(stateDir, "o/r", 42, body)
+	if err != nil {
+		t.Fatalf("EnsureFromIssue: %v", err)
+	}
+	if !created {
+		t.Fatal("EnsureFromIssue did not create the scenario")
+	}
+	path := Path(stateDir, "o/r", 42)
+	raw, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !strings.HasPrefix(raw, "## Steps\n\n1.") {
+		t.Errorf("stored scenario = %q, want a ## Steps document", raw)
+	}
+	if got := len(Parse(raw).Steps); got != 2 {
+		t.Errorf("parsed steps = %d, want 2", got)
+	}
+
+	created, err = EnsureFromIssue(stateDir, "o/r", 42, "# title\n\n## シナリオ\n\n1. `different`\n")
+	if err != nil {
+		t.Fatalf("second EnsureFromIssue: %v", err)
+	}
+	if created {
+		t.Error("EnsureFromIssue overwrote an existing scenario")
+	}
+	raw, _ = Load(path)
+	if !strings.Contains(raw, "lead ready 42") {
+		t.Errorf("frozen scenario changed: %q", raw)
+	}
+}
+
+func TestEnsureFromIssue_NoSectionIsANoop(t *testing.T) {
+	stateDir := t.TempDir()
+	created, err := EnsureFromIssue(stateDir, "o/r", 43, "# title\n\n## 受入条件\n\n- [ ] x\n")
+	if err != nil || created {
+		t.Fatalf("EnsureFromIssue(no section) = %v, %v; want false, nil", created, err)
+	}
+	if _, err := os.Stat(Path(stateDir, "o/r", 43)); !os.IsNotExist(err) {
+		t.Errorf("no-section issue got a scenario file: %v", err)
+	}
+}
+
+// issue #295 review: ready and dispatch can race; the freeze must be
+// write-once, with exactly one creator.
+func TestEnsureFromIssue_ConcurrentWritesOnce(t *testing.T) {
+	stateDir := t.TempDir()
+	body := "# x\n\n## シナリオ\n\n1. `go test ./...` が通る\n"
+	var wg sync.WaitGroup
+	created := make(chan bool, 8)
+	errs := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := EnsureFromIssue(stateDir, "o/r", 44, body)
+			created <- ok
+			if err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(created)
+	close(errs)
+	n := 0
+	for ok := range created {
+		if ok {
+			n++
+		}
+	}
+	for err := range errs {
+		t.Errorf("EnsureFromIssue: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("creators = %d, want exactly 1", n)
+	}
+	raw, err := Load(Path(stateDir, "o/r", 44))
+	if err != nil || !strings.Contains(raw, "## Steps") {
+		t.Errorf("frozen scenario = %q, %v", raw, err)
 	}
 }

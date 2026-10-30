@@ -26,6 +26,7 @@ repo="$tmp/repo"
 git init -q -b main "$repo"
 git -C "$repo" config user.email "t@t"
 git -C "$repo" config user.name "t"
+git -C "$repo" remote add origin git@github.com:o/r.git
 echo x > "$repo/f.txt"
 git -C "$repo" add .
 git -C "$repo" commit -qm init
@@ -41,7 +42,7 @@ case "$1 $2" in
     if [ "$4 $5" = "--json url" ]; then
       printf '{"url":"https://github.com/acme/widgets/issues/36"}'
     else
-      printf '{"number":36,"title":"ports adapter","body":"demo body","state":"OPEN"}'
+      printf '{"number":36,"title":"ports adapter","body":"# x\\n\\n## シナリオ\\n\\n1. `go test ./...` が通る","state":"OPEN"}'
     fi ;;
   "config get") echo 'could not find key' >&2; exit 1 ;;
   *) echo "unexpected gh call: $@" >&2; exit 3 ;;
@@ -69,12 +70,13 @@ git -C "$repo" rev-parse --verify --quiet refs/heads/issue/36-ports-adapter >/de
   || fail "work branch not created via picker"
 [ -f "$XDG_CACHE_HOME/lead/issues/36.json" ] || fail "preview cache not written"
 grep -q "GHLOG issue view 36 --json" "$GH_ARGS_LOG" || fail "preview did not fetch issue"
+[ -f "$HOME/.local/state/lead/scenarios/o_r/36.md" ] || fail "picker work did not freeze the scenario"
 
-# --- 2. second run: preview served from cache (no new gh view call) ---
+# --- 2. second run: preview served from cache; work fetches the body once --
 views_before=$(grep -c "GHLOG issue view 36 --json" "$GH_ARGS_LOG")
 LEAD_TEST_SELECTION=36:agy "$tmp/lead" run >/dev/null || fail "re-work via picker failed"
 views_after=$(grep -c "GHLOG issue view 36 --json" "$GH_ARGS_LOG")
-[ "$views_after" = "$views_before" ] || fail "cache miss: gh view calls $views_before -> $views_after"
+[ "$views_after" -eq $((views_before + 1)) ] || fail "work body fetch count: $views_before -> $views_after (want +1)"
 
 # --- 3. browser selection: URL fetch + self opener, no branch, no state ---
 git -C "$repo" checkout -q main
