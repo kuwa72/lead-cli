@@ -170,7 +170,8 @@ protected-file guardrail. An unattended agent must never pass it.
 the inbox; they no longer affect the merge decision (issue #278).
 
 Run `lead review <pr>` when you want the generated scenario tests to run;
-`lead dispatch` keeps that step in its completion definition.
+`lead dispatch` calls `lead land` after the agent stops at the PR (review
+then finish), so the implementer never runs that step itself.
 
 ## Conventions
 

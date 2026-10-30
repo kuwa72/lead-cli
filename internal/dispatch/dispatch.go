@@ -171,23 +171,19 @@ type Dispatcher struct {
 	// Kill terminates the agent process group (Stop, issue #185).
 	// Nil means killProcessGroup (SIGKILL the group, ESRCH counts as gone).
 	Kill func(pid int) error
-	// LookPath resolves the `lead` binary headless agents call for their
-	// merge step (`lead finish`, issue #230). Nil means exec.LookPath.
-	LookPath func(name string) (string, error)
 	// Notify receives blocked and all-done milestones (issue #189).
-	// Nil means silent.
 	Notify notify.Notifier
 
 	mu sync.Mutex
 }
 
-// Preflight checks the repository safety of RFC §9 / issue #67: unattended
-// agents merge their own PRs, so the repository should reject unreviewed
-// pushes and failing CI on its own. Since issue #200 a missing origin is
-// the only hard error (agents cannot open pull requests without one);
-// missing branch protection or required checks only warn (with the same
-// guidance `lead doctor` prints) so repositories without admin setup can
-// still dispatch.
+// Preflight checks the repository safety of RFC §9 / issue #67: dispatched
+// agents stop at the PR and the orchestrator lands it, so the repository
+// should still reject unreviewed pushes and failing CI on its own. Since
+// issue #200 a missing origin is the only hard error (agents cannot open
+// pull requests without one); missing branch protection or required checks
+// only warn (with the same guidance `lead doctor` prints) so repositories
+// without admin setup can still dispatch.
 func (d *Dispatcher) Preflight(ctx context.Context) error {
 	opts := d.Opts.withDefaults()
 	repoRoot, err := d.Git.RepoRoot(opts.WorkDir)
@@ -758,7 +754,7 @@ func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, rep
 
 	after, viewErr := d.Gh.View(ctx, number)
 	landed := false
-	if viewErr == nil && !strings.EqualFold(after.State, "CLOSED") && d.Land != nil {
+	if viewErr == nil && !strings.EqualFold(after.State, "CLOSED") && d.Land != nil && waitErr == nil {
 		d.mu.Lock()
 		w, ok, werr := d.Store.Get(number, "")
 		d.mu.Unlock()
@@ -981,7 +977,7 @@ func BuildPrompt(iss ports.Issue) string {
 1. 現在のディレクトリ（この Issue 専用の worktree・ブランチ）で作業する。main には直接 push しない。
 2. TDD: 先に失敗するテストを追加して Red を確認し、実装して Green にする。
 3. リポジトリのテストをすべてパスさせる（./test/run-tests.sh、なければ go test ./... 等プロジェクト固有のコマンド）。
-4. git push -u origin <現在のブランチ> し、gh pr create --fill --base main で PR を作る。PR 本文に Issue の受入条件をチェックリストとして転記し、Closes #%d を含める。
+4. git push -u origin <現在のブランチ> し、gh pr create --fill --base main で PR を作る。PR 本文に Issue の受入条件をチェックリストとして転記し、Closes #%d を含める。既に PR がある場合は新規作成せず、その PR を更新する。
 5. PR を作ったら終了する。review と merge はオーケストレーターが行う。あなたはマージも Issue の close もしない（open のまま残す）。
 
 AGENTS.md、.claude/、.devin/ などプロジェクト規約ファイルは、この Issue で明示されていない限り編集しない。

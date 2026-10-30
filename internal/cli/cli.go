@@ -1027,7 +1027,7 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		},
 	}
 	opts.RunningCount = d.RunningCount
-	d.Land = landRunner(cmd, cwd)
+	d.Land = landRunner(cmd, cwd, filepath.Join(filepath.Dir(deps.stateFile()), "logs"))
 	opts.OnSettingsChange = func(c inbox.Config) {
 		cfg.Agent = c.Agent
 		cfg.AgentMode = c.AgentMode
@@ -1457,7 +1457,7 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 		Launcher: deps.launcher(),
 		Out:      cmd.OutOrStdout(),
 		Notify:   notify.New(notify.Options{Disabled: cfg.NotifyDisabled}),
-		Land:     landRunner(cmd, cwd),
+		Land:     landRunner(cmd, cwd, filepath.Join(filepath.Dir(stateFile), "logs")),
 		Opts: dispatch.Options{
 			Parallel:   parallel,
 			Agent:      agentName,
@@ -1482,7 +1482,7 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 // landRunner runs `lead land` in this binary for a dispatched issue. The
 // subprocess keeps review/finish on the same CLI path a human would use;
 // LEAD_LAND_BIN substitutes a fake in tests (issues #298).
-func landRunner(cmd *cobra.Command, cwd string) func(context.Context, int, int) error {
+func landRunner(cmd *cobra.Command, cwd, logDir string) func(context.Context, int, int) error {
 	return func(ctx context.Context, issue, pr int) error {
 		bin := os.Getenv("LEAD_LAND_BIN")
 		if bin == "" {
@@ -1492,11 +1492,22 @@ func landRunner(cmd *cobra.Command, cwd string) func(context.Context, int, int) 
 				return err
 			}
 		}
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
+			return fmt.Errorf("land: log dir: %w", err)
+		}
+		logPath := filepath.Join(logDir, fmt.Sprintf("land-%d-%s.log", issue, time.Now().UTC().Format("20060102T150405Z")))
+		f, err := os.Create(logPath)
+		if err != nil {
+			return fmt.Errorf("land: log: %w", err)
+		}
+		defer f.Close()
 		c := exec.CommandContext(ctx, bin, "land", strconv.Itoa(issue), "--pr", strconv.Itoa(pr))
 		c.Dir = cwd
-		c.Stdout = io.Discard
-		c.Stderr = cmd.ErrOrStderr()
-		return c.Run()
+		c.Stdout, c.Stderr = f, f
+		if err := c.Run(); err != nil {
+			return fmt.Errorf("land failed (log: %s): %w", logPath, err)
+		}
+		return nil
 	}
 }
 
@@ -2377,6 +2388,9 @@ func runLand(cmd *cobra.Command, deps Deps, raw string) error {
 		return fmt.Errorf("land: invalid issue number %q", raw)
 	}
 	pr, _ := cmd.Flags().GetInt("pr")
+	if pr < 0 {
+		return fmt.Errorf("land: --pr must be positive, got %d", pr)
+	}
 	if pr == 0 {
 		w, ok, err := (&state.Store{Path: deps.stateFile()}).Get(issue, "")
 		if err != nil {
@@ -2412,6 +2426,13 @@ func runLand(cmd *cobra.Command, deps Deps, raw string) error {
 			return fmt.Errorf("land: %s: %w", strings.Join(args, " "), err)
 		}
 		return nil
+	}
+	// Review reads the CI result; wait for it before asking for a verdict.
+	// Tests use a fake lead binary and set LEAD_LAND_SKIP_CI.
+	if os.Getenv("LEAD_LAND_SKIP_CI") == "" {
+		if err := finish.WaitChecks(cmd.Context(), deps.gh(), pr, finish.DefaultTimeout, finish.DefaultPollInterval, nil); err != nil {
+			return fmt.Errorf("land: CI: %w", err)
+		}
 	}
 	if err := run("review", strconv.Itoa(pr), "--issue", strconv.Itoa(issue)); err != nil {
 		return err

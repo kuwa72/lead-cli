@@ -121,6 +121,14 @@ grep -q '^GH issue close ' "$GH_LOG" && fail "guarded PR's issue was closed: $(c
 case "$out" in *"#7 retry"*) ;; *) fail "guarded issue should be retried, got: $out";; esac
 grep -q '"attempts": 1' "$LEAD_STATE_FILE" || fail "guardrail stop was not counted as a failed attempt: $(cat "$LEAD_STATE_FILE")"
 
+# Land failures retry up to MaxAttempts (3), then block.
+for i in 2 3; do
+  out="$(cd "$repo" && "$tmp/lead" dispatch --once --parallel 1 --agent claude 2>&1)" || fail "dispatch retry $i exited non-zero: $out"
+done
+grep -q '"attempts": 3' "$LEAD_STATE_FILE" || fail "land failure did not reach 3 attempts: $(cat "$LEAD_STATE_FILE")"
+case "$out" in *"#7 blocked"*) ;; *) fail "guarded issue was not blocked after 3 attempts: $out";; esac
+grep -qxF 'GH issue edit 7 --add-label blocked' "$GH_LOG" || fail "blocked label was not added: $(cat "$GH_LOG")"
+
 # --- 2. 規約ファイルを含まない PR は finish 経由でマージ・クローズされる -----
 export ISSUE=8 FILES="internal/x.go"
 rm -f "$MERGED_MARK" "$CLOSED_MARK"

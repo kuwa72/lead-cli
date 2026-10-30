@@ -26,6 +26,7 @@ echo x > "$repo/f.txt"
 git -C "$repo" add . && git -C "$repo" commit -qm init
 
 export LAND_LOG="$tmp/land.log"
+export LEAD_LAND_SKIP_CI=1
 : > "$LAND_LOG"
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/fake-lead" <<'EOF'
@@ -55,5 +56,14 @@ status=$?
 set -e
 [ "$status" -eq 1 ] || fail "review failure exit = $status, want 1: $out"
 [ "$(cat "$LAND_LOG")" = "review 7 --issue 42" ] || fail "finish ran after a failed review: $(cat "$LAND_LOG")"
+
+# --- 3. negative --pr is rejected before any subprocess --------------------
+: > "$LAND_LOG"
+set +e
+out="$("$tmp/lead" land 42 --pr -1 2>&1)"
+status=$?
+set -e
+[ "$status" -eq 1 ] || fail "negative --pr exit = $status, want 1: $out"
+[ -s "$LAND_LOG" ] && fail "negative --pr ran a subprocess: $(cat "$LAND_LOG")"
 
 echo "land behavioral checks passed"
