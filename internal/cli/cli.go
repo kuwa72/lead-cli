@@ -408,10 +408,10 @@ Git and GitHub.`,
 		Long: `Foreground dispatcher (docs/rfc-inbox-ux.md §7). Each pass lists open
 issues labelled "ready", skips locally blocked ones, and for up to
 --parallel of them creates a worktree and runs the agent non-interactively
-with the issue and completion definition as its prompt. When the agent
-returns and the issue is closed on GitHub, the worktree and state record
-are removed. Otherwise the attempt is counted; after 3 failures the issue
-is relabelled "blocked" with the cause posted as a comment.
+with the issue as its prompt. The agent stops at the pull request; dispatch
+then runs ` + "`lead land`" + ` (review -> finish) and the issue is closed. If
+landing fails, the attempt is counted; after 3 failures the issue is
+relabelled "blocked" with the cause posted as a comment.
 Without --once the pass repeats every --interval until Ctrl-C; running
 agents are not killed on exit.`,
 		Args: cobra.NoArgs,
@@ -2428,8 +2428,8 @@ func runLand(cmd *cobra.Command, deps Deps, raw string) error {
 		return nil
 	}
 	// Review reads the CI result; wait for it before asking for a verdict.
-	// Tests use a fake lead binary and set LEAD_LAND_SKIP_CI.
-	if os.Getenv("LEAD_LAND_SKIP_CI") == "" {
+	// Tests use a fake lead binary and set LEAD_TEST_SKIP_LAND_CI.
+	if os.Getenv("LEAD_TEST_SKIP_LAND_CI") == "" {
 		if err := finish.WaitChecks(cmd.Context(), deps.gh(), pr, finish.DefaultTimeout, finish.DefaultPollInterval, nil); err != nil {
 			return fmt.Errorf("land: CI: %w", err)
 		}

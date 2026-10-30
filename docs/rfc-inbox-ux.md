@@ -130,7 +130,7 @@ lead status / finish / clean                       # 現行どおり（RFC-25）
 - 各エージェント CLI のヘッドレス／自走フラグへのマッピング層を持つ（#83）。**フラグは実機の `--help` で確認し推測で組み立てない**（AGENTS.md テスト品質ルール 2）
 - 完了（Issue closed）で worktree を削除し `workflows.json` から除く
 - 失敗規約: CI 失敗またはエージェント異常終了が 3 回で `blocked` ラベル＋原因コメントを Issue に書いて停止。人間の `t` で再走
-- ガードレール保護: PR の変更ファイルに `AGENTS.md`・`.github/`・CI 定義・`.claude/`・`.devin/` が含まれる場合、マージポリシーを `confirm` に落とし受信箱「止まってる」に出す（AI が自分の規約を書き換えない）。ヘッドレス dispatch の完了定義はマージを `lead finish --merge` 経由にし（#230）、`--merge` ではこのガードレールを解除しない。解除は人間の明示 `--override-guardrail` のみ
+- ガードレール保護: PR の変更ファイルに `AGENTS.md`・`.github/`・CI 定義・`.claude/`・`.devin/` が含まれる場合、マージポリシーを `confirm` に落とし受信箱「止まってる」に出す（AI が自分の規約を書き換えない）。ヘッドレス dispatch の完了定義はマージを `lead finish --merge` 経由にし（#230）、`--merge` ではこのガードレールを解除しない。解除は人間の明示 `--override-guardrail` のみ（#298 以降、dispatch は実装者ではなく `lead land` が review→finish を実行する）
 
 ## 8. 仕様 AI
 
@@ -146,7 +146,7 @@ lead status / finish / clean                       # 現行どおり（RFC-25）
 |---|---|
 | CI 必須・ブランチ保護 | `lead doctor`・`lead enable` で検査・報告し、未設定なら警告付きでディスパッチを続行する（#67、#200で起動拒否を緩和） |
 | 受入条件の追跡 | 実装 AI は受入条件を PR 本文にチェックリスト転記。「最近マージ」の詳細でそれを表示 |
-| 規約ファイル保護 | §7 のガードレール保護。ヘッドレス完了定義も `lead finish` 経由で、直接 `gh pr merge` しない（#230） |
+| 規約ファイル保護 | §7 のガードレール保護。ヘッドレス完了定義も `lead finish` 経由で、直接 `gh pr merge` しない（#230）。#298 以降は dispatch が `lead land`（review→finish）を回す |
 | 暴走の上限 | 並列上限・失敗 3 回停止・1 Issue 1 セッション（AGENTS.md セッション管理ルール） |
 | 監査 | すべて Issue コメントに残る。`lead` のログは補助 |
 

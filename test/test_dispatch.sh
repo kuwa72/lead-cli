@@ -80,9 +80,6 @@ chmod +x "$tmp/bin/gh" "$tmp/bin/claude"
 export PATH="$tmp/bin:$PATH"
 
 CGO_ENABLED=0 go build -o "$tmp/lead" ./cmd/lead || fail "go build failed"
-# Headless agents merge through `lead finish` (issue #230), so the binary is
-# on PATH in the worktree like a real install.
-ln -sf "$tmp/lead" "$tmp/bin/lead"
 
 # --- 0. unprotected main → warn, then proceed (no refusal, issue #200) -----
 rm -f "$CLOSED_MARK"; : > "$GH_LOG"; : > "$AGENT_LOG"

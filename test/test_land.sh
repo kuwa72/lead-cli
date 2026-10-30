@@ -26,7 +26,7 @@ echo x > "$repo/f.txt"
 git -C "$repo" add . && git -C "$repo" commit -qm init
 
 export LAND_LOG="$tmp/land.log"
-export LEAD_LAND_SKIP_CI=1
+export LEAD_TEST_SKIP_LAND_CI=1
 : > "$LAND_LOG"
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/fake-lead" <<'EOF'
@@ -41,7 +41,7 @@ chmod +x "$tmp/bin/fake-lead"
 cat > "$tmp/bin/gh" <<'EOF'
 #!/bin/sh
 if [ "$1 $2" = "issue view" ]; then
-  printf '{"number":42,"title":"land","body":"","state":"CLOSED","labels":[]}'
+  printf '{"number":42,"title":"land","body":"","state":"%s","labels":[]}' "${GH_STATE:-CLOSED}"
 else
   echo "unexpected gh call: $*" >&2
   exit 3
@@ -76,5 +76,17 @@ status=$?
 set -e
 [ "$status" -eq 1 ] || fail "negative --pr exit = $status, want 1: $out"
 [ -s "$LAND_LOG" ] && fail "negative --pr ran a subprocess: $(cat "$LAND_LOG")"
+
+# --- 4. finish exits 0 but the issue stays open: land fails for retry ------
+: > "$LAND_LOG"
+set +e
+out="$(GH_STATE=OPEN "$tmp/lead" land 42 --pr 7 2>&1)"
+status=$?
+set -e
+[ "$status" -eq 1 ] || fail "open-after-finish exit = $status, want 1: $out"
+case "$(cat "$LAND_LOG")" in
+  *"finish 42 --merge --pr 7"*) ;;
+  *) fail "open-after-finish did not run finish: $(cat "$LAND_LOG")" ;;
+esac
 
 echo "land behavioral checks passed"

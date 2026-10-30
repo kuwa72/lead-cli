@@ -753,14 +753,12 @@ func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, rep
 	res := Result{Issue: number, Worktree: worktree, LogPath: logPath}
 
 	after, viewErr := d.Gh.View(ctx, number)
-	landed := false
 	if viewErr == nil && !strings.EqualFold(after.State, "CLOSED") && d.Land != nil && waitErr == nil {
 		d.mu.Lock()
 		w, ok, werr := d.Store.Get(number, "")
 		d.mu.Unlock()
 		if werr == nil && ok && w.Branch != "" {
 			if pr, perr := d.Gh.PrNumberForBranch(ctx, w.Branch); perr == nil && pr > 0 {
-				landed = true
 				if lerr := d.Land(ctx, number, pr); lerr != nil {
 					waitErr = fmt.Errorf("land: %w", lerr)
 				}
@@ -786,9 +784,6 @@ func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, rep
 	}
 
 	cause := "agent exited without closing the issue"
-	if landed && waitErr == nil {
-		cause = "review/finish did not close the issue (see land output)"
-	}
 	switch {
 	case waitErr != nil:
 		cause = waitErr.Error()
@@ -952,16 +947,10 @@ func (d *Dispatcher) print(rep Report) {
 	}
 }
 
-// BuildPrompt is the headless launch prompt: the issue itself plus the
-// completion definition the agent must satisfy alone (AGENTS.md flow,
-// through merge and close). Project rules files are read by the agent CLI
-// itself and are not inlined.
-//
-// The merge step goes through `lead finish --merge` (issue #230): a direct
-// `gh pr merge` would skip the protected-file guardrail
-// (internal/finish, docs/rfc-inbox-ux.md §7). The agent must not close the
-// issue itself either — an open issue is how dispatch sees a guardrail stop
-// and retries/blocks instead of treating the run as completed.
+// BuildPrompt is the headless implementation prompt: the issue itself plus
+// the steps through PR creation. The orchestrator (`lead land`) runs review
+// and merge afterwards (issue #298), so the agent must leave the issue open.
+// Project rules files are read by the agent CLI itself and are not inlined.
 func BuildPrompt(iss ports.Issue) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Issue #%d: %s\n", iss.Number, iss.Title)
