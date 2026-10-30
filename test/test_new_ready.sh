@@ -250,4 +250,18 @@ case "$out" in *"シナリオ"*) ;; *) fail "no-scenario ready does not list シ
 grep -q '^GH issue edit' "$GH_LOG" && fail "no-scenario ready must not change labels: $(cat "$GH_LOG")"
 [ ! -e "$tmp/state/scenarios/o_r/46.md" ] || fail "no-scenario ready must not freeze a scenario"
 
+# --- 13. lead new --ready: a freeze failure must not leave the issue ready ---
+chmod 500 "$tmp/state/scenarios/o_r"
+: > "$GH_LOG"
+set +e
+out="$(LEAD_TEST_TTY=1 BODY_SRC="$tmp/valid.md" EDITOR="$tmp/bin/editor" "$tmp/lead" new --ready 2>&1)"
+status=$?
+set -e
+chmod 700 "$tmp/state/scenarios/o_r"
+[ "$status" -eq 1 ] || fail "unwritable scenario dir exit = $status, want 1: $out"
+grep -qxF 'GH issue edit 103 --remove-label ready' "$GH_LOG" \
+  || fail "freeze failure left ready in place: $(cat "$GH_LOG")"
+grep -qxF 'GH issue edit 103 --add-label needs-review' "$GH_LOG" \
+  || fail "freeze failure did not return the issue to needs-review: $(cat "$GH_LOG")"
+
 echo "new/ready tests passed"

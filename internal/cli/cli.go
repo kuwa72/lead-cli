@@ -1389,7 +1389,18 @@ func runWorkTUI(cmd *cobra.Command, deps Deps) error {
 			break
 		}
 	}
-	return runWorkIssue(cmd, deps, ports.Issue{Number: sel.IssueNumber, Title: title})
+	// The preview cache already holds the body; using it keeps the picker's
+	// no-second-fetch behavior while freezing the scenario (issue #295).
+	body, _ := cache.Body(sel.IssueNumber)
+	if body == "" {
+		if full, err := deps.gh().View(ctx, sel.IssueNumber); err == nil {
+			body = full.Body
+			if title == "" {
+				title = full.Title
+			}
+		}
+	}
+	return runWorkIssue(cmd, deps, ports.Issue{Number: sel.IssueNumber, Title: title, Body: body})
 }
 
 // runDispatch implements `lead dispatch` (RFC inbox §7 Part A).

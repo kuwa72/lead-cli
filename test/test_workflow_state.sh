@@ -28,6 +28,7 @@ repo="$tmp/repo"
 git init -q -b main "$repo" || fail "git init failed"
 git -C "$repo" config user.email "t@t"
 git -C "$repo" config user.name "t"
+git -C "$repo" remote add origin git@github.com:o/r.git
 echo x > "$repo/f.txt"
 git -C "$repo" add .
 git -C "$repo" commit -qm init || fail "fixture commit failed"
@@ -36,7 +37,7 @@ mkdir -p "$tmp/bin"
 cat > "$tmp/bin/gh" <<'EOF'
 #!/bin/sh
 if [ "$1 $2" = "issue view" ]; then
-  printf '{"number":36,"title":"ports adapter","body":"b","state":"OPEN"}'
+  printf '{"number":36,"title":"ports adapter","body":"# x\\n\\n## シナリオ\\n\\n1. `go test ./...` が通る","state":"OPEN"}'
 else
   echo "unexpected gh call: $@" >&2; exit 3
 fi
@@ -53,6 +54,8 @@ STATE="$HOME/.local/state/lead/workflows.json"
 "$tmp/lead" run 36 --worktree || fail "lead run 36 --worktree failed"
 [ -f "$repo/.worktrees/issue-36/f.txt" ] || fail "auto worktree not checked out"
 [ -f "$STATE" ] || fail "state file not created under temp HOME"
+[ -f "$HOME/.local/state/lead/scenarios/o_r/36.md" ] || fail "lead run did not freeze the scenario"
+grep -q '^## Steps$' "$HOME/.local/state/lead/scenarios/o_r/36.md" || fail "frozen scenario lacks ## Steps"
 python3 -c "import json;d=json.load(open('$STATE'));assert len(d['workflows'])==1 and d['workflows'][0]['issue']==36, d" \
   || fail "state record missing for #36"
 

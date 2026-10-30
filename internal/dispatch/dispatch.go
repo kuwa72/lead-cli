@@ -667,8 +667,11 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res 
 	res = Result{Issue: number}
 	started := time.Now()
 	repo := ""
+	slug := ""
 	if root, err := d.Git.RepoRoot(opts.WorkDir); err == nil {
-		repo = RepoKey(d.Git.OriginURL(root))
+		origin := d.Git.OriginURL(root)
+		repo = RepoKey(origin)
+		slug = git.RepoSlug(origin)
 	}
 	defer func() {
 		// On cancellation reconnect owns the record only while the PID is
@@ -687,7 +690,7 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res 
 		res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: view: %w", number, err)
 		return res
 	}
-	if _, err := scenario.EnsureFromIssue(filepath.Dir(d.Store.Path), repo, number, iss.Body); err != nil {
+	if _, err := scenario.EnsureFromIssue(filepath.Dir(d.Store.Path), slug, number, iss.Body); err != nil {
 		res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: freeze scenario: %w", number, err)
 		return res
 	}

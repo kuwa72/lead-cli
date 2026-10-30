@@ -352,7 +352,7 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 			Message: fmt.Sprintf("CI passed for PR #%d, but this issue has a scenario with no passing review result; run `lead review %d` first.", prNumber, prNumber)})
 	case bodyHasScenario:
 		return pause(ctx, gh, issue, Result{ChecksPassed: true,
-			Message: fmt.Sprintf("CI passed for PR #%d, but the issue has a `## シナリオ` and no stored scenario; run `lead ready %d` or `lead scenario add %d` first.", prNumber, issue, issue)})
+			Message: fmt.Sprintf("CI passed for PR #%d, but the issue has a `## シナリオ` and no stored scenario; run `lead scenario add %d` first (or `lead ready %d` for a valid body).", prNumber, issue, issue)})
 	}
 	if err := gh.PrMerge(ctx, prNumber, head); err != nil {
 		return Result{ChecksPassed: true}, fmt.Errorf("PR #%d: merge: %w", prNumber, err)
