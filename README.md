@@ -47,7 +47,7 @@ Sections:
 | `lead lgtm <n>` | add `lgtm` label and post LGTM comment |
 | `lead unlgtm <n>` | remove `lgtm` label |
 | `lead dispatch` | hand `ready` issues to headless agents |
-| `lead status` | show active workflows |
+| `lead status` | show active workflows and in-flight landings (CI / review / finish) |
 | `lead stats` | aggregate recorded runs (success rate, duration) |
 | `lead say <one-liner>` | create `needs-review` issues from a one-liner (`--settled` files validated issues as `ready`) |
 | `lead new` | create an issue from a validated template (`--ready` enqueues it directly) |

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -13,6 +14,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/kuwa72/lead-cli/internal/dispatch"
+	"github.com/kuwa72/lead-cli/internal/landing"
 	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/projinit"
@@ -407,9 +409,16 @@ func (m Model) loadCmd() tea.Cmd {
 		}
 		orderedReady := dispatch.OrderReady(ready, m.cachedSubIssues(ctx))
 		var wfs []state.Workflow
+		var landings map[int]landing.State
 		if opts.Store != nil {
 			if wfs, err = opts.Store.List(); err != nil {
 				return loadedMsg{err: err}
+			}
+			if ls, lerr := landing.List(filepath.Dir(opts.Store.Path)); lerr == nil {
+				landings = make(map[int]landing.State, len(ls))
+				for _, l := range ls {
+					landings[l.Issue] = l
+				}
 			}
 		}
 
@@ -458,6 +467,7 @@ func (m Model) loadCmd() tea.Cmd {
 
 		sections := Build(review, blocked, merged, buildSeen, wfs, BuildOptions{
 			Repo:        opts.Repo,
+			Landings:    landings,
 			OpenNumbers: openNumbers,
 			OpenIssues:  openIssuesList,
 			Ready:       orderedReady,
@@ -1801,6 +1811,9 @@ func itemMeta(it Item, now time.Time) string {
 	}
 	if it.Attempts > 0 {
 		parts = append(parts, fmt.Sprintf("×%d", it.Attempts))
+	}
+	if it.Stage != "" {
+		parts = append(parts, "land:"+it.Stage)
 	}
 	if it.PID > 0 {
 		parts = append(parts, fmt.Sprintf("pid %d", it.PID))
