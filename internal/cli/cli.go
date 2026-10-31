@@ -431,7 +431,10 @@ agents are not killed on exit.`,
 the one-liner, this repository's AGENTS.md and (with --follow-up) the
 original issue, then files the drafts it returns with
 ` + "`gh issue create --label needs-review`" + ` (titles are linted, siblings
-cross-reference each other). --redraft <n> rewrites issue n's body instead
+cross-reference each other). With --settled the drafts must pass the same
+validation as ` + "`lead new`/`lead ready`" + ` before anything is created; they
+are then filed with risk:b + ready and their scenarios are frozen outside the
+worktree (issue #302). --redraft <n> rewrites issue n's body instead
 and posts a comment describing the change. --dry-run prints the would-be
 issues and touches nothing on GitHub. The agent's output is logged under
 the state directory (logs/say-*.log). Agent: --agent, else $LEAD_SPEC_AGENT,
@@ -447,6 +450,7 @@ $LEAD_SPEC_PROGRESS_INTERVAL; negative disables).`,
 	}
 	sayCmd.Flags().String("agent", "", "headless spec agent (default: $LEAD_SPEC_AGENT, then inbox settings, then agy)")
 	sayCmd.Flags().Bool("dry-run", false, "print the would-be issues; no gh mutation")
+	sayCmd.Flags().Bool("settled", false, "file validated issues as ready and freeze their scenarios (default: needs-review)")
 	sayCmd.Flags().Int("follow-up", 0, "file follow-up issue(s) for issue <n> (実機 NG); body references #<n>")
 	sayCmd.Flags().Int("redraft", 0, "rewrite issue <n>'s title/body from the one-liner and comment the change")
 
@@ -502,6 +506,22 @@ missing items, and exits 1.`,
 		},
 	}
 	readyCmd.Flags().String("risk", "", "risk classification to apply when the issue has none (a|b)")
+
+	grillCmd := &cobra.Command{
+		Use:   "grill <issue-number>",
+		Short: "Settle an unsettled issue in $EDITOR and move it to ready",
+		Long: `Settle an unsettled issue (issue #302). Fetches issue <n>, opens its body
+in $EDITOR, saves the edited body back, then applies the same validation,
+scenario freeze, and ready labelling as ` + "`lead ready`" + `. An issue that still
+lacks the required sections is rejected: the edited body is saved, but no
+label changes and the command exits 1. Needs an interactive terminal and
+$EDITOR. --risk (default b) classifies the issue when it has no risk label.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runGrill(cmd, deps, args[0])
+		},
+	}
+	grillCmd.Flags().String("risk", "b", "risk classification to apply when the issue has none (a|b)")
 
 	setupCmd := &cobra.Command{
 		Use:   "setup",
@@ -885,7 +905,7 @@ the issue open for the dispatcher to retry or block.`,
 
 	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, statsCmd, cleanCmd, peekCmd, stopCmd, finishCmd, postmergeCmd, reviewCmd, landCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
-	root.AddCommand(newCmd, readyCmd, scenarioCmd)
+	root.AddCommand(newCmd, readyCmd, grillCmd, scenarioCmd)
 	return root
 }
 
@@ -1205,29 +1225,38 @@ func newBody(deps Deps, bodyFile string) (string, error) {
 }
 
 func editNewTemplate(editor string) (string, error) {
-	f, err := os.CreateTemp("", "lead-new-*.md")
+	body, err := editInEditor(editor, issuecheck.Template)
 	if err != nil {
-		return "", fmt.Errorf("lead new: %w", err)
+		return "", fmt.Errorf("lead new: editor: %w", err)
+	}
+	return body, nil
+}
+
+// editInEditor opens initial in $EDITOR and returns the saved text.
+func editInEditor(editor, initial string) (string, error) {
+	f, err := os.CreateTemp("", "lead-edit-*.md")
+	if err != nil {
+		return "", err
 	}
 	path := f.Name()
 	defer os.Remove(path)
-	if _, err := f.WriteString(issuecheck.Template); err != nil {
+	if _, err := f.WriteString(initial); err != nil {
 		f.Close()
-		return "", fmt.Errorf("lead new: %w", err)
+		return "", err
 	}
 	if err := f.Close(); err != nil {
-		return "", fmt.Errorf("lead new: %w", err)
+		return "", err
 	}
 
 	argv := append(strings.Fields(editor), path)
 	c := exec.Command(argv[0], argv[1:]...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := c.Run(); err != nil {
-		return "", fmt.Errorf("lead new: editor: %w", err)
+		return "", err
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("lead new: read edited body: %w", err)
+		return "", err
 	}
 	return string(b), nil
 }
@@ -1237,40 +1266,83 @@ func editNewTemplate(editor string) (string, error) {
 func runReady(cmd *cobra.Command, deps Deps, raw string) error {
 	n, err := strconv.Atoi(raw)
 	if err != nil || n <= 0 {
-		return fmt.Errorf("lead ready: invalid issue number %q", raw)
+		return fmt.Errorf("%s: invalid issue number %q", cmd.Name(), raw)
 	}
 	iss, err := deps.gh().View(cmd.Context(), n)
 	if err != nil {
-		return fmt.Errorf("lead ready: %w", err)
+		return fmt.Errorf("%s: %w", cmd.Name(), err)
 	}
 	riskFlag, _ := cmd.Flags().GetString("risk")
 	if riskFlag != "" && riskFlag != "a" && riskFlag != "b" {
-		return fmt.Errorf("lead ready: --risk must be a or b, got %q", riskFlag)
+		return fmt.Errorf("%s: --risk must be a or b, got %q", cmd.Name(), riskFlag)
 	}
 	checkLabels := append([]string(nil), iss.Labels...)
 	if riskFlag != "" {
 		checkLabels = append(checkLabels, issuecheck.RiskLabel(riskFlag))
 	}
-	if missing := issuecheck.Check(iss.Body, checkLabels); len(missing) > 0 {
-		return errors.New(issuecheck.Message(missing))
-	}
+	return markReady(cmd, deps, n, iss.Body, checkLabels)
+}
 
-	ctx := cmd.Context()
-	if _, err := scenario.EnsureFromIssue(filepath.Dir(deps.stateFile()), deps.repoSlug(), n, iss.Body); err != nil {
-		return fmt.Errorf("lead ready: %w", err)
+// runGrill implements `lead grill <n>` (issue #302): open the issue body in
+// $EDITOR, save the edited body, then ready it like `lead ready`.
+func runGrill(cmd *cobra.Command, deps Deps, raw string) error {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return fmt.Errorf("%s: invalid issue number %q", cmd.Name(), raw)
 	}
-	risk := issuecheck.RiskFromLabels(checkLabels)
-	if err := deps.gh().IssueAddLabel(ctx, n, risk); err != nil {
-		return fmt.Errorf("lead ready: add %s: %w", risk, err)
+	riskFlag, _ := cmd.Flags().GetString("risk")
+	if riskFlag != "" && riskFlag != "a" && riskFlag != "b" {
+		return fmt.Errorf("%s: --risk must be a or b, got %q", cmd.Name(), riskFlag)
 	}
-	if !hasLabel(iss.Labels, inbox.LabelReady) {
-		if err := deps.gh().IssueAddLabel(ctx, n, inbox.LabelReady); err != nil {
-			return fmt.Errorf("lead ready: add %s: %w", inbox.LabelReady, err)
+	iss, err := deps.gh().View(cmd.Context(), n)
+	if err != nil {
+		return fmt.Errorf("%s: %w", cmd.Name(), err)
+	}
+	if os.Getenv("LEAD_TEST_TTY") == "" && (!isTerminal(os.Stdin) || !isTerminal(os.Stdout)) {
+		return fmt.Errorf("%s: needs an interactive terminal", cmd.Name())
+	}
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		return fmt.Errorf("%s: $EDITOR is not set", cmd.Name())
+	}
+	body, err := editInEditor(editor, iss.Body)
+	if err != nil {
+		return fmt.Errorf("%s: editor: %w", cmd.Name(), err)
+	}
+	if body != iss.Body {
+		if err := deps.gh().IssueEdit(cmd.Context(), n, iss.Title, body); err != nil {
+			return fmt.Errorf("%s: save #%d: %w", cmd.Name(), n, err)
 		}
 	}
-	if hasLabel(iss.Labels, inbox.LabelNeedsReview) {
+	labels := append([]string(nil), iss.Labels...)
+	if riskFlag != "" {
+		labels = append(labels, issuecheck.RiskLabel(riskFlag))
+	}
+	return markReady(cmd, deps, n, body, labels)
+}
+
+// markReady validates body/labels, freezes the scenario, and swaps
+// needs-review for ready. Shared by `lead ready` and `lead grill`.
+func markReady(cmd *cobra.Command, deps Deps, n int, body string, labels []string) error {
+	if missing := issuecheck.Check(body, labels); len(missing) > 0 {
+		return errors.New(issuecheck.Message(missing))
+	}
+	ctx := cmd.Context()
+	if _, err := scenario.EnsureFromIssue(filepath.Dir(deps.stateFile()), deps.repoSlug(), n, body); err != nil {
+		return fmt.Errorf("%s: %w", cmd.Name(), err)
+	}
+	risk := issuecheck.RiskFromLabels(labels)
+	if err := deps.gh().IssueAddLabel(ctx, n, risk); err != nil {
+		return fmt.Errorf("%s: add %s: %w", cmd.Name(), risk, err)
+	}
+	if !hasLabel(labels, inbox.LabelReady) {
+		if err := deps.gh().IssueAddLabel(ctx, n, inbox.LabelReady); err != nil {
+			return fmt.Errorf("%s: add %s: %w", cmd.Name(), inbox.LabelReady, err)
+		}
+	}
+	if hasLabel(labels, inbox.LabelNeedsReview) {
 		if err := deps.gh().IssueRemoveLabel(ctx, n, inbox.LabelNeedsReview); err != nil {
-			return fmt.Errorf("lead ready: remove %s: %w", inbox.LabelNeedsReview, err)
+			return fmt.Errorf("%s: remove %s: %w", cmd.Name(), inbox.LabelNeedsReview, err)
 		}
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "ready #%d\n", n)
@@ -1299,6 +1371,7 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 		agentName = deps.configuredSpecAgent()
 	}
 	dryRun, _ := flags.GetBool("dry-run")
+	settled, _ := flags.GetBool("settled")
 	followUp, _ := flags.GetInt("follow-up")
 	redraft, _ := flags.GetInt("redraft")
 
@@ -1339,6 +1412,9 @@ func runSay(cmd *cobra.Command, deps Deps, oneLiner string) error {
 			WorkDir:          cwd,
 			Repository:       repo,
 			DryRun:           dryRun,
+			Settled:          settled,
+			StateDir:         filepath.Dir(deps.stateFile()),
+			RepoSlug:         deps.repoSlug(),
 			FollowUp:         followUp,
 			Redraft:          redraft,
 			ProgressInterval: progressInterval,
