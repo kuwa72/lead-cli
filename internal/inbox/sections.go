@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kuwa72/lead-cli/internal/dispatch"
+	"github.com/kuwa72/lead-cli/internal/landing"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 )
@@ -85,6 +86,8 @@ type Item struct {
 	// DeferredBy is the first open blocked-by issue number (issue #212);
 	// the row shows "deferred: blocked by #N". 0 means dispatchable.
 	DeferredBy int
+	// Stage is the in-flight landing stage (ci/review/finish, issue #304).
+	Stage string
 }
 
 // Section is one heading plus its rows.
@@ -107,6 +110,8 @@ type BuildOptions struct {
 	// that order and moves deferred ones (open blocked-by) last with the
 	// blocker number attached.
 	Ready []ports.IssueSummary
+	// Landings maps in-flight landing states by issue (issue #304).
+	Landings map[int]landing.State
 }
 
 // Build sections issues: `needs-review` and `blocked` come from gh label
@@ -206,6 +211,9 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 			continue
 		}
 		it := Item{Number: w.Issue, Title: strings.TrimSpace(w.Branch), Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Branch: w.Branch, PRNumber: firstPRNumber(w.PullRequests), StartedAt: w.StartedAt, Kind: KindRunning}
+		if l, ok := bo.Landings[w.Issue]; ok {
+			it.Stage = l.Stage
+		}
 		running.Items = append(running.Items, it)
 	}
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kuwa72/lead-cli/internal/landing"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/state"
 )
@@ -195,6 +196,21 @@ func TestBuild_ReadyExcludedFromBacklog(t *testing.T) {
 	if len(backlog.Items) != 1 || backlog.Items[0].Number != 6 {
 		t.Errorf("backlog = %+v, want only #6", backlog.Items)
 	}
+}
+
+func TestBuild_RunningCarriesLandingStage(t *testing.T) {
+	wfs := []state.Workflow{{Issue: 71, Status: state.StatusInProgress, Branch: "issue/71-x"}}
+	got := Build(nil, nil, nil, nil, wfs, BuildOptions{Landings: map[int]landing.State{71: {Issue: 71, Stage: landing.StageReview}}})
+	for _, s := range got {
+		if s.Kind != KindRunning {
+			continue
+		}
+		if len(s.Items) != 1 || s.Items[0].Stage != landing.StageReview {
+			t.Fatalf("running item = %+v, want stage review", s.Items)
+		}
+		return
+	}
+	t.Fatal("no running section")
 }
 
 func TestBuild_RunningCarriesStartedAt(t *testing.T) {

@@ -38,6 +38,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/finish"
 	"github.com/kuwa72/lead-cli/internal/inbox"
 	"github.com/kuwa72/lead-cli/internal/issuecheck"
+	"github.com/kuwa72/lead-cli/internal/landing"
 	"github.com/kuwa72/lead-cli/internal/ledger"
 	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
@@ -627,7 +628,7 @@ touches $HOME. Repository issue labels are kept.`,
 
 	statusCmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show recorded workflows (Issue/Branch/Worktree/state)",
+		Short: "Show recorded workflows and in-flight landings",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStatus(cmd, deps)
 		},
@@ -1826,6 +1827,11 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 	if err != nil {
 		return err
 	}
+	landings, _ := landing.List(filepath.Dir(deps.stateFile()))
+	byIssue := make(map[int]landing.State, len(landings))
+	for _, l := range landings {
+		byIssue[l.Issue] = l
+	}
 	out := cmd.OutOrStdout()
 	now := time.Now()
 	lockInfo, lockHeld := deps.dispatchLock()
@@ -1836,8 +1842,9 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 		}
 		raw, err := json.MarshalIndent(struct {
 			Workflows    []statusWorkflow `json:"workflows"`
+			Landings     []landing.State  `json:"landings,omitempty"`
 			DispatchLock statusLock       `json:"dispatch_lock"`
-		}{Workflows: statusRows(all, now), DispatchLock: lock}, "", "  ")
+		}{Workflows: statusRows(all, now, byIssue), Landings: landings, DispatchLock: lock}, "", "  ")
 		if err != nil {
 			return err
 		}
@@ -1845,7 +1852,12 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 		return nil
 	}
 	if len(all) == 0 {
-		fmt.Fprintln(out, "no workflows recorded")
+		if len(landings) == 0 {
+			fmt.Fprintln(out, "no workflows recorded")
+		}
+		for _, l := range landings {
+			fmt.Fprintln(out, landingLine(l, now))
+		}
 		fmt.Fprintln(out, statusLockLine(lockInfo, lockHeld))
 		return nil
 	}
@@ -1865,6 +1877,13 @@ func runStatus(cmd *cobra.Command, deps Deps) error {
 			}
 			if last := state.LastActivity(w.LogPath, w.StartedAt); !last.IsZero() {
 				parts = append(parts, fmt.Sprintf("Last activity: %s ago", shortDur(now.Sub(last))))
+			}
+			if l, ok := byIssue[w.Issue]; ok {
+				stage := l.Stage
+				if now.Sub(l.StartedAt) > 2*time.Hour {
+					stage += " (stale)"
+				}
+				parts = append(parts, fmt.Sprintf("Landing: %s (%s)", stage, shortDur(now.Sub(l.StartedAt))))
 			}
 			if len(parts) > 0 {
 				fmt.Fprintf(out, "%s\n", strings.Join(parts, "   "))
@@ -1949,17 +1968,32 @@ func runPeek(cmd *cobra.Command, deps Deps, raw string) error {
 // definition (log mtime, else started_at).
 type statusWorkflow struct {
 	state.Workflow
-	ElapsedSeconds      *int64     `json:"elapsed_seconds,omitempty"`
-	LastActivityAt      *time.Time `json:"last_activity_at,omitempty"`
-	LastActivitySeconds *int64     `json:"last_activity_seconds,omitempty"`
+	ElapsedSeconds      *int64         `json:"elapsed_seconds,omitempty"`
+	LastActivityAt      *time.Time     `json:"last_activity_at,omitempty"`
+	LastActivitySeconds *int64         `json:"last_activity_seconds,omitempty"`
+	Landing             *landing.State `json:"landing,omitempty"`
 }
 
-func statusRows(all []state.Workflow, now time.Time) []statusWorkflow {
+// landingLine renders one in-flight landing for `lead status` when no
+// workflow row carries it.
+func landingLine(l landing.State, now time.Time) string {
+	stage := l.Stage
+	age := now.Sub(l.StartedAt)
+	if age > 2*time.Hour {
+		stage += " (stale)"
+	}
+	return fmt.Sprintf("Issue #%d  landing  %s (%s)", l.Issue, stage, shortDur(age))
+}
+
+func statusRows(all []state.Workflow, now time.Time, landings map[int]landing.State) []statusWorkflow {
 	rows := make([]statusWorkflow, len(all))
 	for i, w := range all {
 		rows[i].Workflow = w
 		if w.Status != state.StatusInProgress {
 			continue
+		}
+		if l, ok := landings[w.Issue]; ok {
+			rows[i].Landing = &l
 		}
 		if !w.StartedAt.IsZero() {
 			s := int64(now.Sub(w.StartedAt).Seconds())
@@ -2490,6 +2524,15 @@ func runLand(cmd *cobra.Command, deps Deps, raw string) error {
 			return fmt.Errorf("land: %w", err)
 		}
 	}
+	stateDir := filepath.Dir(deps.stateFile())
+	defer func() { _ = landing.Clear(stateDir, issue) }()
+	landingStart := time.Now()
+	writeLanding := func(stage string) {
+		_ = landing.Write(stateDir, landing.State{
+			Issue: issue, PR: pr, Stage: stage, PID: os.Getpid(), StartedAt: landingStart,
+		})
+	}
+	writeLanding(landing.StageCI)
 	workDir, err := deps.workDir()
 	if err != nil {
 		return fmt.Errorf("land: working directory: %w", err)
@@ -2510,9 +2553,11 @@ func runLand(cmd *cobra.Command, deps Deps, raw string) error {
 			return fmt.Errorf("land: CI: %w", err)
 		}
 	}
+	writeLanding(landing.StageReview)
 	if err := run("review", strconv.Itoa(pr), "--issue", strconv.Itoa(issue)); err != nil {
 		return err
 	}
+	writeLanding(landing.StageFinish)
 	if err := run("finish", strconv.Itoa(issue), "--merge", "--pr", strconv.Itoa(pr)); err != nil {
 		return err
 	}
