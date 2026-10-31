@@ -27,15 +27,24 @@ import (
 	"golang.org/x/term"
 
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
+	"github.com/kuwa72/lead-cli/internal/issuecheck"
 	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/prompter"
+	"github.com/kuwa72/lead-cli/internal/scenario"
 	"github.com/kuwa72/lead-cli/internal/state"
 	"github.com/kuwa72/lead-cli/internal/watchdog"
 )
 
 // DefaultLabel marks issues awaiting human approval (RFC §8, §13).
 const DefaultLabel = "needs-review"
+
+// Settled issues skip the human inbox: they are filed with the same risk:b +
+// ready pair as `lead new --ready` (issue #302).
+const (
+	settledRisk  = "risk:b"
+	settledLabel = "ready"
+)
 
 // DefaultRules is used when the working directory has no AGENTS.md.
 const DefaultRules = "TDD必須。テストなき実装・PRは受け付けない。"
@@ -63,6 +72,12 @@ type Options struct {
 	DryRun     bool   // print would-be issues, no gh mutation
 	FollowUp   int    // 実機 NG → 追い Issue: reference this parent issue
 	Redraft    int    // rewrite this issue's body instead of creating
+	// Settled files the drafts as ready instead of needs-review and freezes
+	// their scenarios (issue #302). The drafts are validated before creation.
+	Settled bool
+	// StateDir and RepoSlug locate the scenario store for Settled.
+	StateDir string
+	RepoSlug string
 	// ProgressInterval is the cadence of the running status line while the
 	// agent works (issue #216). 0 = DefaultProgressInterval; <0 disables it.
 	ProgressInterval time.Duration
@@ -92,6 +107,9 @@ func (o Options) withDefaults() (Options, error) {
 	}
 	if o.FollowUp > 0 && o.Redraft > 0 {
 		return o, errors.New("say: --follow-up and --redraft are mutually exclusive")
+	}
+	if o.Settled && o.Redraft > 0 {
+		return o, errors.New("say: --settled and --redraft are mutually exclusive")
 	}
 	if strings.TrimSpace(o.Rules) == "" {
 		o.Rules = loadRules(o.WorkDir)
@@ -178,6 +196,16 @@ func (r *Runner) create(ctx context.Context, opts Options, oneLiner string) (Res
 	}
 	res.Drafts = drafts
 	labels := []string{opts.Label}
+	if opts.Settled {
+		labels = []string{settledRisk, settledLabel}
+		// Settled means the human already decided: an incomplete draft is an
+		// error, not something to hand to the inbox.
+		for i, d := range drafts {
+			if missing := issuecheck.Check(d.Body, labels); len(missing) > 0 {
+				return res, fmt.Errorf("say: --settled draft %d: %s", i+1, issuecheck.Message(missing))
+			}
+		}
+	}
 
 	if opts.DryRun {
 		for i, d := range drafts {
@@ -194,6 +222,14 @@ func (r *Runner) create(ctx context.Context, opts Options, oneLiner string) (Res
 		}
 		res.Created = append(res.Created, ref)
 		r.printf("created #%d %s  %s\n", ref.Number, ref.URL, d.Title)
+		if opts.Settled {
+			if _, err := scenario.EnsureFromIssue(opts.StateDir, opts.RepoSlug, ref.Number, d.Body); err != nil {
+				// Never leave an issue ready without its frozen acceptance test.
+				_ = r.Gh.IssueRemoveLabel(ctx, ref.Number, settledLabel)
+				_ = r.Gh.IssueAddLabel(ctx, ref.Number, opts.Label)
+				return res, fmt.Errorf("say: #%d created but the scenario was not frozen: %w", ref.Number, err)
+			}
+		}
 	}
 	// Siblings cross-reference each other in the body (RFC §8: 親子は本文で相互参照).
 	if len(res.Created) > 1 {

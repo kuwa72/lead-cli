@@ -49,9 +49,10 @@ Sections:
 | `lead dispatch` | hand `ready` issues to headless agents |
 | `lead status` | show active workflows |
 | `lead stats` | aggregate recorded runs (success rate, duration) |
-| `lead say <one-liner>` | create `needs-review` issues from a one-liner |
+| `lead say <one-liner>` | create `needs-review` issues from a one-liner (`--settled` files validated issues as `ready`) |
 | `lead new` | create an issue from a validated template (`--ready` enqueues it directly) |
 | `lead ready <n>` | validate an existing issue body and move it to `ready` |
+| `lead grill <n>` | settle an issue body in `$EDITOR`, then validate and move it to `ready` |
 | `lead finish <n>` | wait CI, squash-merge the PR, and close the issue |
 | `lead postmerge <n>` | re-run the post-merge smoke; revert main and file an incident when it fails |
 | `lead review <pr>` | run an independent headless review; label `review:pass` / `review:needs-work` |
@@ -74,7 +75,11 @@ Sections:
 
 `lead new` opens `$EDITOR` with a template and validates the body before
 creating anything. `lead ready <n>` applies the same validation to an existing
-issue and then swaps `needs-review` for `ready`.
+issue and then swaps `needs-review` for `ready`. `lead grill <n>` opens an
+unsettled issue's body in `$EDITOR`, saves the edit, and then readies it the
+same way; `lead say --settled` validates its drafts before creating them and
+files them as `ready` with a frozen scenario (plain `lead say` still files
+`needs-review`).
 
 A body passes when it has all of:
 
@@ -97,6 +102,8 @@ lead new                       # $EDITOR; labels risk:b + needs-review
 lead new --risk a --ready      # labels risk:a + ready (skips needs-review)
 lead new --body-file body.md   # non-interactive; title from the first heading
 lead ready 254                 # validate #254 and move it to ready
+lead grill 254                 # edit #254's body, then validate and ready it
+lead say --settled "..."       # validated drafts land as ready with a scenario
 ```
 
 Without `--body-file`, `lead new` needs an interactive terminal; non-TTY runs
