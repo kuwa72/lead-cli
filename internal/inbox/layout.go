@@ -392,9 +392,6 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 	}
 	if m.theme != nil && m.theme.Mode() != ModePlain && m.theme.Profile() != termenv.Ascii {
 		var sb strings.Builder
-		sb.WriteString(m.theme.Render("  ", TokenFgPrimary, TokenBgCanvas, false, false, false))
-		sb.WriteString(m.theme.Render(issueCell, TokenAccentPrimary, TokenBgCanvas, false, false, false))
-		sb.WriteString(m.theme.Render(" ", TokenFgPrimary, TokenBgCanvas, false, false, false))
 		if badge != "" && cellWidth(rawTitle)+cellWidth(badge) <= c.titleW {
 			sep := ""
 			if rawTitle != "" {
@@ -405,13 +402,13 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 			if c.titleW > used {
 				pad = strings.Repeat(" ", c.titleW-used)
 			}
-			sb.WriteString(m.theme.Render(rawTitle+sep, TokenFgPrimary, TokenBgCanvas, false, false, false))
+			sb.WriteString(m.theme.Render("  "+issueCell+" "+rawTitle+sep, TokenFgPrimary, TokenBgCanvas, false, false, false))
 			sb.WriteString(m.theme.Render(badge, badgeToken, TokenBgCanvas, true, false, false))
 			if pad != "" {
 				sb.WriteString(m.theme.Render(pad, TokenFgPrimary, TokenBgCanvas, false, false, false))
 			}
 		} else {
-			sb.WriteString(m.theme.Render(titleCell, TokenFgPrimary, TokenBgCanvas, false, false, false))
+			sb.WriteString(m.theme.Render("  "+issueCell+" "+titleCell, TokenFgPrimary, TokenBgCanvas, false, false, false))
 		}
 		if c.showUpd {
 			sb.WriteString(m.theme.Render(" "+updCell, TokenFgSecondary, TokenBgCanvas, false, false, false))
