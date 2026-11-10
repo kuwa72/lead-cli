@@ -442,10 +442,12 @@ func (m Model) loadCmd() tea.Cmd {
 
 		// Build uses the sessionSince (not the updated last_seen_at) so the
 		// current session keeps seeing merges that happened at or after the
-		// time the inbox opened.
+		// time the inbox opened. Pass zero time to ListMergedSince so closed
+		// issues from before sessionSince still sync zombie workflows, while
+		// Build's FilterUnseenMerged filters the Merged section by sessionSince.
 		buildSeen := &SeenState{LastSeenAt: sessionSince, Confirmed: seen.Confirmed}
 		var merged []ports.MergedIssue
-		if merged, err = opts.Gh.ListMergedSince(ctx, sessionSince); err != nil {
+		if merged, err = opts.Gh.ListMergedSince(ctx, time.Time{}); err != nil {
 			return loadedMsg{err: err}
 		}
 
@@ -486,11 +488,6 @@ func (m Model) loadCmd() tea.Cmd {
 						continue
 					}
 					isClosed := mergedNumbers[w.Issue] || (openNumbers != nil && !openNumbers[w.Issue])
-					if !isClosed && openNumbers == nil {
-						if iss, verr := opts.Gh.View(ctx, w.Issue); verr == nil && strings.EqualFold(iss.State, "CLOSED") {
-							isClosed = true
-						}
-					}
 					if isClosed {
 						w.Status = state.StatusCompleted
 						wfs[i] = w
