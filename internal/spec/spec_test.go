@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -788,3 +789,45 @@ func TestSay_NoProgressWhenIntervalNegative(t *testing.T) {
 		t.Errorf("progress lines emitted despite disabled interval:\n%s", buf.String())
 	}
 }
+
+// issue #307: TUI's AutoReady mode files complete specs directly as ready
+// (with frozen scenarios) and falls back to needs-review when a draft is
+// incomplete.
+func TestSay_AutoReadyFilesCompleteDraftAsReadyAndFreezesScenario(t *testing.T) {
+	body := "# feat: x\n\n## 受入条件\n\n- [ ] `go test ./...` が pass する\n\n## スコープ外\n\n- なし\n\n## シナリオ\n\n1. `go test ./...` を実行して pass することを確認する\n"
+	r, gh, _, _ := newRunner(t, `[{"title":"feat: x","body":`+strconv.Quote(body)+`}]`)
+	stateDir := t.TempDir()
+	r.Opts.AutoReady = true
+	r.Opts.StateDir = stateDir
+	r.Opts.RepoSlug = "acme/widgets"
+
+	res, err := r.Say(context.Background(), "add x")
+	if err != nil {
+		t.Fatalf("Say AutoReady error: %v", err)
+	}
+	if !res.Settled {
+		t.Errorf("res.Settled = false, want true for complete draft")
+	}
+	if len(gh.Created) != 1 || !reflect.DeepEqual(gh.Created[0].Labels, []string{"risk:b", "ready"}) {
+		t.Errorf("Created = %+v, want labels [risk:b ready]", gh.Created)
+	}
+}
+
+func TestSay_AutoReadyFallsBackToNeedsReviewOnIncompleteDraft(t *testing.T) {
+	r, gh, _, _ := newRunner(t, `[{"title":"feat: x","body":"incomplete body without sections"}]`)
+	r.Opts.AutoReady = true
+	r.Opts.StateDir = t.TempDir()
+	r.Opts.RepoSlug = "acme/widgets"
+
+	res, err := r.Say(context.Background(), "add x")
+	if err != nil {
+		t.Fatalf("Say AutoReady fallback error: %v", err)
+	}
+	if res.Settled {
+		t.Errorf("res.Settled = true, want false for incomplete draft")
+	}
+	if len(gh.Created) != 1 || !reflect.DeepEqual(gh.Created[0].Labels, []string{"needs-review"}) {
+		t.Errorf("Created = %+v, want labels [needs-review]", gh.Created)
+	}
+}
+

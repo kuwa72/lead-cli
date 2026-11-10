@@ -1951,3 +1951,85 @@ func TestCaretWriter_AppendsCaretPosition(t *testing.T) {
 		t.Fatalf("active caret must append a CUP sequence, got %q", got)
 	}
 }
+
+// issue #307: approving an issue in the TUI freezes its ## シナリオ section
+// outside the worktree before adding ready.
+func TestKeyA_FreezesScenarioFromBody(t *testing.T) {
+	gh, _, m := newFixture(t)
+	gh.Issues[7] = ports.Issue{
+		Number: 7,
+		Title:  "spec: add warning",
+		Body:   "## 受入条件\n- [ ] `go test ./...`\n\n## スコープ外\n- none\n\n## シナリオ\n1. `go test ./...` passes\n",
+		State:  "OPEN",
+	}
+	m = press(t, m, "a")
+	scenPath := filepath.Join(filepath.Dir(m.opts.Store.Path), "scenarios", "kuwa72_lead-cli", "7.md")
+	b, err := os.ReadFile(scenPath)
+	if err != nil {
+		t.Fatalf("expected scenario frozen at %s, got err: %v", scenPath, err)
+	}
+	if !strings.Contains(string(b), "go test ./...") {
+		t.Errorf("scenario file = %q, want step content", string(b))
+	}
+}
+
+// issue #307: pressing a on a Blocked issue runs OverrideBlocked when configured.
+func TestKeyA_OnBlockedRunsOverrideBlocked(t *testing.T) {
+	_, _, m := newFixture(t)
+	var calledIssue, calledPR int
+	m.opts.OverrideBlocked = func(_ context.Context, number int, prNumber int) (string, error) {
+		calledIssue = number
+		calledPR = prNumber
+		return fmt.Sprintf("Merged #%d (guardrail overridden)", number), nil
+	}
+	m = press(t, m, "j", "j", "j", "a") // cursor on blocked #9 (PR #11)
+	if calledIssue != 9 || calledPR != 11 {
+		t.Errorf("OverrideBlocked called with (%d, %d), want (9, 11)", calledIssue, calledPR)
+	}
+	if !strings.Contains(m.View(), "Merged #9") {
+		t.Errorf("view should report guardrail override merge, got:\n%s", m.View())
+	}
+}
+
+// issue #307: pressing t on a Needs review issue runs Redraft after commenting.
+func TestKeyT_OnNeedsReviewCallsRedraft(t *testing.T) {
+	gh, _, m := newFixture(t)
+	var redraftedNum int
+	var redraftedText string
+	m.opts.Redraft = func(_ context.Context, instruction string, number int) (string, error) {
+		redraftedNum = number
+		redraftedText = instruction
+		return fmt.Sprintf("Redrafted #%d (ready)", number), nil
+	}
+	m = press(t, m, "t", "text:use SQLite instead", "enter") // on needs-review #7
+	if want := []testutil.IssueComment{{Number: 7, Body: "use SQLite instead"}}; !reflect.DeepEqual(gh.Comments, want) {
+		t.Errorf("Comments = %+v, want %+v", gh.Comments, want)
+	}
+	if redraftedNum != 7 || redraftedText != "use SQLite instead" {
+		t.Errorf("Redraft called with (%q, %d), want (\"use SQLite instead\", 7)", redraftedText, redraftedNum)
+	}
+	if !strings.Contains(m.View(), "Redrafted #7 (ready)") {
+		t.Errorf("view should show redraft status, got:\n%s", m.View())
+	}
+}
+
+// issue #307: pressing t on a Blocked issue comments, swaps blocked -> ready,
+// and resets workflow Attempts to 0 so the dispatcher immediately retries it.
+func TestKeyT_OnBlockedUnblocksAndResetsAttempts(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m = press(t, m, "j", "j", "j", "t", "text:retry with -race", "enter") // on blocked #9
+	if want := []testutil.LabelCall{{Number: 9, Label: LabelBlocked}}; !reflect.DeepEqual(gh.RemovedLabels, want) {
+		t.Errorf("RemovedLabels = %+v, want %+v", gh.RemovedLabels, want)
+	}
+	if want := []testutil.LabelCall{{Number: 9, Label: LabelReady}}; !reflect.DeepEqual(gh.AddedLabels, want) {
+		t.Errorf("AddedLabels = %+v, want %+v", gh.AddedLabels, want)
+	}
+	w, ok, err := m.opts.Store.Get(9, "")
+	if err != nil || !ok {
+		t.Fatalf("Store.Get(9) = %v, %v", ok, err)
+	}
+	if w.Attempts != 0 || w.Status != state.StatusInProgress {
+		t.Errorf("workflow #9 = %+v, want Attempts=0 Status=in_progress", w)
+	}
+}
+

@@ -997,6 +997,9 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 				WorkDir:          root,
 				Repository:       deps.gitRunner().OriginURL(root),
 				FollowUp:         followUp,
+				AutoReady:        true,
+				StateDir:         filepath.Dir(deps.stateFile()),
+				RepoSlug:         deps.repoSlug(),
 				ProgressInterval: progressInterval,
 			},
 		}
@@ -1008,7 +1011,68 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		for _, c := range res.Created {
 			nums = append(nums, fmt.Sprintf("#%d", c.Number))
 		}
+		if res.Settled {
+			return fmt.Sprintf("Filed %s as ready", strings.Join(nums, ", ")), nil
+		}
 		return fmt.Sprintf("Filed %s as needs-review", strings.Join(nums, ", ")), nil
+	}
+	opts.Redraft = func(ctx context.Context, instruction string, number int) (string, error) {
+		progressInterval, _ := sayProgressInterval()
+		if isTerminal(os.Stdout) {
+			progressInterval = -1
+		}
+		specAgent := os.Getenv("LEAD_SPEC_AGENT")
+		if specAgent == "" {
+			specAgent = cfg.SpecAgent()
+		}
+		r := &spec.Runner{
+			Gh:     deps.gh(),
+			Agent:  deps.specAgent(stallTimeout, sayMaxRuntime),
+			Out:    cmd.OutOrStdout(),
+			Notify: notifier,
+			Opts: spec.Options{
+				Agent:            specAgent,
+				LogDir:           filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
+				WorkDir:          root,
+				Repository:       deps.gitRunner().OriginURL(root),
+				Redraft:          number,
+				AutoReady:        true,
+				StateDir:         filepath.Dir(deps.stateFile()),
+				RepoSlug:         deps.repoSlug(),
+				ProgressInterval: progressInterval,
+			},
+		}
+		res, err := r.Say(ctx, instruction)
+		if err != nil {
+			return "", err
+		}
+		if res.Settled {
+			return fmt.Sprintf("Redrafted #%d (ready)", number), nil
+		}
+		return fmt.Sprintf("Redrafted #%d (needs-review)", number), nil
+	}
+	opts.OverrideBlocked = func(ctx context.Context, number int, prNumber int) (string, error) {
+		var postMerge *finish.PostMergeOptions
+		if os.Getenv("LEAD_TEST_SKIP_POSTMERGE") == "" {
+			postMerge = &finish.PostMergeOptions{Smoke: postMergeSmoke()}
+		}
+		res, err := finish.Run(ctx, deps.gh(), store, number, finish.Options{
+			PR:                prNumber,
+			Merge:             true,
+			Close:             true,
+			OverrideGuardrail: true,
+			LedgerPath:        ledger.Path(deps.stateFile()),
+			Git:               deps.gitRunner(),
+			WorkDir:           cwd,
+			PostMerge:         postMerge,
+		})
+		if err != nil {
+			return "", err
+		}
+		if res.Message != "" {
+			return res.Message, nil
+		}
+		return fmt.Sprintf("Merged #%d (guardrail overridden)", number), nil
 	}
 
 	keys := os.Getenv("LEAD_TEST_INBOX_KEYS")
@@ -1108,8 +1172,14 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 			opts.StartupNotice += notice
 			fmt.Fprintln(cmd.ErrOrStderr(), notice)
 		} else {
-			defer lock.Release()
+			loopDone := make(chan struct{})
+			defer func() {
+				cancel()
+				<-loopDone
+				lock.Release()
+			}()
 			go func() {
+				defer close(loopDone)
 				if err := d.Loop(dctx, 30*time.Second); err != nil {
 					fmt.Fprintln(cmd.ErrOrStderr(), "dispatch:", err)
 				}
