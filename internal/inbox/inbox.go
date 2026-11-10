@@ -452,11 +452,15 @@ func (m Model) loadCmd() tea.Cmd {
 		var openCount int
 		var openNumbers map[int]bool
 		var openIssuesList []ports.IssueSummary
+		mergedNumbers := make(map[int]bool, len(merged))
+		for _, m := range merged {
+			mergedNumbers[m.Number] = true
+		}
 		if openIssues, err := opts.Gh.ListOpen(ctx); err == nil {
 			openCount = len(openIssues)
 			openIssuesList = openIssues
 			if len(openIssues) > 0 {
-				openNumbers = make(map[int]bool, len(openIssues)+len(review)+len(blocked))
+				openNumbers = make(map[int]bool, len(openIssues)+len(review)+len(blocked)+len(orderedReady))
 				for _, iss := range openIssues {
 					openNumbers[iss.Number] = true
 				}
@@ -466,17 +470,21 @@ func (m Model) loadCmd() tea.Cmd {
 				for _, iss := range blocked {
 					openNumbers[iss.Number] = true
 				}
+				for _, iss := range orderedReady {
+					openNumbers[iss.Number] = true
+				}
+			}
 
-				// Zombie workflow sync: if an in_progress workflow in this repo is no longer
-				// open on GitHub, mark it completed in the store.
-				if opts.Store != nil {
-					for i, w := range wfs {
-						if w.Status == state.StatusInProgress && !openNumbers[w.Issue] {
-							if opts.Repo == "" || w.Repository == "" || w.Repository == "local" || RepoSlug(w.Repository) == opts.Repo {
-								w.Status = state.StatusCompleted
-								wfs[i] = w
-								_ = opts.Store.Upsert(w)
-							}
+			// Zombie workflow sync: if an in_progress workflow in this repo is
+			// merged/closed on GitHub, mark it completed in the store.
+			if opts.Store != nil {
+				for i, w := range wfs {
+					isClosed := mergedNumbers[w.Issue] || (openNumbers != nil && !openNumbers[w.Issue])
+					if w.Status == state.StatusInProgress && isClosed {
+						if opts.Repo == "" || w.Repository == "" || w.Repository == "local" || RepoSlug(w.Repository) == opts.Repo {
+							w.Status = state.StatusCompleted
+							wfs[i] = w
+							_ = opts.Store.Upsert(w)
 						}
 					}
 				}

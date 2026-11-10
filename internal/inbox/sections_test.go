@@ -260,3 +260,51 @@ func TestBuild_RunningDefaultExpandedAndResolvesIssueTitle(t *testing.T) {
 	}
 }
 
+func TestBuild_NoDuplicateAcrossSections(t *testing.T) {
+	now := time.Date(2026, 11, 11, 4, 0, 0, 0, time.UTC)
+	needsReview := []ports.IssueSummary{{Number: 10, Title: "review item"}}
+	blocked := []ports.IssueSummary{{Number: 20, Title: "blocked item"}}
+	ready := []ports.IssueSummary{
+		{Number: 30, Title: "running item still labeled ready"},
+		{Number: 31, Title: "waiting ready item"},
+	}
+	merged := []ports.MergedIssue{
+		{Number: 40, Title: "merged item with stale in_progress workflow", MergedAt: now.Add(-5 * time.Minute)},
+	}
+	wfs := []state.Workflow{
+		{Issue: 10, Status: state.StatusInProgress, Branch: "issue/10"},
+		{Issue: 20, Status: state.StatusInProgress, Branch: "issue/20"},
+		{Issue: 30, Status: state.StatusInProgress, Branch: "issue/30"},
+		{Issue: 40, Status: state.StatusInProgress, Branch: "issue/40"},
+	}
+
+	sections := Build(needsReview, blocked, merged, nil, wfs, BuildOptions{Ready: ready})
+
+	seenInSection := map[int]Kind{}
+	for _, sec := range sections {
+		for _, it := range sec.Items {
+			if prev, exists := seenInSection[it.Number]; exists {
+				t.Errorf("issue #%d duplicated in both %s and %s", it.Number, prev.Title(), sec.Kind.Title())
+			}
+			seenInSection[it.Number] = sec.Kind
+		}
+	}
+
+	if seenInSection[10] != KindNeedsReview {
+		t.Errorf("issue #10 in %v, want KindNeedsReview", seenInSection[10])
+	}
+	if seenInSection[20] != KindBlocked {
+		t.Errorf("issue #20 in %v, want KindBlocked", seenInSection[20])
+	}
+	if seenInSection[30] != KindRunning {
+		t.Errorf("issue #30 in %v, want KindRunning (not Ready)", seenInSection[30])
+	}
+	if seenInSection[31] != KindReady {
+		t.Errorf("issue #31 in %v, want KindReady", seenInSection[31])
+	}
+	if seenInSection[40] != KindMerged {
+		t.Errorf("issue #40 in %v, want KindMerged (not Running)", seenInSection[40])
+	}
+}
+
+

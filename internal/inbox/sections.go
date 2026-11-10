@@ -139,6 +139,11 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		return it
 	}
 
+	mergedNumbers := make(map[int]bool, len(merged))
+	for _, m := range merged {
+		mergedNumbers[m.Number] = true
+	}
+
 	review := Section{Kind: KindNeedsReview}
 	seenNumbers := map[int]bool{}
 	for _, s := range needsReview {
@@ -157,26 +162,6 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		stuck.Items = append(stuck.Items, enrich(Item{Number: s.Number, Title: s.Title, Kind: KindBlocked, UpdatedAt: s.UpdatedAt}))
 	}
 
-	// bo.Ready arrives in dispatch order (dispatch.OrderReady). Deferred
-	// issues are parked at the end with the open blocker annotated so the
-	// section reads as the actual dispatch queue (issue #212).
-	readySection := Section{Kind: KindReady}
-	var deferred []Item
-	for _, s := range bo.Ready {
-		if seenNumbers[s.Number] {
-			continue
-		}
-		seenNumbers[s.Number] = true
-		it := Item{Number: s.Number, Title: s.Title, Kind: KindReady, UpdatedAt: s.UpdatedAt}
-		if n, ok := dispatch.OpenBlocker(s); ok {
-			it.DeferredBy = n
-			deferred = append(deferred, enrich(it))
-			continue
-		}
-		readySection.Items = append(readySection.Items, enrich(it))
-	}
-	readySection.Items = append(readySection.Items, deferred...)
-
 	confirmed := make(map[int]bool)
 	lastSeen := time.Time{}
 	if seen != nil {
@@ -185,6 +170,7 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 	}
 	mergedSection := Section{Kind: KindMerged, Collapsed: true}
 	for _, it := range FilterUnseenMerged(merged, lastSeen, confirmed) {
+		seenNumbers[it.Number] = true
 		mergedSection.Items = append(mergedSection.Items, enrich(Item{
 			Number:   it.Number,
 			Title:    it.Title,
@@ -210,6 +196,9 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		if w.Status != state.StatusInProgress {
 			continue
 		}
+		if seenNumbers[w.Issue] || mergedNumbers[w.Issue] {
+			continue
+		}
 		if bo.Repo != "" && w.Repository != "" && w.Repository != "local" {
 			if slug := RepoSlug(w.Repository); slug != "" && slug != bo.Repo {
 				continue
@@ -218,6 +207,7 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		if bo.OpenNumbers != nil && !bo.OpenNumbers[w.Issue] {
 			continue
 		}
+		seenNumbers[w.Issue] = true
 		title := strings.TrimSpace(w.Branch)
 		if t := titleByIssue[w.Issue]; t != "" {
 			title = t
@@ -228,6 +218,27 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		}
 		running.Items = append(running.Items, it)
 	}
+
+	// bo.Ready arrives in dispatch order (dispatch.OrderReady). Deferred
+	// issues are parked at the end with the open blocker annotated so the
+	// section reads as the actual dispatch queue (issue #212). Issues
+	// already in Running/NeedsReview/Blocked/Merged are excluded.
+	readySection := Section{Kind: KindReady}
+	var deferred []Item
+	for _, s := range bo.Ready {
+		if seenNumbers[s.Number] || mergedNumbers[s.Number] {
+			continue
+		}
+		seenNumbers[s.Number] = true
+		it := Item{Number: s.Number, Title: s.Title, Kind: KindReady, UpdatedAt: s.UpdatedAt}
+		if n, ok := dispatch.OpenBlocker(s); ok {
+			it.DeferredBy = n
+			deferred = append(deferred, enrich(it))
+			continue
+		}
+		readySection.Items = append(readySection.Items, enrich(it))
+	}
+	readySection.Items = append(readySection.Items, deferred...)
 
 	backlogSection := Section{Kind: KindBacklog, Collapsed: true}
 	for _, s := range bo.OpenIssues {
