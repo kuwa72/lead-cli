@@ -174,7 +174,26 @@ type Dispatcher struct {
 	// Notify receives blocked and all-done milestones (issue #189).
 	Notify notify.Notifier
 
-	mu sync.Mutex
+	mu   sync.Mutex
+	wake chan struct{}
+}
+
+func (d *Dispatcher) wakeCh() chan struct{} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.wake == nil {
+		d.wake = make(chan struct{}, 1)
+	}
+	return d.wake
+}
+
+// Wake triggers the next Loop pass immediately instead of waiting for the
+// polling interval (issue #308).
+func (d *Dispatcher) Wake() {
+	select {
+	case d.wakeCh() <- struct{}{}:
+	default:
+	}
 }
 
 // Preflight checks the repository safety of RFC §9 / issue #67: dispatched
@@ -619,6 +638,7 @@ func (d *Dispatcher) Loop(ctx context.Context, interval time.Duration) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-d.wakeCh():
 		case <-time.After(interval):
 		}
 	}

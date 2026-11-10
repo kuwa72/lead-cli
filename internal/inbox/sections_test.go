@@ -232,3 +232,31 @@ func TestBuild_RunningCarriesStartedAt(t *testing.T) {
 		t.Errorf("StartedAt = %v, want %v", running.Items[0].StartedAt, started)
 	}
 }
+
+// issue #308: Running is expanded by default (Control Room visibility) and
+// resolves the real issue title from OpenIssues instead of showing only the
+// branch slug.
+func TestBuild_RunningDefaultExpandedAndResolvesIssueTitle(t *testing.T) {
+	wfs := []state.Workflow{
+		{Issue: 70, Status: state.StatusInProgress, Agent: "agy", Branch: "issue/70-x"},
+	}
+	got := Build(nil, nil, nil, nil, wfs, BuildOptions{
+		OpenIssues: []ports.IssueSummary{{Number: 70, Title: "feat(auth): OAuth2 login"}},
+	})
+	var running *Section
+	for i := range got {
+		if got[i].Kind == KindRunning {
+			running = &got[i]
+		}
+	}
+	if running == nil {
+		t.Fatal("no running section")
+	}
+	if running.Collapsed {
+		t.Errorf("running.Collapsed = true, want false (expanded by default)")
+	}
+	if len(running.Items) != 1 || running.Items[0].Title != "feat(auth): OAuth2 login" {
+		t.Errorf("running item title = %q, want %q", running.Items[0].Title, "feat(auth): OAuth2 login")
+	}
+}
+
