@@ -1102,13 +1102,14 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		Out:      io.Discard,
 		Notify:   notifier,
 		Opts: dispatch.Options{
-			Parallel:   parallel,
-			Agent:      opts.Agent,
-			AgentMode:  opts.AgentMode,
-			LogDir:     filepath.Join(configDir, "logs"),
-			WorkDir:    cwd,
-			StuckAfter: stallTimeout,
-			MaxRuntime: maxRuntime,
+			Parallel:       parallel,
+			Agent:          opts.Agent,
+			FallbackAgents: cfg.FallbackAgents(),
+			AgentMode:      opts.AgentMode,
+			LogDir:         filepath.Join(configDir, "logs"),
+			WorkDir:        cwd,
+			StuckAfter:     stallTimeout,
+			MaxRuntime:     maxRuntime,
 		},
 	}
 	opts.RunningCount = d.RunningCount
@@ -1607,12 +1608,13 @@ func runDispatch(cmd *cobra.Command, deps Deps) error {
 		Notify:   notify.New(notify.Options{Disabled: cfg.NotifyDisabled}),
 		Land:     landRunner(cwd, filepath.Join(filepath.Dir(stateFile), "logs")),
 		Opts: dispatch.Options{
-			Parallel:   parallel,
-			Agent:      agentName,
-			LogDir:     filepath.Join(filepath.Dir(stateFile), "logs"),
-			WorkDir:    cwd,
-			StuckAfter: stuckAfter,
-			MaxRuntime: maxRuntime,
+			Parallel:       parallel,
+			Agent:          agentName,
+			FallbackAgents: cfg.FallbackAgents(),
+			LogDir:         filepath.Join(filepath.Dir(stateFile), "logs"),
+			WorkDir:        cwd,
+			StuckAfter:     stuckAfter,
+			MaxRuntime:     maxRuntime,
 		},
 	}
 	if err := d.Preflight(cmd.Context()); err != nil {

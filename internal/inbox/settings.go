@@ -18,9 +18,10 @@ const (
 // reviewer (docs/rfc-inbox-ux.md §13, issues #231, #246). Empty fields fall
 // back to the shared Agent setting, so `agents` stays optional.
 type AgentRoles struct {
-	Spec   string `json:"spec,omitempty"`
-	Impl   string `json:"impl,omitempty"`
-	Review string `json:"review,omitempty"`
+	Spec      string   `json:"spec,omitempty"`
+	Impl      string   `json:"impl,omitempty"`
+	Review    string   `json:"review,omitempty"`
+	Fallbacks []string `json:"fallbacks,omitempty"`
 }
 
 // Config represents the persisted user configuration (inbox-config.json).
@@ -52,6 +53,15 @@ func (c Config) ImplAgent() string {
 		return c.Agents.Impl
 	}
 	return c.Agent
+}
+
+// FallbackAgents returns the configured fallback agents for quota/rate-limit
+// failover (issue #310).
+func (c Config) FallbackAgents() []string {
+	if c.Agents != nil {
+		return c.Agents.Fallbacks
+	}
+	return nil
 }
 
 // ReviewAgent returns the independent reviewer's agent: agents.review, else

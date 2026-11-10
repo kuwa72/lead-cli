@@ -766,3 +766,100 @@ func TestWaitChecks_NilSleepDefaultsToTimeSleep(t *testing.T) {
 		t.Errorf("check polls = %d, want 2 (pending then pass)", fake.ChecksCalls)
 	}
 }
+
+type fakeRebaseGit struct {
+	fakePostMergeGit
+	fetched     []string
+	rebased     []string
+	aborted     []string
+	forcePushed []string
+	rebaseErr   error
+}
+
+func (f *fakeRebaseGit) Fetch(dir, remote, ref string) error {
+	f.fetched = append(f.fetched, dir+":"+remote+"/"+ref)
+	return nil
+}
+
+func (f *fakeRebaseGit) Rebase(dir, onto string) error {
+	f.rebased = append(f.rebased, dir+":"+onto)
+	return f.rebaseErr
+}
+
+func (f *fakeRebaseGit) RebaseAbort(dir string) error {
+	f.aborted = append(f.aborted, dir)
+	return nil
+}
+
+func (f *fakeRebaseGit) PushForceWithLease(dir, remote, refspec string) error {
+	f.forcePushed = append(f.forcePushed, dir+":"+remote+" "+refspec)
+	return nil
+}
+
+// issue #310: when a PR is CONFLICTING because an earlier parallel PR landed
+// on main, finish attempts to fetch origin/main, rebase the issue's worktree,
+// and force-push with lease before waiting for checks and merging.
+func TestRun_AutoRebasesConflictingPRWhenWorktreeCleanlyRebases(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	wt := t.TempDir()
+	seedWithPR(t, path, state.Workflow{
+		Branch:   "issue/36-x",
+		Worktree: wt,
+	})
+	fake := baseFake()
+	fake.PR = ports.PRInfo{Number: 7, State: "OPEN", Mergeable: "CONFLICTING"}
+	rg := &fakeRebaseGit{}
+
+	res, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Close: true, Timeout: time.Minute, Sleep: noSleep, Git: rg,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v, want auto-rebase to recover and merge", err)
+	}
+	if !res.Merged || !res.Closed {
+		t.Errorf("Result = %+v, want Merged and Closed", res)
+	}
+	if len(rg.fetched) != 1 || rg.fetched[0] != wt+":origin/main" {
+		t.Errorf("fetched = %v, want [%s:origin/main]", rg.fetched, wt)
+	}
+	if len(rg.rebased) != 1 || rg.rebased[0] != wt+":origin/main" {
+		t.Errorf("rebased = %v, want [%s:origin/main]", rg.rebased, wt)
+	}
+	if len(rg.forcePushed) != 1 || rg.forcePushed[0] != wt+":origin HEAD:refs/heads/issue/36-x" {
+		t.Errorf("forcePushed = %v, want [%s:origin HEAD:refs/heads/issue/36-x]", rg.forcePushed, wt)
+	}
+	if len(rg.aborted) != 0 {
+		t.Errorf("aborted = %v, want none on clean rebase", rg.aborted)
+	}
+}
+
+// issue #310: when auto-rebase fails on a real conflict, finish aborts the
+// rebase and stops with a conflict error without force-pushing or merging.
+func TestRun_ConflictingPRAutoRebaseFailureAbortsAndStops(t *testing.T) {
+	path := t.TempDir() + "/wf.json"
+	wt := t.TempDir()
+	seedWithPR(t, path, state.Workflow{
+		Branch:   "issue/36-x",
+		Worktree: wt,
+	})
+	fake := baseFake()
+	fake.PR = ports.PRInfo{Number: 7, State: "OPEN", Mergeable: "CONFLICTING"}
+	rg := &fakeRebaseGit{rebaseErr: errors.New("CONFLICT (content): Merge conflict in foo.go")}
+
+	_, err := Run(context.Background(), fake, &state.Store{Path: path}, 36, Options{
+		Merge: true, Timeout: time.Minute, Sleep: noSleep, Git: rg,
+	})
+	if err == nil || !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("Run = %v, want conflict error when auto-rebase fails", err)
+	}
+	if len(rg.aborted) != 1 || rg.aborted[0] != wt {
+		t.Errorf("aborted = %v, want [%s]", rg.aborted, wt)
+	}
+	if len(rg.forcePushed) != 0 {
+		t.Errorf("forcePushed = %v, want none after rebase failure", rg.forcePushed)
+	}
+	if len(fake.MergeCalls) != 0 {
+		t.Errorf("MergeCalls = %v, want none", fake.MergeCalls)
+	}
+}
+

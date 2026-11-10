@@ -290,6 +290,31 @@ func (r *Runner) Push(dir, remote, refspec string) error {
 	return err
 }
 
+// Fetch fetches ref from remote in dir (issue #310).
+func (r *Runner) Fetch(dir, remote, ref string) error {
+	_, err := r.run(context.Background(), dir, "fetch", remote, ref)
+	return err
+}
+
+// Rebase rebases the current branch in dir onto the given ref (issue #310).
+func (r *Runner) Rebase(dir, onto string) error {
+	_, err := r.run(context.Background(), dir, "rebase", onto)
+	return err
+}
+
+// RebaseAbort aborts an in-progress rebase in dir (issue #310).
+func (r *Runner) RebaseAbort(dir string) error {
+	_, err := r.run(context.Background(), dir, "rebase", "--abort")
+	return err
+}
+
+// PushForceWithLease pushes refspec to remote with --force-with-lease (issue #310).
+func (r *Runner) PushForceWithLease(dir, remote, refspec string) error {
+	_, err := r.run(context.Background(), dir, "push", "--force-with-lease", remote, refspec)
+	return err
+}
+
+
 // OriginURL returns remote.origin.url ("" when unset).
 func (r *Runner) OriginURL(repoDir string) string {
 	out, err := r.run(context.Background(), repoDir, "config", "--get", "remote.origin.url")

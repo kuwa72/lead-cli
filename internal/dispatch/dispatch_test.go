@@ -1524,4 +1524,43 @@ func TestOnce_GuardrailPauseBlocksImmediatelyWithoutRetrying(t *testing.T) {
 	}
 }
 
+// issue #310: when the primary agent fails due to a rate limit / quota error
+// (429, quota exceeded, etc.), dispatch automatically fails over to the next
+// configured FallbackAgents entry without burning an issue retry attempt.
+func TestOnce_QuotaErrorFailsOverToFallbackAgentWithoutBurningAttempts(t *testing.T) {
+	d, gh, _, l := newFixture(t, 7)
+	d.Opts.Agent = "claude"
+	d.Opts.FallbackAgents = []string{"codex"}
+	d.Opts.MaxAttempts = 1 // even with MaxAttempts=1, quota failover must not block #7
+
+	l.OnWait = func(c launchCall) error {
+		if c.Argv[0] == "claude" {
+			_ = os.WriteFile(c.LogPath, []byte("Error: 429 Too Many Requests - rate limit exceeded\n"), 0o644)
+			return errors.New("exit status 1")
+		}
+		iss := gh.Issues[7]
+		iss.State = "CLOSED"
+		gh.Issues[7] = iss
+		return nil
+	}
+
+	rep, err := d.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(rep.Results) != 1 || rep.Results[0].Outcome != OutcomeCompleted {
+		t.Fatalf("results = %+v, want OutcomeCompleted after failover to codex", rep.Results)
+	}
+	if rep.Results[0].Attempts != 0 {
+		t.Errorf("Attempts = %d, want 0 (quota error must not consume attempts)", rep.Results[0].Attempts)
+	}
+	if len(l.Calls) != 2 {
+		t.Fatalf("launch calls = %d, want 2 (claude then codex)", len(l.Calls))
+	}
+	if l.Calls[0].Argv[0] != "claude" || l.Calls[1].Argv[0] != "codex" {
+		t.Errorf("launched binaries = [%s, %s], want [claude, codex]", l.Calls[0].Argv[0], l.Calls[1].Argv[0])
+	}
+}
+
+
 
