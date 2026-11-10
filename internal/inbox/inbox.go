@@ -18,6 +18,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/notify"
 	"github.com/kuwa72/lead-cli/internal/ports"
 	"github.com/kuwa72/lead-cli/internal/projinit"
+	"github.com/kuwa72/lead-cli/internal/scenario"
 	"github.com/kuwa72/lead-cli/internal/state"
 )
 
@@ -45,6 +46,12 @@ type Options struct {
 	// files a real-device-regression follow-up referencing that issue (inbox n key).
 	// Nil disables s/n.
 	Say func(ctx context.Context, oneLiner string, followUp int) (string, error)
+	// Redraft re-runs the spec AI on an existing needs-review issue after a
+	// human reply (t key, issue #307). Nil leaves t as a plain comment.
+	Redraft func(ctx context.Context, instruction string, number int) (string, error)
+	// OverrideBlocked merges a guardrail-stopped or blocked PR when the human
+	// presses a on a Blocked item (issue #307). Nil disables a on Blocked.
+	OverrideBlocked func(ctx context.Context, number int, prNumber int) (string, error)
 	// Stop terminates the running agent for an issue and returns a human
 	// summary (`lead stop`, issue #185). Nil disables d.
 	Stop func(ctx context.Context, number int) (string, error)
@@ -728,7 +735,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.editedBody != "" {
 			return m, m.approveWithBodyCmd(msg.number, msg.editedBody)
 		}
-		return m, m.doApproveCmd(msg.number)
+		return m, m.doApproveCmd(msg.number, msg.issue.Body)
 	case editBodyMsg:
 		if msg.err != nil {
 			return m, m.setStatus("Error: Could not load issue. " + msg.err.Error())
@@ -931,6 +938,18 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m, m.openDetailCmd(it)
 	case "a":
+		if it.Kind == KindBlocked && m.opts.OverrideBlocked != nil {
+			if m.pendingOps[it.Number] {
+				return m, m.setStatus(fmt.Sprintf("Already processing #%d", it.Number))
+			}
+			m.pendingOps[it.Number] = true
+			number, prNum := it.Number, it.PRNumber
+			override := m.opts.OverrideBlocked
+			return m, func() tea.Msg {
+				status, err := override(context.Background(), number, prNum)
+				return doneMsg{status: status, err: err, refresh: true, number: number}
+			}
+		}
 		if it.Kind != KindNeedsReview && it.Kind != KindBacklog {
 			return m, m.setStatus(fmt.Sprintf("#%d is not actionable with approve (a only approves needs-review or backlog issues)", it.Number))
 		}
@@ -979,6 +998,9 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.ShowCursor
 	case "t":
 		number := it.Number
+		kind := it.Kind
+		redraft := m.opts.Redraft
+		store := m.opts.Store
 		m.mode = modeInput
 		m.input = inputState{
 			action:       "send",
@@ -990,8 +1012,28 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return func() tea.Msg { return doneMsg{status: "Empty comment; nothing sent."} }
 				}
 				return func() tea.Msg {
-					if err := gh.IssueComment(context.Background(), number, text); err != nil {
+					ctx := context.Background()
+					if err := gh.IssueComment(ctx, number, text); err != nil {
 						return doneMsg{err: err, number: number}
+					}
+					if kind == KindNeedsReview && redraft != nil {
+						summary, err := redraft(ctx, text, number)
+						return doneMsg{status: summary, err: err, refresh: true, number: number}
+					}
+					if kind == KindBlocked {
+						_ = gh.IssueRemoveLabel(ctx, number, LabelBlocked)
+						if err := gh.IssueAddLabel(ctx, number, LabelReady); err != nil {
+							return doneMsg{err: err, number: number}
+						}
+						if store != nil {
+							if w, ok, err := store.Get(number, ""); err == nil && ok {
+								w.Attempts = 0
+								w.Status = state.StatusInProgress
+								w.PostMergeFailed = false
+								_ = store.Upsert(w)
+							}
+						}
+						return doneMsg{status: fmt.Sprintf("Commented on #%d (ready)", number), refresh: true, number: number}
 					}
 					return doneMsg{status: fmt.Sprintf("Commented on #%d", number), number: number}
 				}
@@ -1132,9 +1174,9 @@ func (m Model) startApproveCmd(number int) tea.Cmd {
 	}
 }
 
-func (m Model) doApproveCmd(number int) tea.Cmd {
+func (m Model) doApproveCmd(number int, body string) tea.Cmd {
 	return func() tea.Msg {
-		status, err := m.doApprove(number)
+		status, err := m.doApprove(number, body)
 		if err != nil {
 			return doneMsg{err: err, number: number}
 		}
@@ -1142,10 +1184,16 @@ func (m Model) doApproveCmd(number int) tea.Cmd {
 	}
 }
 
-// doApprove performs the label changes and returns a human status.
-func (m Model) doApprove(number int) (string, error) {
+// doApprove freezes any scenario from body, performs the label changes, and
+// returns a human status.
+func (m Model) doApprove(number int, body string) (string, error) {
 	gh := m.opts.Gh
 	ctx := context.Background()
+	if m.opts.Store != nil && m.opts.Store.Path != "" && body != "" {
+		if _, err := scenario.EnsureFromIssue(filepath.Dir(m.opts.Store.Path), m.opts.Repo, number, body); err != nil {
+			return "", err
+		}
+	}
 	_ = gh.IssueRemoveLabel(ctx, number, LabelNeedsReview)
 	if err := gh.IssueAddLabel(ctx, number, LabelReady); err != nil {
 		return "", err
@@ -1167,7 +1215,7 @@ func (m Model) approveWithBodyCmd(number int, body string) tea.Cmd {
 		if err := gh.IssueEditBody(ctx, number, body); err != nil {
 			return doneMsg{err: err, number: number}
 		}
-		status, err := m.doApprove(number)
+		status, err := m.doApprove(number, body)
 		if err != nil {
 			return doneMsg{err: err, number: number}
 		}

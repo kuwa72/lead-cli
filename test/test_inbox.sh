@@ -175,12 +175,13 @@ c_line="$(grep -n 'issue comment 7' "$GH_LOG" | cut -d: -f1)"
 x_line="$(grep -n 'issue close 7' "$GH_LOG" | cut -d: -f1)"
 [ "$c_line" -lt "$x_line" ] || fail "comment must precede close"
 
-# --- 6. t on blocked issue: comment only ------------------------------------------
+# --- 6. t on blocked issue: comment and unblock to ready --------------------------
 : > "$GH_LOG"
 LEAD_TEST_INBOX_KEYS='j,j,j,t,text:retry with -race,enter,q' "$tmp/lead" >/dev/null 2>&1 || fail "headless t flow failed"
 grep -qxF 'GH issue comment 9 --body retry with -race' "$GH_LOG" || fail "t comment wrong: $(cat "$GH_LOG")"
 grep -q 'issue close' "$GH_LOG" && fail "t must not close"
-grep -q 'issue edit' "$GH_LOG" && fail "t must not relabel"
+grep -qxF 'GH issue edit 9 --remove-label blocked' "$GH_LOG" || fail "t did not remove blocked: $(cat "$GH_LOG")"
+grep -qxF 'GH issue edit 9 --add-label ready' "$GH_LOG" || fail "t did not add ready: $(cat "$GH_LOG")"
 
 # --- 7. e: $EDITOR edits body, then body update + approve --------------------------
 : > "$GH_LOG"; : > "$EDITOR_LOG"; rm -f "$GH_STDIN"

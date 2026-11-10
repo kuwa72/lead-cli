@@ -75,7 +75,11 @@ type Options struct {
 	// Settled files the drafts as ready instead of needs-review and freezes
 	// their scenarios (issue #302). The drafts are validated before creation.
 	Settled bool
-	// StateDir and RepoSlug locate the scenario store for Settled.
+	// AutoReady files the drafts (or redraft) as ready with frozen scenarios
+	// when all drafts pass issuecheck.Check, falling back to needs-review
+	// without error when any draft is incomplete (issue #307).
+	AutoReady bool
+	// StateDir and RepoSlug locate the scenario store for Settled / AutoReady.
 	StateDir string
 	RepoSlug string
 	// ProgressInterval is the cadence of the running status line while the
@@ -133,6 +137,7 @@ type Result struct {
 	Drafts    []Draft          // parsed and linted drafts (create mode), or the single redraft
 	Created   []ports.IssueRef // created issues (empty in dry-run / redraft)
 	Redrafted int              // issue edited in redraft mode
+	Settled   bool             // true when drafts/redraft were filed as ready with frozen scenarios
 	LogPath   string           // agent output log
 }
 
@@ -195,8 +200,20 @@ func (r *Runner) create(ctx context.Context, opts Options, oneLiner string) (Res
 		}
 	}
 	res.Drafts = drafts
+	settled := opts.Settled
+	if !settled && opts.AutoReady {
+		allReady := len(drafts) > 0
+		for _, d := range drafts {
+			if len(issuecheck.Check(d.Body, []string{settledRisk, settledLabel})) > 0 {
+				allReady = false
+				break
+			}
+		}
+		settled = allReady
+	}
+	res.Settled = settled
 	labels := []string{opts.Label}
-	if opts.Settled {
+	if settled {
 		labels = []string{settledRisk, settledLabel}
 		// Settled means the human already decided: an incomplete draft is an
 		// error, not something to hand to the inbox.
@@ -222,7 +239,7 @@ func (r *Runner) create(ctx context.Context, opts Options, oneLiner string) (Res
 		}
 		res.Created = append(res.Created, ref)
 		r.printf("created #%d %s  %s\n", ref.Number, ref.URL, d.Title)
-		if opts.Settled {
+		if settled {
 			if _, err := scenario.EnsureFromIssue(opts.StateDir, opts.RepoSlug, ref.Number, d.Body); err != nil {
 				// Never leave an issue ready without its frozen acceptance test.
 				_ = r.Gh.IssueRemoveLabel(ctx, ref.Number, settledLabel)
@@ -334,8 +351,18 @@ func (r *Runner) redraft(ctx context.Context, opts Options, oneLiner string) (Re
 	if err := r.Gh.IssueEdit(ctx, n, d.Title, d.Body); err != nil {
 		return res, fmt.Errorf("say: redraft #%d: edit: %w", n, err)
 	}
-	if err := r.Gh.IssueAddLabel(ctx, n, opts.Label); err != nil {
-		return res, fmt.Errorf("say: redraft #%d: label %s: %w", n, opts.Label, err)
+	if opts.AutoReady && len(issuecheck.Check(d.Body, []string{settledRisk, settledLabel})) == 0 {
+		if _, err := scenario.EnsureFromIssue(opts.StateDir, opts.RepoSlug, n, d.Body); err == nil {
+			_ = r.Gh.IssueAddLabel(ctx, n, settledRisk)
+			_ = r.Gh.IssueAddLabel(ctx, n, settledLabel)
+			_ = r.Gh.IssueRemoveLabel(ctx, n, opts.Label)
+			res.Settled = true
+		}
+	}
+	if !res.Settled {
+		if err := r.Gh.IssueAddLabel(ctx, n, opts.Label); err != nil {
+			return res, fmt.Errorf("say: redraft #%d: label %s: %w", n, opts.Label, err)
+		}
 	}
 	if err := r.Gh.IssueComment(ctx, n, summary); err != nil {
 		return res, fmt.Errorf("say: redraft #%d: comment: %w", n, err)
