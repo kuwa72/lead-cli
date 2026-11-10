@@ -61,6 +61,9 @@ type Options struct {
 	// RunningCount returns the dispatcher's current running count.
 	// Nil falls back to counting the running section.
 	RunningCount func() (int, error)
+	// Wake signals the background dispatcher to run a pass immediately
+	// after an inbox action readies an issue (issue #308).
+	Wake func()
 	// PreviewDelay is the debounce before fetching a preview after the
 	// cursor moves. Interactive runs set this to 150ms; headless tests
 	// leave it at zero so previews load synchronously.
@@ -680,6 +683,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd := m.setStatus(msg.status)
 		if msg.refresh {
+			if m.opts.Wake != nil {
+				m.opts.Wake()
+			}
 			m.loading = true
 			return m, tea.Batch(m.loadCmd(), cmd)
 		}

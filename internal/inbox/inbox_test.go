@@ -59,8 +59,8 @@ func TestBuild_SectionsFromLabelsAndState(t *testing.T) {
 	if got[4].Items[0].Agent != "agy" || got[4].Items[0].Branch != "issue/70-x" {
 		t.Errorf("running item lacks agent/branch: %+v", got[4].Items[0])
 	}
-	if got[0].Collapsed || got[1].Collapsed || got[2].Collapsed || !got[3].Collapsed || !got[4].Collapsed || !got[5].Collapsed {
-		t.Errorf("collapsed flags: %v %v %v %v %v %v, want false false false true true true", got[0].Collapsed, got[1].Collapsed, got[2].Collapsed, got[3].Collapsed, got[4].Collapsed, got[5].Collapsed)
+	if got[0].Collapsed || got[1].Collapsed || got[2].Collapsed || !got[3].Collapsed || got[4].Collapsed || !got[5].Collapsed {
+		t.Errorf("collapsed flags: %v %v %v %v %v %v, want false false false true false true", got[0].Collapsed, got[1].Collapsed, got[2].Collapsed, got[3].Collapsed, got[4].Collapsed, got[5].Collapsed)
 	}
 }
 
@@ -2032,4 +2032,29 @@ func TestKeyT_OnBlockedUnblocksAndResetsAttempts(t *testing.T) {
 		t.Errorf("workflow #9 = %+v, want Attempts=0 Status=in_progress", w)
 	}
 }
+
+// issue #308: renderRow displays the landing stage badge (e.g. [review]) on
+// Running rows, and approving/unblocking wakes the background dispatcher.
+func TestRenderRow_RunningDisplaysStageBadge(t *testing.T) {
+	_, _, m := newFixture(t)
+	it := Item{Number: 70, Title: "feat: login", Kind: KindRunning, Stage: "review", Agent: "agy"}
+	sec := Section{Kind: KindRunning, Items: []Item{it}}
+	row := Row{Section: &sec, Item: &sec.Items[0]}
+	cols := m.listColumns(80)
+	line := m.renderRow(row, cols, 80, false, time.Now())
+	if !strings.Contains(line, "[review]") {
+		t.Errorf("renderRow for running item with Stage=review missing [review]: %q", line)
+	}
+}
+
+func TestKeyA_WakesDispatcher(t *testing.T) {
+	_, _, m := newFixture(t)
+	woke := 0
+	m.opts.Wake = func() { woke++ }
+	m = press(t, m, "a")
+	if woke == 0 {
+		t.Errorf("expected Wake() to be called after approving #7, got %d calls", woke)
+	}
+}
+
 

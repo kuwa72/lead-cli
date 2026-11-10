@@ -1407,3 +1407,42 @@ func TestOnce_FreezesBodyScenarioBeforeLaunch(t *testing.T) {
 		t.Fatalf("launch calls = %d, want 1", len(l.Calls))
 	}
 }
+
+// issue #308: Wake() interrupts Loop's interval sleep so newly readied issues
+// dispatch immediately instead of waiting 30s.
+func TestLoop_WakeTriggersImmediatePass(t *testing.T) {
+	d, gh, _, l := newFixture(t) // starts with 0 ready issues
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	launched := make(chan struct{}, 1)
+	l.OnWait = func(c launchCall) error {
+		iss := gh.Issues[7]
+		iss.State = "CLOSED"
+		gh.Issues[7] = iss
+		select {
+		case launched <- struct{}{}:
+		default:
+		}
+		return nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- d.Loop(ctx, 10*time.Second)
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+	gh.Issues[7] = ports.Issue{Number: 7, Title: "wake test", Body: "body", State: "OPEN"}
+	gh.Labeled["ready"] = []ports.IssueSummary{{Number: 7, Title: "wake test"}}
+	d.Wake()
+
+	select {
+	case <-launched:
+	case <-time.After(1 * time.Second):
+		t.Fatal("Wake() did not trigger immediate dispatch pass within 1s")
+	}
+	cancel()
+	<-done
+}
+

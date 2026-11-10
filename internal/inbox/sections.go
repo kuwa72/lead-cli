@@ -197,7 +197,15 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		mergedSection.Truncated = true
 	}
 
-	running := Section{Kind: KindRunning, Collapsed: true}
+	running := Section{Kind: KindRunning, Collapsed: false}
+	titleByIssue := map[int]string{}
+	for _, list := range [][]ports.IssueSummary{bo.OpenIssues, needsReview, blocked, bo.Ready} {
+		for _, s := range list {
+			if t := strings.TrimSpace(s.Title); t != "" && titleByIssue[s.Number] == "" {
+				titleByIssue[s.Number] = t
+			}
+		}
+	}
 	for _, w := range wfs {
 		if w.Status != state.StatusInProgress {
 			continue
@@ -210,7 +218,11 @@ func Build(needsReview, blocked []ports.IssueSummary, merged []ports.MergedIssue
 		if bo.OpenNumbers != nil && !bo.OpenNumbers[w.Issue] {
 			continue
 		}
-		it := Item{Number: w.Issue, Title: strings.TrimSpace(w.Branch), Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Branch: w.Branch, PRNumber: firstPRNumber(w.PullRequests), StartedAt: w.StartedAt, Kind: KindRunning}
+		title := strings.TrimSpace(w.Branch)
+		if t := titleByIssue[w.Issue]; t != "" {
+			title = t
+		}
+		it := Item{Number: w.Issue, Title: title, Agent: w.Agent, Attempts: w.Attempts, PID: w.PID, LogPath: w.LogPath, Branch: w.Branch, PRNumber: firstPRNumber(w.PullRequests), StartedAt: w.StartedAt, Kind: KindRunning}
 		if l, ok := bo.Landings[w.Issue]; ok {
 			it.Stage = l.Stage
 		}

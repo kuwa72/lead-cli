@@ -1112,6 +1112,7 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 		},
 	}
 	opts.RunningCount = d.RunningCount
+	opts.Wake = d.Wake
 	d.Land = landRunner(cwd, filepath.Join(filepath.Dir(deps.stateFile()), "logs"))
 	opts.OnSettingsChange = func(c inbox.Config) {
 		cfg.Agent = c.Agent

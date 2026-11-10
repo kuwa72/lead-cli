@@ -126,7 +126,7 @@ func TestInboxSettingsDisablesNotifications(t *testing.T) {
 
 func runningHeadlessDeps(t *testing.T, startedAgo time.Duration, logAge time.Duration) Deps {
 	t.Helper()
-	t.Setenv("LEAD_TEST_INBOX_KEYS", "j,j,j,j,enter,j,q")
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "k,j,q")
 	stateFile := filepath.Join(t.TempDir(), "workflows.json")
 	t.Setenv("LEAD_STATE_FILE", stateFile)
 	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {
@@ -217,7 +217,7 @@ func TestInboxRunningPreviewActivityFallsBackToStartedAt(t *testing.T) {
 }
 
 func TestInboxStopKeyStopsRunningAgent(t *testing.T) {
-	t.Setenv("LEAD_TEST_INBOX_KEYS", "j,j,j,j,enter,j,d,q")
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "d,q")
 	stateFile := filepath.Join(t.TempDir(), "workflows.json")
 	t.Setenv("LEAD_STATE_FILE", stateFile)
 	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {

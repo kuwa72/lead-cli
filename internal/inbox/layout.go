@@ -320,7 +320,14 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 	}
 	it := *r.Item
 	title := Sanitize(it.Title)
-	if it.DeferredBy > 0 {
+	if it.Kind == KindRunning && it.Stage != "" {
+		badge := "[" + Sanitize(it.Stage) + "]"
+		title = truncTail(title, c.titleW-cellWidth(badge)-2)
+		if title != "" {
+			title += "  "
+		}
+		title += badge
+	} else if it.DeferredBy > 0 {
 		// Deferred rows carry the reason in the title column; the note is
 		// kept whole while the title yields space for it (issue #212).
 		note := fmt.Sprintf("deferred: blocked by #%d", it.DeferredBy)
