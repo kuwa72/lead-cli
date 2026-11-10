@@ -1172,8 +1172,14 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 			opts.StartupNotice += notice
 			fmt.Fprintln(cmd.ErrOrStderr(), notice)
 		} else {
-			defer lock.Release()
+			loopDone := make(chan struct{})
+			defer func() {
+				cancel()
+				<-loopDone
+				lock.Release()
+			}()
 			go func() {
+				defer close(loopDone)
 				if err := d.Loop(dctx, 30*time.Second); err != nil {
 					fmt.Fprintln(cmd.ErrOrStderr(), "dispatch:", err)
 				}
