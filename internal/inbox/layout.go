@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+	"github.com/muesli/termenv"
 
 	"github.com/kuwa72/lead-cli/internal/state"
 )
@@ -73,7 +74,11 @@ func (m Model) ruleW(w int) string {
 	if m.theme != nil && m.theme.Mode() == ModePlain {
 		char = "-"
 	}
-	return strings.Repeat(char, w)
+	line := strings.Repeat(char, w)
+	if m.theme != nil && m.theme.Mode() != ModePlain && m.theme.Profile() != termenv.Ascii {
+		return m.theme.Render(line, TokenBorderMuted, TokenBgCanvas, false, false, false)
+	}
+	return line
 }
 
 func cellWidth(s string) int { return lipgloss.Width(s) }
@@ -313,16 +318,21 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 		if m.theme == nil {
 			return plain
 		}
-		if r.Section.Kind == KindBlocked && len(r.Section.Items) > 0 {
-			return m.theme.Render(plain, TokenStatusWarning, TokenBgCanvas, true, false, false)
+		if selected {
+			return m.theme.Accent(plain[:2], true) + m.theme.Selected(plain[2:])
 		}
-		return m.theme.ListRow(plain, true)
+		return m.theme.SectionHeader(r.Section.Kind, plain, len(r.Section.Items) > 0)
 	}
 	it := *r.Item
-	title := Sanitize(it.Title)
+	rawTitle := Sanitize(it.Title)
+	title := rawTitle
+	var badge string
+	var badgeToken Token
 	if it.Kind == KindRunning && it.Stage != "" {
-		badge := "[" + Sanitize(it.Stage) + "]"
-		title = truncTail(title, c.titleW-cellWidth(badge)-2)
+		badge = "[" + Sanitize(it.Stage) + "]"
+		badgeToken = TokenAccentPrimary
+		rawTitle = truncTail(rawTitle, c.titleW-cellWidth(badge)-2)
+		title = rawTitle
 		if title != "" {
 			title += "  "
 		}
@@ -330,43 +340,93 @@ func (m Model) renderRow(r Row, c listColumns, leftW int, selected bool, now tim
 	} else if it.DeferredBy > 0 {
 		// Deferred rows carry the reason in the title column; the note is
 		// kept whole while the title yields space for it (issue #212).
-		note := fmt.Sprintf("deferred: blocked by #%d", it.DeferredBy)
-		title = truncTail(title, c.titleW-cellWidth(note)-2)
+		badge = fmt.Sprintf("deferred: blocked by #%d", it.DeferredBy)
+		badgeToken = TokenStatusWarning
+		rawTitle = truncTail(rawTitle, c.titleW-cellWidth(badge)-2)
+		title = rawTitle
 		if title != "" {
 			title += "  "
 		}
-		title += note
+		title += badge
+	} else {
+		rawTitle = truncTail(rawTitle, c.titleW)
+		title = rawTitle
 	}
-	b.WriteString(fitRight(fmt.Sprintf("#%d", it.Number), c.issueW))
+	issueCell := fitRight(fmt.Sprintf("#%d", it.Number), c.issueW)
+	titleCell := fitLeft(title, c.titleW)
+	b.WriteString(issueCell)
 	b.WriteString(" ")
-	b.WriteString(fitLeft(title, c.titleW))
+	b.WriteString(titleCell)
+	var updCell, agentCell, triesCell, prCell string
 	if c.showUpd {
-		b.WriteString(" " + fitRight(rowAge(r, now), c.updW))
+		updCell = fitRight(rowAge(r, now), c.updW)
+		b.WriteString(" " + updCell)
 	}
 	if c.showAgent {
 		agent := Sanitize(it.Agent)
 		if agent == "" {
 			agent = "-"
 		}
-		b.WriteString(" " + fitLeft(agent, c.agentW))
+		agentCell = fitLeft(agent, c.agentW)
+		b.WriteString(" " + agentCell)
 	}
 	if c.showTries {
 		tries := "-"
 		if it.Attempts > 0 {
 			tries = fmt.Sprintf("%d", it.Attempts)
 		}
-		b.WriteString(" " + fitRight(tries, c.triesW))
+		triesCell = fitRight(tries, c.triesW)
+		b.WriteString(" " + triesCell)
 	}
 	if c.showPR {
 		pr := "-"
 		if it.PRNumber > 0 {
 			pr = fmt.Sprintf("#%d", it.PRNumber)
 		}
-		b.WriteString(" " + fitRight(pr, c.prW))
+		prCell = fitRight(pr, c.prW)
+		b.WriteString(" " + prCell)
 	}
 	plain := padRight(b.String(), leftW)
 	if selected && m.theme != nil {
 		return m.theme.Accent(plain[:2], true) + m.theme.Selected(plain[2:])
+	}
+	if m.theme != nil && m.theme.Mode() != ModePlain && m.theme.Profile() != termenv.Ascii {
+		var sb strings.Builder
+		if badge != "" && cellWidth(rawTitle)+cellWidth(badge) <= c.titleW {
+			sep := ""
+			if rawTitle != "" {
+				sep = "  "
+			}
+			used := cellWidth(rawTitle) + cellWidth(sep) + cellWidth(badge)
+			pad := ""
+			if c.titleW > used {
+				pad = strings.Repeat(" ", c.titleW-used)
+			}
+			sb.WriteString(m.theme.Render("  "+issueCell+" "+rawTitle+sep, TokenFgPrimary, TokenBgCanvas, false, false, false))
+			sb.WriteString(m.theme.Render(badge, badgeToken, TokenBgCanvas, true, false, false))
+			if pad != "" {
+				sb.WriteString(m.theme.Render(pad, TokenFgPrimary, TokenBgCanvas, false, false, false))
+			}
+		} else {
+			sb.WriteString(m.theme.Render("  "+issueCell+" "+titleCell, TokenFgPrimary, TokenBgCanvas, false, false, false))
+		}
+		if c.showUpd {
+			sb.WriteString(m.theme.Render(" "+updCell, TokenFgSecondary, TokenBgCanvas, false, false, false))
+		}
+		if c.showAgent {
+			sb.WriteString(m.theme.Render(" "+agentCell, TokenFgSecondary, TokenBgCanvas, false, false, false))
+		}
+		if c.showTries {
+			sb.WriteString(m.theme.Render(" "+triesCell, TokenFgSecondary, TokenBgCanvas, false, false, false))
+		}
+		if c.showPR {
+			prTok := TokenFgSecondary
+			if it.PRNumber > 0 {
+				prTok = TokenStatusInfo
+			}
+			sb.WriteString(m.theme.Render(" "+prCell, prTok, TokenBgCanvas, false, false, false))
+		}
+		return padRight(sb.String(), leftW)
 	}
 	if m.theme != nil {
 		return m.theme.ListRow(plain, false)
@@ -460,10 +520,21 @@ func (m Model) previewHeader() string {
 		}
 		return ""
 	}
-	header := Sanitize(fmt.Sprintf("#%d  %s", m.detail.Number, row.Section.Kind.Title()))
+	prefix := ""
+	if m.inspectorFocus {
+		prefix = "● "
+	}
+	header := prefix + Sanitize(fmt.Sprintf("#%d  %s", m.detail.Number, row.Section.Kind.Title()))
 	if m.previewOffset > 0 {
 		header += fmt.Sprintf("  ↑ %d", m.previewOffset)
 	}
+	tabs := [3]string{"1:Overview", "2:Diff", "3:Log"}
+	idx := m.inspectorTab
+	if idx < 0 || idx >= len(tabs) {
+		idx = 0
+	}
+	tabs[idx] = "[" + tabs[idx] + "]"
+	header += "  " + strings.Join(tabs[:], " ")
 	return header
 }
 

@@ -57,11 +57,11 @@ var tokenColors = map[Token]colorDef{
 	TokenBgSurface:     {darkRGB: "#21262D", lightRGB: "#FFFFFF", dark256: 235, light256: 231, ansi: 0, terminalDefault: true},
 	TokenBgSelection:   {darkRGB: "#263C46", lightRGB: "#D8EBF0", dark256: 237, light256: 254, ansi: 8, terminalDefault: true},
 	TokenFgPrimary:     {darkRGB: "#E6EDF3", lightRGB: "#1F2328", dark256: 255, light256: 235, ansi: 15, terminalDefault: true},
-	TokenFgSecondary:   {darkRGB: "#A8B3BF", lightRGB: "#59636E", dark256: 249, light256: 241, ansi: 7, terminalDefault: true},
+	TokenFgSecondary:   {darkRGB: "#A8B3BF", lightRGB: "#59636E", dark256: 249, light256: 241, ansi: 8},
 	TokenFgEmphasis:    {darkRGB: "#FFFFFF", lightRGB: "#0D1117", dark256: 231, light256: 233, ansi: 15, terminalDefault: true},
 	TokenFgSelection:   {darkRGB: "#F0F6FC", lightRGB: "#142D36", dark256: 255, light256: 235, ansi: 15, terminalDefault: true},
-	TokenBorderMuted:   {darkRGB: "#444C56", lightRGB: "#BBC3CD", dark256: 239, light256: 251, ansi: 8, terminalDefault: true},
-	TokenBorderStrong:  {darkRGB: "#7D8995", lightRGB: "#66717E", dark256: 245, light256: 243, ansi: 7, terminalDefault: true},
+	TokenBorderMuted:   {darkRGB: "#444C56", lightRGB: "#BBC3CD", dark256: 239, light256: 251, ansi: 8},
+	TokenBorderStrong:  {darkRGB: "#7D8995", lightRGB: "#66717E", dark256: 245, light256: 243, ansi: 7},
 	TokenAccentPrimary: {darkRGB: "#76CEDB", lightRGB: "#096978", dark256: 116, light256: 23, ansi: 6},
 	TokenStatusInfo:    {darkRGB: "#A5BFFF", lightRGB: "#315A96", dark256: 147, light256: 60, ansi: 4},
 	TokenStatusWarning: {darkRGB: "#E6B566", lightRGB: "#805800", dark256: 179, light256: 94, ansi: 3},
@@ -226,6 +226,27 @@ func (t *Theme) ListRow(text string, header bool) string {
 	return t.Render(text, TokenFgPrimary, TokenBgCanvas, false, false, false)
 }
 
+// SectionHeader renders a section header with semantic color based on section kind and whether it has items.
+func (t *Theme) SectionHeader(kind Kind, text string, hasItems bool) string {
+	if !hasItems {
+		return t.Render(text, TokenFgSecondary, TokenBgCanvas, false, false, false)
+	}
+	switch kind {
+	case KindBlocked:
+		return t.Render(text, TokenStatusError, TokenBgCanvas, true, false, false)
+	case KindNeedsReview:
+		return t.Render(text, TokenStatusWarning, TokenBgCanvas, true, false, false)
+	case KindRunning:
+		return t.Render(text, TokenAccentPrimary, TokenBgCanvas, true, false, false)
+	case KindReady:
+		return t.Render(text, TokenStatusSuccess, TokenBgCanvas, true, false, false)
+	case KindMerged:
+		return t.Render(text, TokenStatusInfo, TokenBgCanvas, true, false, false)
+	default:
+		return t.Render(text, TokenFgPrimary, TokenBgCanvas, true, false, false)
+	}
+}
+
 // Header renders the dashboard header line.
 func (t *Theme) Header(repo string, meta string) string {
 	return t.Render(repo, TokenFgEmphasis, TokenBgCanvas, true, false, false) +
@@ -272,7 +293,7 @@ func (t *Theme) Border(strong bool) string {
 	return t.Render("─", TokenBorderMuted, "", false, false, false)
 }
 
-// Preview renders a line of preview text with diff syntax highlighting.
+// Preview renders a line of preview text with diff syntax and semantic structure highlighting.
 func (t *Theme) Preview(text string, title bool) string {
 	if title {
 		return t.Render(text, TokenFgEmphasis, TokenBgSurface, true, false, false)
@@ -281,8 +302,14 @@ func (t *Theme) Preview(text string, title bool) string {
 	if strings.HasPrefix(trimmed, "+") && !strings.HasPrefix(trimmed, "+++") {
 		return t.Render(text, TokenStatusSuccess, TokenBgSurface, false, false, false)
 	}
-	if strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "---") {
+	if strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "---") && !strings.HasPrefix(trimmed, "- ") {
 		return t.Render(text, TokenStatusError, TokenBgSurface, false, false, false)
+	}
+	if strings.HasPrefix(trimmed, "- [x]") || strings.HasPrefix(trimmed, "- [X]") {
+		return t.Render(text, TokenStatusSuccess, TokenBgSurface, false, false, false)
+	}
+	if strings.HasPrefix(trimmed, "- [ ]") {
+		return t.Render(text, TokenStatusWarning, TokenBgSurface, false, false, false)
 	}
 	if strings.HasPrefix(trimmed, "@@") {
 		return t.Render(text, TokenAccentPrimary, TokenBgSurface, true, false, false)
@@ -290,8 +317,17 @@ func (t *Theme) Preview(text string, title bool) string {
 	if strings.HasPrefix(trimmed, "diff --git") || strings.HasPrefix(trimmed, "+++") || strings.HasPrefix(trimmed, "---") {
 		return t.Render(text, TokenFgEmphasis, TokenBgSurface, true, false, false)
 	}
-	if strings.HasPrefix(trimmed, "Changed files") || strings.HasPrefix(trimmed, "PR Diff") {
-		return t.Render(text, TokenFgEmphasis, TokenBgSurface, true, false, false)
+	if strings.HasPrefix(trimmed, "Changed files") || strings.HasPrefix(trimmed, "PR Diff") || strings.HasPrefix(trimmed, "Agent Live Output") {
+		return t.Render(text, TokenAccentPrimary, TokenBgSurface, true, false, false)
+	}
+	if strings.Contains(trimmed, " · Issue") || strings.Contains(trimmed, " · Comment") || strings.Contains(trimmed, " · PR #") {
+		if strings.HasPrefix(trimmed, "Blocked reason") {
+			return t.Render(text, TokenStatusError, TokenBgSurface, true, false, false)
+		}
+		return t.Render(text, TokenAccentPrimary, TokenBgSurface, true, false, false)
+	}
+	if strings.HasPrefix(trimmed, "Agent: ") || strings.HasPrefix(trimmed, "Log: ") {
+		return t.Render(text, TokenFgSecondary, TokenBgSurface, false, false, false)
 	}
 	return t.Render(text, TokenFgPrimary, TokenBgSurface, false, false, false)
 }

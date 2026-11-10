@@ -167,3 +167,31 @@ func TestThemeOutputWidthIgnoresANSI(t *testing.T) {
 		t.Fatalf("rendered output is empty")
 	}
 }
+
+func TestTheme_TerminalModeStylesSemanticElements(t *testing.T) {
+	var b strings.Builder
+	th := NewTheme(ModeTerminal, termenv.ANSI, &b)
+
+	// Secondary text and borders should emit ANSI SGR in ModeTerminal so default terminals have hierarchy.
+	sec := th.Render("meta", TokenFgSecondary, TokenBgCanvas, false, false, false)
+	if !strings.Contains(sec, "\x1b[") {
+		t.Errorf("ModeTerminal TokenFgSecondary should emit ANSI SGR, got %q", sec)
+	}
+	border := th.Border(true)
+	if !strings.Contains(border, "\x1b[") {
+		t.Errorf("ModeTerminal Border(true) should emit ANSI SGR, got %q", border)
+	}
+
+	// SectionHeader should style different section kinds with distinct semantic colors.
+	blockedHdr := th.SectionHeader(KindBlocked, "▾ Blocked (1)", true)
+	reviewHdr := th.SectionHeader(KindNeedsReview, "▾ Needs review (2)", true)
+	runningHdr := th.SectionHeader(KindRunning, "▾ Running (1)", true)
+	readyHdr := th.SectionHeader(KindReady, "▾ Ready (3)", true)
+	if !strings.Contains(blockedHdr, "\x1b[") || !strings.Contains(reviewHdr, "\x1b[") || !strings.Contains(runningHdr, "\x1b[") || !strings.Contains(readyHdr, "\x1b[") {
+		t.Errorf("SectionHeader should emit ANSI SGR in ModeTerminal: blocked=%q review=%q running=%q ready=%q", blockedHdr, reviewHdr, runningHdr, readyHdr)
+	}
+	if blockedHdr == reviewHdr || reviewHdr == runningHdr {
+		t.Errorf("SectionHeader colors should differ by kind: blocked=%q review=%q running=%q", blockedHdr, reviewHdr, runningHdr)
+	}
+}
+
