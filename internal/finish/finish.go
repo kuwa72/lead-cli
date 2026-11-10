@@ -2,6 +2,7 @@ package finish
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,8 +16,16 @@ import (
 	"github.com/kuwa72/lead-cli/internal/review"
 	"github.com/kuwa72/lead-cli/internal/scenario"
 	"github.com/kuwa72/lead-cli/internal/state"
-	"github.com/kuwa72/lead-cli/internal/workflow"
 )
+
+// RebaseGit is the optional git subset for auto-rebasing a conflicting PR
+// worktree onto the base branch (issue #310). *git.Runner implements it.
+type RebaseGit interface {
+	Fetch(dir, remote, ref string) error
+	Rebase(dir, onto string) error
+	RebaseAbort(dir string) error
+	PushForceWithLease(dir, remote, refspec string) error
+}
 
 // Defaults mirror bin/ci-wait (1800s cap, 10s poll).
 const (
@@ -48,7 +57,7 @@ type Options struct {
 	Sleep func(time.Duration)
 	// Git and WorkDir let the post-merge smoke create a worktree and
 	// finish's caller supply the checkout (issue #275).
-	Git     workflow.GitRunner
+	Git     PostMergeGit
 	WorkDir string
 	// PostMerge runs the post-merge smoke after a merge (issue #275).
 	// Nil disables it.
@@ -252,8 +261,12 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 	if info.State != "OPEN" {
 		return Result{}, fmt.Errorf("PR #%d: state %q, want OPEN", prNumber, info.State)
 	}
+	rebased := false
 	if info.Mergeable == "CONFLICTING" {
-		return Result{}, fmt.Errorf("PR #%d: merge conflict; resolve it first (checks will not run)", prNumber)
+		if err := tryAutoRebase(ctx, gh, w, opts.Git); err != nil {
+			return Result{}, fmt.Errorf("PR #%d: merge conflict; resolve it first (checks will not run)", prNumber)
+		}
+		rebased = true
 	}
 
 	// Guardrail (RFC inbox §7): a PR touching protected convention files
@@ -334,7 +347,7 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return pause(ctx, gh, issue, Result{ChecksPassed: true,
 			Message: fmt.Sprintf("CI passed for PR #%d, but the scenario harness failed; re-run `lead review %d` after fixing it.", prNumber, prNumber)})
 	case found && marker.Scenarios != "" && marker.Scenarios != "0/0":
-		if !strings.EqualFold(marker.SHA, head) {
+		if !rebased && !strings.EqualFold(marker.SHA, head) {
 			return pause(ctx, gh, issue, Result{ChecksPassed: true,
 				Message: fmt.Sprintf("CI passed for PR #%d, but the scenario result is for %s and the head is now %s; re-review required: run `lead review %d` again.",
 					prNumber, shortSHA(marker.SHA), shortSHA(head), prNumber)})
@@ -435,6 +448,37 @@ func guardrail(ctx context.Context, gh ports.GhClient, pr int) ([]string, error)
 	}
 	return GuardedFiles(files), nil
 }
+
+// tryAutoRebase fetches origin/<base>, rebases w.Worktree onto it, and
+// force-pushes with lease when a PR is CONFLICTING (issue #310).
+func tryAutoRebase(ctx context.Context, gh ports.GhClient, w state.Workflow, gitRunner PostMergeGit) error {
+	if w.Worktree == "" || gitRunner == nil {
+		return errors.New("no worktree or git runner for auto-rebase")
+	}
+	rg, ok := gitRunner.(RebaseGit)
+	if !ok {
+		return errors.New("git runner does not support rebase")
+	}
+	base := "main"
+	if repo := git.RepoSlug(w.Repository); repo != "" {
+		if def, err := gh.RepoDefaultBranch(ctx, repo); err == nil && def != "" {
+			base = def
+		}
+	}
+	if err := rg.Fetch(w.Worktree, "origin", base); err != nil {
+		return err
+	}
+	if err := rg.Rebase(w.Worktree, "origin/"+base); err != nil {
+		_ = rg.RebaseAbort(w.Worktree)
+		return err
+	}
+	refspec := "HEAD"
+	if w.Branch != "" {
+		refspec = "HEAD:refs/heads/" + w.Branch
+	}
+	return rg.PushForceWithLease(w.Worktree, "origin", refspec)
+}
+
 
 // runNoPR records a non-PR outcome (research/docs) and optionally closes.
 func runNoPR(ctx context.Context, gh ports.GhClient, store *state.Store, w state.Workflow, opts Options) (Result, error) {

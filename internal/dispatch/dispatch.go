@@ -60,14 +60,15 @@ const (
 
 // Options tunes one Dispatcher. Zero fields take the defaults above.
 type Options struct {
-	Parallel     int
-	Agent        string // headless implementation agent (agents.impl)
-	AgentMode    string // headless dispatch mode (batch or dangerous; default batch)
-	ReadyLabel   string
-	BlockedLabel string
-	MaxAttempts  int
-	LogDir       string // agent stdout/stderr files; required
-	WorkDir      string // repository context for workflow.Start; required
+	Parallel       int
+	Agent          string   // headless implementation agent (agents.impl)
+	FallbackAgents []string // fallback agents when primary hits quota/rate limit (issue #310)
+	AgentMode      string   // headless dispatch mode (batch or dangerous; default batch)
+	ReadyLabel     string
+	BlockedLabel   string
+	MaxAttempts    int
+	LogDir         string // agent stdout/stderr files; required
+	WorkDir        string // repository context for workflow.Start; required
 	// StuckAfter treats a running agent with no log output this long as
 	// failed (issue #186). Zero means DefaultStuckAfter; negative
 	// disables the idle check.
@@ -102,6 +103,51 @@ func (o Options) withDefaults() Options {
 	}
 	o.Agent = agent.Resolve(o.Agent)
 	return o
+}
+
+func (o Options) agentChain() []string {
+	primary := agent.Resolve(o.Agent)
+	chain := []string{primary}
+	seen := map[string]bool{primary: true}
+	for _, fb := range o.FallbackAgents {
+		r := agent.Resolve(fb)
+		if r != "" && !seen[r] {
+			seen[r] = true
+			chain = append(chain, r)
+		}
+	}
+	return chain
+}
+
+// IsQuotaError reports whether an agent exit error or log tail indicates an
+// API rate limit, quota exhaustion, or service overload (issue #310).
+func IsQuotaError(waitErr error, logExcerpt string) bool {
+	combined := strings.ToLower(logExcerpt)
+	if waitErr != nil {
+		combined += "\n" + strings.ToLower(waitErr.Error())
+	}
+	for _, kw := range []string{
+		"rate limit",
+		"rate_limit",
+		"ratelimit",
+		"quota exceeded",
+		"quota_exceeded",
+		"exceeded your current quota",
+		"insufficient_quota",
+		"usage limit",
+		"too many requests",
+		"resource_exhausted",
+		"overloaded_error",
+		"429 ",
+		" 429",
+		"http 429",
+		"status 429",
+	} {
+		if strings.Contains(combined, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // Process is a started agent.
@@ -682,6 +728,7 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res 
 		repo = RepoKey(origin)
 		slug = git.RepoSlug(origin)
 	}
+	activeAgent := opts.Agent
 	defer func() {
 		// On cancellation reconnect owns the record only while the PID is
 		// still in the state file. evaluate's failure path clears the PID,
@@ -691,7 +738,7 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res 
 				return
 			}
 		}
-		d.recordRun(opts, number, started, opts.Agent, repo, res)
+		d.recordRun(opts, number, started, activeAgent, repo, res)
 	}()
 
 	iss, err := d.Gh.View(ctx, number)
@@ -717,31 +764,51 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res 
 	res.Worktree = start.Worktree
 
 	prompt := d.buildPromptForRun(ctx, iss, prevWf, hadPrev)
-	argv, err := agent.HeadlessArgv(opts.Agent, prompt)
-	if err != nil {
-		res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: %w", number, err)
-		return res
+	if opts.LogDir != "" {
+		_ = os.MkdirAll(opts.LogDir, 0o755)
 	}
-	logPath := filepath.Join(opts.LogDir, fmt.Sprintf("issue-%d-%s.log", number, time.Now().UTC().Format("20060102T150405Z")))
-	res.LogPath = logPath
+	agents := opts.agentChain()
+	var logPath string
+	var waitErr error
+	for idx, curAgent := range agents {
+		activeAgent = curAgent
+		argv, err := agent.HeadlessArgv(curAgent, prompt)
+		if err != nil {
+			res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: %w", number, err)
+			return res
+		}
+		logPath = filepath.Join(opts.LogDir, fmt.Sprintf("issue-%d-%s.log", number, time.Now().UTC().Format("20060102T150405Z")))
+		res.LogPath = logPath
 
-	proc, err := d.Launcher.Start(ctx, start.Worktree, argv, logPath)
-	if err != nil {
-		res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: launch %s: %w", number, opts.Agent, err)
-		return res
-	}
-	if err := d.update(number, func(w *state.Workflow) {
-		w.Agent, w.PID, w.LogPath = opts.Agent, proc.Pid(), logPath
-		w.StartedAt = time.Now()
-	}); err != nil {
-		res.Outcome, res.Err = OutcomeError, err
-		return res
-	}
+		proc, err := d.Launcher.Start(ctx, start.Worktree, argv, logPath)
+		if err != nil {
+			res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: launch %s: %w", number, curAgent, err)
+			return res
+		}
+		if err := d.update(number, func(w *state.Workflow) {
+			w.Agent, w.PID, w.LogPath = curAgent, proc.Pid(), logPath
+			w.StartedAt = time.Now()
+		}); err != nil {
+			res.Outcome, res.Err = OutcomeError, err
+			return res
+		}
 
-	waitErr := proc.Wait()
-	if ctx.Err() != nil {
-		return Result{Issue: number, Worktree: start.Worktree, LogPath: logPath, Outcome: OutcomeRetry}
+		waitErr = proc.Wait()
+		if ctx.Err() != nil {
+			return Result{Issue: number, Worktree: start.Worktree, LogPath: logPath, Outcome: OutcomeRetry}
+		}
+		if idx+1 < len(agents) && waitErr != nil {
+			tail := logtail.Tail(logPath, BlockedLogLines, BlockedLogBytes)
+			if IsQuotaError(waitErr, tail) {
+				if d.Out != nil {
+					fmt.Fprintf(d.Out, "#%d: %s hit quota/rate limit, failing over to %s\n", number, curAgent, agents[idx+1])
+				}
+				continue
+			}
+		}
+		break
 	}
+	opts.Agent = activeAgent
 	return d.evaluate(ctx, opts, number, start.RepoRoot, start.Worktree, logPath, waitErr)
 }
 
