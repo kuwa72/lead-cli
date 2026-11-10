@@ -109,6 +109,12 @@ const (
 	modeLog
 )
 
+const (
+	inspectorTabOverview = 0
+	inspectorTabDiff     = 1
+	inspectorTabLog      = 2
+)
+
 type inputState struct {
 	prompt       string
 	text         []rune
@@ -140,6 +146,8 @@ type Model struct {
 	detailPrDiff      string
 	detailPrDiffErr   bool
 	previewOffset     int
+	inspectorFocus    bool
+	inspectorTab      int
 	previewSnapshot   previewSnapshot
 	input             inputState
 	status            string
@@ -664,10 +672,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.status == "" || m.status == "cached" {
 			statusCmd = m.setStatus(statusText)
 		}
-		// Load the preview only on reloads, not on the very first load, so the
-		// inbox is ready immediately and tests that start with a key sequence do
-		// not observe a preview fetch.
-		if wasRefreshed {
+		// In headless mode, load the preview only on reloads (not on the very
+		// first load) so tests that start with a key sequence do not observe a
+		// preview fetch; interactive mode loads the initial preview immediately.
+		if wasRefreshed || !m.opts.Headless {
 			if statusCmd != nil {
 				return m, tea.Batch(statusCmd, m.loadPreviewForCurrent())
 			}
@@ -805,9 +813,54 @@ func keyString(msg tea.KeyMsg) string {
 
 func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := keyString(msg)
+	if m.inspectorFocus {
+		switch key {
+		case "esc", "h":
+			m.inspectorFocus = false
+			return m, nil
+		case "j", "down":
+			m.previewOffset++
+			return m, nil
+		case "k", "up":
+			if m.previewOffset > 0 {
+				m.previewOffset--
+			}
+			return m, nil
+		case "pgdown":
+			m.previewOffset += 10
+			return m, nil
+		case "pgup":
+			if m.previewOffset > 10 {
+				m.previewOffset -= 10
+			} else {
+				m.previewOffset = 0
+			}
+			return m, nil
+		}
+	}
 	switch key {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "1":
+		m.inspectorTab = inspectorTabOverview
+		m.previewOffset = 0
+		return m, nil
+	case "2":
+		m.inspectorTab = inspectorTabDiff
+		m.previewOffset = 0
+		return m, nil
+	case "3":
+		m.inspectorTab = inspectorTabLog
+		m.previewOffset = 0
+		return m, nil
+	case "]":
+		m.inspectorTab = (m.inspectorTab + 1) % 3
+		m.previewOffset = 0
+		return m, nil
+	case "[":
+		m.inspectorTab = (m.inspectorTab + 2) % 3
+		m.previewOffset = 0
+		return m, nil
 	case "j", "down":
 		m.previewOffset = 0
 		m.cursor++
@@ -838,7 +891,21 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.previewOffset = 0
 		}
 		return m, nil
-	case "z", "tab":
+	case "tab":
+		if m.isSplit() {
+			if row, ok := m.current(); ok && !row.IsHeader() {
+				m.inspectorFocus = !m.inspectorFocus
+				return m, nil
+			}
+		}
+		m.inspectorFocus = false
+		m.previewOffset = 0
+		m.expanded = !m.expanded
+		m.clampCursor()
+		m.scrollToCursor()
+		return m, m.loadPreviewForCurrent()
+	case "z":
+		m.inspectorFocus = false
 		m.previewOffset = 0
 		m.expanded = !m.expanded
 		m.clampCursor()
@@ -941,7 +1008,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	it := *row.Item
 	gh := m.opts.Gh
 	switch key {
-	case "enter":
+	case "enter", "f":
 		return m, m.openDetailCmd(it)
 	case "a":
 		if it.Kind == KindBlocked && m.opts.OverrideBlocked != nil {
@@ -1587,7 +1654,7 @@ func (m Model) headerLine(w int) string {
 	if m.theme == nil {
 		return plain
 	}
-	return m.theme.Render(left, TokenFgEmphasis, TokenBgCanvas, true, false, false) + m.theme.Render(right, TokenFgSecondary, TokenBgCanvas, false, false, false)
+	return m.theme.Render(padRight(left, leftSpace), TokenFgEmphasis, TokenBgCanvas, true, false, false) + m.theme.Render(right, TokenFgSecondary, TokenBgCanvas, false, false, false)
 }
 
 func (m Model) borderChar(strong bool) string {
@@ -1620,9 +1687,22 @@ func (m Model) summaryLine(w int) string {
 		}
 		parts = append(parts, s.Kind.Title()+" "+suffix)
 	}
-	plain := padRight(truncTail(strings.Join(parts, "   "), w), w)
+	joined := strings.Join(parts, "   ")
+	plain := padRight(truncTail(joined, w), w)
 	if m.theme == nil {
 		return plain
+	}
+	if m.theme.Mode() != ModePlain && m.theme.Profile() != termenv.Ascii && cellWidth(joined) <= w {
+		var styledParts []string
+		for i, s := range m.sections {
+			styledParts = append(styledParts, m.theme.SectionHeader(s.Kind, parts[i], len(s.Items) > 0))
+		}
+		sep := m.theme.Render("   ", TokenFgSecondary, TokenBgCanvas, false, false, false)
+		pad := ""
+		if d := w - cellWidth(joined); d > 0 {
+			pad = m.theme.Render(strings.Repeat(" ", d), TokenFgSecondary, TokenBgCanvas, false, false, false)
+		}
+		return strings.Join(styledParts, sep) + pad
 	}
 	return m.theme.Render(plain, TokenFgSecondary, TokenBgCanvas, false, false, false)
 }
@@ -1684,7 +1764,11 @@ func (m Model) statusLine(w int) string {
 			s = "Fetching issues from GitHub..."
 		}
 	default:
-		s = "j/k move  Enter open  ? help  q quit"
+		if m.inspectorFocus {
+			s = "Inspector focused — j/k scroll  1/2/3 tab  Tab/Esc back to list"
+		} else {
+			s = "j/k move  Tab inspector  1/2/3 view  Enter open  ? help  q quit"
+		}
 		if m.previewOverflows() {
 			s += "  J/K scroll preview"
 		}
@@ -1787,28 +1871,60 @@ func (m Model) footer() string {
 	if width <= 0 {
 		width = 78
 	}
-	var lines []string
-	line := ""
+	var lineGroups [][]string
+	var curGroup []string
+	lineLen := 0
 	for _, token := range tokens {
-		candidate := token
-		if line != "" {
-			candidate = line + "   " + token
+		tokLen := len([]rune(token))
+		candLen := tokLen
+		if lineLen > 0 {
+			candLen = lineLen + 3 + tokLen
 		}
-		if line != "" && len([]rune(candidate)) > width {
-			lines = append(lines, line)
-			line = token
+		if lineLen > 0 && candLen > width {
+			lineGroups = append(lineGroups, curGroup)
+			curGroup = []string{token}
+			lineLen = tokLen
 		} else {
-			line = candidate
+			curGroup = append(curGroup, token)
+			lineLen = candLen
 		}
 	}
-	if line != "" {
-		lines = append(lines, line)
+	if len(curGroup) > 0 {
+		lineGroups = append(lineGroups, curGroup)
 	}
-	plain := strings.Join(lines, "\n")
-	if m.theme == nil {
-		return plain
+	if m.theme == nil || m.theme.Mode() == ModePlain || m.theme.Profile() == termenv.Ascii {
+		var lines []string
+		for _, grp := range lineGroups {
+			lines = append(lines, strings.Join(grp, "   "))
+		}
+		plain := strings.Join(lines, "\n")
+		if m.theme == nil {
+			return plain
+		}
+		return m.theme.Render(plain, TokenFgSecondary, TokenBgCanvas, false, false, false)
 	}
-	return m.theme.Render(plain, TokenFgSecondary, TokenBgCanvas, false, false, false)
+	var styledLines []string
+	sep := m.theme.Render("   ", TokenFgSecondary, TokenBgCanvas, false, false, false)
+	for _, grp := range lineGroups {
+		var styledTokens []string
+		for _, tok := range grp {
+			if isGlobalFooterToken(tok) {
+				styledTokens = append(styledTokens, m.theme.Render(tok, TokenFgSecondary, TokenBgCanvas, false, false, false))
+			} else {
+				styledTokens = append(styledTokens, m.theme.Render(tok, TokenAccentPrimary, TokenBgCanvas, true, false, false))
+			}
+		}
+		styledLines = append(styledLines, strings.Join(styledTokens, sep))
+	}
+	return strings.Join(styledLines, "\n")
+}
+
+func isGlobalFooterToken(tok string) bool {
+	return strings.HasPrefix(tok, "[m] ") ||
+		strings.HasPrefix(tok, "[g] ") ||
+		strings.HasPrefix(tok, "[,] ") ||
+		strings.HasPrefix(tok, "[?] ") ||
+		strings.HasPrefix(tok, "[q] ")
 }
 
 func (m Model) footerTokens() []string {
@@ -1916,10 +2032,11 @@ func (m Model) viewHelp() string {
 		"Inbox actions",
 		m.rule(),
 		"Move",
-		"  [j/k] or [↑/↓]    Move up/down (headers and issues)",
+		"  [j/k] or [↑/↓]    Move up/down (or scroll inspector when focused)",
+		"  [Tab]             Focus inspector pane in split view (z/Tab toggles all sections)",
+		"  [1/2/3] or [[/]]  Switch inspector tab (1:Overview, 2:Diff, 3:Log)",
 		"  [J/K]             Scroll preview pane down/up",
 		"  [Enter/space/→/l] Toggle section or open selected issue",
-		"  [z/Tab]           Toggle all sections",
 		"",
 		"Issue actions",
 		"  [a] Approve           needs-review issues only",

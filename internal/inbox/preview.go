@@ -187,8 +187,8 @@ func (m Model) previewLoadCmd(it Item, req int) tea.Cmd {
 			iss.BlockedReason = extractBlockedReason(iss.Body)
 		}
 		snap := previewSnapshot{issue: iss, prNumber: it.PRNumber, comments: comments, commentsErr: commentsErr}
-		if it.Kind == KindRunning && it.LogPath != "" {
-			snap.agentLog = readLogTail(it.LogPath, 50)
+		if it.LogPath != "" {
+			snap.agentLog = readLogTail(it.LogPath, 100)
 		}
 		if it.PRNumber > 0 {
 			body, err := gh.PrBody(ctx, it.PRNumber)
@@ -284,8 +284,8 @@ func (m *Model) loadPreviewForCurrent() tea.Cmd {
 		// Render the saved detail immediately; the delayed load still runs to
 		// pick up PR body/diff (issue #263).
 		snap := previewSnapshot{issue: entry.Issue, prNumber: it.PRNumber, comments: entry.Comments}
-		if it.Kind == KindRunning && it.LogPath != "" {
-			snap.agentLog = readLogTail(it.LogPath, 50)
+		if it.LogPath != "" {
+			snap.agentLog = readLogTail(it.LogPath, 100)
 		}
 		m.applySnapshot(snap)
 		m.previewLoading = false
@@ -437,8 +437,14 @@ func (m Model) previewContent(h int) ([]string, bool) {
 	if !ok || row.IsHeader() || h <= 0 {
 		return nil, false
 	}
-	kind := row.Item.Kind
 	out := []string{}
+	switch m.inspectorTab {
+	case inspectorTabDiff:
+		return m.diffTabPreview(out, row.Item, h)
+	case inspectorTabLog:
+		return m.logTabPreview(out, row.Item, h)
+	}
+	kind := row.Item.Kind
 	more := false
 	switch kind {
 	case KindNeedsReview:
@@ -453,6 +459,65 @@ func (m Model) previewContent(h int) ([]string, bool) {
 		out, more = appendSourceBody(out, m.detail.Body, "Issue", h)
 	}
 	return out, more
+}
+
+func (m Model) diffTabPreview(out []string, it *Item, h int) ([]string, bool) {
+	if m.detailPrNum <= 0 {
+		out = append(out, "No linked PR")
+		return out, false
+	}
+	if m.detailPrDiffErr {
+		out = append(out, fmt.Sprintf("PR diff unavailable (#%d)", m.detailPrNum))
+		return out, false
+	}
+	if m.detailPrDiff == "" {
+		out = append(out, fmt.Sprintf("PR #%d (no diff)", m.detailPrNum))
+		return out, false
+	}
+	stats, diffLines := parseDiffStats(m.detailPrDiff)
+	if len(stats) > 0 {
+		out = append(out, fmt.Sprintf("Changed files (%d):", len(stats)))
+		for _, st := range stats {
+			if len(out) >= h {
+				return out, true
+			}
+			out = append(out, fmt.Sprintf("  • %s (+%d, -%d)", st.name, st.additions, st.deletions))
+		}
+	}
+	if len(diffLines) > 0 {
+		if len(out) < h {
+			out = append(out, fmt.Sprintf("PR Diff (#%d):", m.detailPrNum))
+		}
+		for _, dl := range diffLines {
+			if len(out) >= h {
+				return out, true
+			}
+			out = append(out, dl)
+		}
+	}
+	return out, false
+}
+
+func (m Model) logTabPreview(out []string, it *Item, h int) ([]string, bool) {
+	if m.detailAgentLog != "" || it.LogPath != "" || it.Kind == KindRunning {
+		return m.runningPreview(out, it, h)
+	}
+	if len(m.detailComments) > 0 {
+		out = append(out, "Comments · Issue")
+		for _, c := range m.detailComments {
+			if len(out) >= h {
+				return out, true
+			}
+			prefix := "Comment"
+			if c.Author != "" {
+				prefix = "@" + Sanitize(c.Author)
+			}
+			out = append(out, prefix+": "+Sanitize(c.Body))
+		}
+		return out, false
+	}
+	out = append(out, "(no log file)")
+	return out, false
 }
 
 type diffFileStat struct {

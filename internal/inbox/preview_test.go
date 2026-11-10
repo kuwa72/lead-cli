@@ -615,3 +615,121 @@ func TestRunningMetaLine_ShowsElapsedActivePhase(t *testing.T) {
 		t.Errorf("meta missing default phase, got %q", got)
 	}
 }
+
+func TestInspector_SubTabsSwitchBetweenOverviewDiffAndLog(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 130
+	m.height = 30
+
+	logDir := t.TempDir()
+	logPath := filepath.Join(logDir, "issue-7.log")
+	if err := os.WriteFile(logPath, []byte("[agy] step 1: init\n[agy] step 2: log tab line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diffContent := "diff --git a/pkg/inspector.go b/pkg/inspector.go\n" +
+		"--- a/pkg/inspector.go\n" +
+		"+++ b/pkg/inspector.go\n" +
+		"@@ -1,2 +1,3 @@\n" +
+		"+inspector diff line\n"
+	gh.PrDiffs = map[int]string{77: diffContent}
+	gh.Issues[7] = ports.Issue{Number: 7, Title: "spec: add warning", Body: "overview issue body line", State: "OPEN"}
+
+	store := m.opts.Store
+	if err := store.Upsert(state.Workflow{
+		Issue:        7,
+		Status:       state.StatusAwaitingReview,
+		Agent:        "agy",
+		LogPath:      logPath,
+		PullRequests: []state.PRRef{{Number: 77, Status: "open"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = Drain(m, m.loadCmd())
+	// Trigger preview load for #7
+	m = press(t, m, "j", "k")
+
+	// Default is tab 1 (Overview)
+	if !strings.Contains(m.previewHeader(), "[1:Overview]") {
+		t.Errorf("expected default previewHeader to show [1:Overview], got %q", m.previewHeader())
+	}
+
+	// Switch to tab 2 (Diff) via '2'
+	m.previewOffset = 3
+	m = press(t, m, "2")
+	if m.previewOffset != 0 {
+		t.Errorf("switching tab should reset previewOffset to 0, got %d", m.previewOffset)
+	}
+	if !strings.Contains(m.previewHeader(), "[2:Diff]") {
+		t.Errorf("expected previewHeader to show [2:Diff], got %q", m.previewHeader())
+	}
+	if v := m.View(); !strings.Contains(v, "+inspector diff line") {
+		t.Errorf("Diff tab should render PR diff line, got:\n%s", v)
+	}
+
+	// Switch to tab 3 (Log) via '3'
+	m = press(t, m, "3")
+	if !strings.Contains(m.previewHeader(), "[3:Log]") {
+		t.Errorf("expected previewHeader to show [3:Log], got %q", m.previewHeader())
+	}
+	if v := m.View(); !strings.Contains(v, "[agy] step 2: log tab line") {
+		t.Errorf("Log tab should render agent log line, got:\n%s", v)
+	}
+
+	// Cycle tabs with ']' and '['
+	m = press(t, m, "]")
+	if !strings.Contains(m.previewHeader(), "[1:Overview]") {
+		t.Errorf("']' from tab 3 should wrap to [1:Overview], got %q", m.previewHeader())
+	}
+	m = press(t, m, "[")
+	if !strings.Contains(m.previewHeader(), "[3:Log]") {
+		t.Errorf("'[' from tab 1 should wrap to [3:Log], got %q", m.previewHeader())
+	}
+	m = press(t, m, "1")
+	if !strings.Contains(m.previewHeader(), "[1:Overview]") {
+		t.Errorf("'1' should return to [1:Overview], got %q", m.previewHeader())
+	}
+}
+
+func TestInspector_FocusToggleAndScroll(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 120
+	m.height = 30
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: strings.Repeat("line\n", 60), State: "OPEN"}
+
+	m = press(t, m, "j") // move list cursor to #8
+	startCursor := m.cursor
+
+	// Press Tab in split mode to focus the Inspector pane
+	m = press(t, m, "tab")
+	if !m.inspectorFocus {
+		t.Fatalf("expected inspectorFocus=true after pressing tab in split mode")
+	}
+
+	// Pressing j/k while inspector is focused scrolls previewOffset instead of moving list cursor
+	m = press(t, m, "j", "j")
+	if m.cursor != startCursor {
+		t.Errorf("j in inspectorFocus must not move list cursor: got %d, want %d", m.cursor, startCursor)
+	}
+	if m.previewOffset != 2 {
+		t.Errorf("j in inspectorFocus should increment previewOffset to 2, got %d", m.previewOffset)
+	}
+	m = press(t, m, "k")
+	if m.previewOffset != 1 {
+		t.Errorf("k in inspectorFocus should decrement previewOffset to 1, got %d", m.previewOffset)
+	}
+
+	// Action keys (like 'a') still act on the selected issue while inspector is focused
+	m = press(t, m, "a")
+	if len(gh.AddedLabels) == 0 {
+		t.Errorf("pressing 'a' while inspector is focused should still approve the selected issue")
+	}
+
+	// Pressing Esc exits inspectorFocus back to the list pane
+	m = press(t, m, "esc")
+	if m.inspectorFocus {
+		t.Errorf("expected inspectorFocus=false after pressing esc")
+	}
+}
+
