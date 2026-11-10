@@ -479,13 +479,22 @@ func (m Model) loadCmd() tea.Cmd {
 			// merged/closed on GitHub, mark it completed in the store.
 			if opts.Store != nil {
 				for i, w := range wfs {
+					if w.Status != state.StatusInProgress {
+						continue
+					}
+					if opts.Repo != "" && w.Repository != "" && w.Repository != "local" && RepoSlug(w.Repository) != opts.Repo {
+						continue
+					}
 					isClosed := mergedNumbers[w.Issue] || (openNumbers != nil && !openNumbers[w.Issue])
-					if w.Status == state.StatusInProgress && isClosed {
-						if opts.Repo == "" || w.Repository == "" || w.Repository == "local" || RepoSlug(w.Repository) == opts.Repo {
-							w.Status = state.StatusCompleted
-							wfs[i] = w
-							_ = opts.Store.Upsert(w)
+					if !isClosed && openNumbers == nil {
+						if iss, verr := opts.Gh.View(ctx, w.Issue); verr == nil && strings.EqualFold(iss.State, "CLOSED") {
+							isClosed = true
 						}
+					}
+					if isClosed {
+						w.Status = state.StatusCompleted
+						wfs[i] = w
+						_ = opts.Store.Upsert(w)
 					}
 				}
 			}

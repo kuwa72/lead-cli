@@ -1170,6 +1170,39 @@ func TestInbox_SyncsZombieWorkflowsWhenZeroOpenIssuesAndMerged(t *testing.T) {
 	}
 }
 
+func TestInbox_SyncsZombieWorkflowClosedBeforeSessionSinceWhenZeroOpenIssues(t *testing.T) {
+	gh, _, m := newFixture(t)
+	store := m.opts.Store
+	gh.Labeled = map[string][]ports.IssueSummary{}
+	gh.Summaries = nil // 0 open issues in repo
+	gh.Merged = nil    // closed before sessionSince, so not in ListMergedSince
+	gh.Issues[315] = ports.Issue{Number: 315, Title: "feat(inbox): TUI overhaul", State: "CLOSED"}
+	if err := store.Upsert(state.Workflow{
+		Repository: "https://github.com/kuwa72/lead-cli.git",
+		Issue:      315,
+		Status:     state.StatusInProgress,
+		Branch:     "issue/315-tui",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = Drain(m, m.loadCmd())
+
+	for _, it := range m.sections[KindRunning].Items {
+		if it.Number == 315 {
+			t.Errorf("closed issue #315 must not appear in Running: %+v", it)
+		}
+	}
+	wf, ok, err := store.Get(315, "")
+	if err != nil || !ok {
+		t.Fatalf("store.Get(315): ok=%v, err=%v", ok, err)
+	}
+	if wf.Status != state.StatusCompleted {
+		t.Errorf("store status for closed issue 315 = %q, want %q", wf.Status, state.StatusCompleted)
+	}
+}
+
+
 
 func TestInbox_FiltersRunningByRepoOnLoad(t *testing.T) {
 	gh, _, m := newFixture(t)
