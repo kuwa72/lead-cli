@@ -442,10 +442,12 @@ func (m Model) loadCmd() tea.Cmd {
 
 		// Build uses the sessionSince (not the updated last_seen_at) so the
 		// current session keeps seeing merges that happened at or after the
-		// time the inbox opened.
+		// time the inbox opened. Pass zero time to ListMergedSince so closed
+		// issues from before sessionSince still sync zombie workflows, while
+		// Build's FilterUnseenMerged filters the Merged section by sessionSince.
 		buildSeen := &SeenState{LastSeenAt: sessionSince, Confirmed: seen.Confirmed}
 		var merged []ports.MergedIssue
-		if merged, err = opts.Gh.ListMergedSince(ctx, sessionSince); err != nil {
+		if merged, err = opts.Gh.ListMergedSince(ctx, time.Time{}); err != nil {
 			return loadedMsg{err: err}
 		}
 
@@ -479,13 +481,17 @@ func (m Model) loadCmd() tea.Cmd {
 			// merged/closed on GitHub, mark it completed in the store.
 			if opts.Store != nil {
 				for i, w := range wfs {
+					if w.Status != state.StatusInProgress {
+						continue
+					}
+					if opts.Repo != "" && w.Repository != "" && w.Repository != "local" && RepoSlug(w.Repository) != opts.Repo {
+						continue
+					}
 					isClosed := mergedNumbers[w.Issue] || (openNumbers != nil && !openNumbers[w.Issue])
-					if w.Status == state.StatusInProgress && isClosed {
-						if opts.Repo == "" || w.Repository == "" || w.Repository == "local" || RepoSlug(w.Repository) == opts.Repo {
-							w.Status = state.StatusCompleted
-							wfs[i] = w
-							_ = opts.Store.Upsert(w)
-						}
+					if isClosed {
+						w.Status = state.StatusCompleted
+						wfs[i] = w
+						_ = opts.Store.Upsert(w)
 					}
 				}
 			}

@@ -1170,6 +1170,49 @@ func TestInbox_SyncsZombieWorkflowsWhenZeroOpenIssuesAndMerged(t *testing.T) {
 	}
 }
 
+func TestInbox_SyncsZombieWorkflowClosedBeforeSessionSinceWhenZeroOpenIssues(t *testing.T) {
+	gh, _, m := newFixture(t)
+	store := m.opts.Store
+	now := time.Date(2026, 11, 11, 4, 30, 0, 0, time.UTC)
+	m.opts.Now = func() time.Time { return now }
+	m.sessionSince = now.Add(-5 * time.Minute)
+	gh.Labeled = map[string][]ports.IssueSummary{}
+	gh.Summaries = nil // 0 open issues in repo
+	// Closed 20 minutes ago (before sessionSince), returned by ListMergedSince(zero)
+	gh.Merged = []ports.MergedIssue{
+		{Number: 315, Title: "feat(inbox): TUI overhaul", MergedAt: now.Add(-20 * time.Minute)},
+	}
+	if err := store.Upsert(state.Workflow{
+		Repository: "https://github.com/kuwa72/lead-cli.git",
+		Issue:      315,
+		Status:     state.StatusInProgress,
+		Branch:     "issue/315-tui",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = Drain(m, m.loadCmd())
+
+	for _, it := range m.sections[KindRunning].Items {
+		if it.Number == 315 {
+			t.Errorf("closed issue #315 must not appear in Running: %+v", it)
+		}
+	}
+	for _, it := range m.sections[KindMerged].Items {
+		if it.Number == 315 {
+			t.Errorf("issue #315 closed before sessionSince must be filtered from Merged UI: %+v", it)
+		}
+	}
+	wf, ok, err := store.Get(315, "")
+	if err != nil || !ok {
+		t.Fatalf("store.Get(315): ok=%v, err=%v", ok, err)
+	}
+	if wf.Status != state.StatusCompleted {
+		t.Errorf("store status for closed issue 315 = %q, want %q", wf.Status, state.StatusCompleted)
+	}
+}
+
+
 
 func TestInbox_FiltersRunningByRepoOnLoad(t *testing.T) {
 	gh, _, m := newFixture(t)
