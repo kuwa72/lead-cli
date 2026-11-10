@@ -80,10 +80,11 @@ type Workflow struct {
 	// Dispatch bookkeeping (docs/rfc-inbox-ux.md §7): which headless agent
 	// ran, how many times it failed to close the issue, the last process
 	// and its log. GitHub stays the source of truth for the issue itself.
-	Agent    string `json:"agent,omitempty"`
-	Attempts int    `json:"attempts,omitempty"`
-	PID      int    `json:"pid,omitempty"`
-	LogPath  string `json:"log_path,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+	Attempts  int    `json:"attempts,omitempty"`
+	PID       int    `json:"pid,omitempty"`
+	LogPath   string `json:"log_path,omitempty"`
+	LastError string `json:"last_error,omitempty"`
 	// StartedAt marks the latest headless launch (issue #186, stuck
 	// detection). Zero for records predating it: wall-clock checks skip.
 	StartedAt time.Time `json:"started_at,omitempty"`

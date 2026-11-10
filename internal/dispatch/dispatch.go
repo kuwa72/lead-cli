@@ -705,6 +705,7 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res 
 	}
 
 	d.mu.Lock()
+	prevWf, hadPrev, _ := d.Store.Get(number, "")
 	start, err := workflow.Start(ctx, d.Git, d.Store, workflow.StartOptions{
 		Issue: iss, Mode: state.ModeImplement, Worktree: "auto", WorkDir: opts.WorkDir,
 	})
@@ -715,7 +716,8 @@ func (d *Dispatcher) runOne(ctx context.Context, opts Options, number int) (res 
 	}
 	res.Worktree = start.Worktree
 
-	argv, err := agent.HeadlessArgv(opts.Agent, BuildPrompt(iss))
+	prompt := d.buildPromptForRun(ctx, iss, prevWf, hadPrev)
+	argv, err := agent.HeadlessArgv(opts.Agent, prompt)
 	if err != nil {
 		res.Outcome, res.Err = OutcomeError, fmt.Errorf("#%d: %w", number, err)
 		return res
@@ -831,13 +833,14 @@ func (d *Dispatcher) evaluate(ctx context.Context, opts Options, number int, rep
 	if err := d.update(number, func(w *state.Workflow) {
 		w.Attempts++
 		w.PID = 0
+		w.LastError = cause
 		attempts = w.Attempts
 	}); err != nil {
 		res.Outcome, res.Err = OutcomeError, err
 		return res
 	}
 	res.Attempts = attempts
-	if attempts < opts.MaxAttempts {
+	if attempts < opts.MaxAttempts && !strings.Contains(cause, "--override-guardrail") {
 		res.Outcome = OutcomeRetry
 		return res
 	}
@@ -1007,6 +1010,43 @@ func BuildPrompt(iss ports.Issue) string {
 AGENTS.md、.claude/、.devin/ などプロジェクト規約ファイルは、この Issue で明示されていない限り編集しない。
 `, iss.Number)
 	return b.String()
+}
+
+// buildPromptForRun appends retry context (previous failure cause and human/review
+// comments) on subsequent attempts (issue #309).
+func (d *Dispatcher) buildPromptForRun(ctx context.Context, iss ports.Issue, prev state.Workflow, hadPrev bool) string {
+	base := BuildPrompt(iss)
+	if !hadPrev || (prev.Attempts == 0 && prev.LastError == "") {
+		return base
+	}
+	var fb strings.Builder
+	fmt.Fprintf(&fb, "\n---\n## 前回試行の失敗理由・フィードバック（試行 %d 回目）\n", prev.Attempts+1)
+	if prev.LastError != "" {
+		fmt.Fprintf(&fb, "\n- 前回の失敗理由: %s\n", sanitizeFeedback(prev.LastError))
+	}
+	if d.Gh != nil {
+		if comments, err := d.Gh.IssueComments(ctx, iss.Number); err == nil && len(comments) > 0 {
+			fb.WriteString("\n### Issue コメント\n")
+			start := 0
+			if len(comments) > 5 {
+				start = len(comments) - 5
+			}
+			for _, c := range comments[start:] {
+				fmt.Fprintf(&fb, "- @%s: %s\n", c.Author, sanitizeFeedback(strings.TrimSpace(c.Body)))
+			}
+		}
+	}
+	return base + fb.String()
+}
+
+func sanitizeFeedback(s string) string {
+	r := strings.NewReplacer(
+		"lead review", "orchestrator-review",
+		"lead finish", "orchestrator-finish",
+		"gh pr merge", "pr-merge",
+		"SCENARIOS", "scenarios-score",
+	)
+	return r.Replace(s)
 }
 
 // ExecLauncher runs the agent binary as a child process. Output is

@@ -1446,3 +1446,82 @@ func TestLoop_WakeTriggersImmediatePass(t *testing.T) {
 	<-done
 }
 
+// issue #309: on retry, BuildPrompt includes the previous attempt's failure
+// cause (LastError) and any issue comments added since the issue was filed.
+func TestOnce_RetryInjectsLastErrorAndCommentsIntoPrompt(t *testing.T) {
+	d, gh, _, l := newFixture(t, 7)
+	gh.PRByBranch = map[string]int{"issue/7-dispatch-me": 9}
+	attempt := 0
+	d.Land = func(_ context.Context, issue, pr int) error {
+		attempt++
+		if attempt == 1 {
+			return errors.New("CI check unit-test failed: expected 200 got 500")
+		}
+		iss := gh.Issues[issue]
+		iss.State = "CLOSED"
+		gh.Issues[issue] = iss
+		return nil
+	}
+
+	// Pass 1 fails during Land -> OutcomeRetry, storing LastError.
+	rep1, err := d.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once #1: %v", err)
+	}
+	if len(rep1.Results) != 1 || rep1.Results[0].Outcome != OutcomeRetry {
+		t.Fatalf("Once #1 results = %+v, want OutcomeRetry", rep1.Results)
+	}
+	w, ok, err := d.Store.Get(7, "")
+	if err != nil || !ok {
+		t.Fatalf("Store.Get(7) = %v, %v", ok, err)
+	}
+	if !strings.Contains(w.LastError, "expected 200 got 500") {
+		t.Errorf("w.LastError = %q, want CI failure message", w.LastError)
+	}
+
+	// Human/reviewer adds a comment before Pass 2.
+	gh.CommentsByNo = map[int][]ports.Comment{
+		7: {{Author: "alice", Body: "Check nil pointer in handler.go"}},
+	}
+
+	rep2, err := d.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once #2: %v", err)
+	}
+	if len(rep2.Results) != 1 || rep2.Results[0].Outcome != OutcomeCompleted {
+		t.Fatalf("Once #2 results = %+v, want OutcomeCompleted", rep2.Results)
+	}
+	if len(l.Calls) != 2 {
+		t.Fatalf("launch calls = %d, want 2", len(l.Calls))
+	}
+	secondArgv := strings.Join(l.Calls[1].Argv, " ")
+	for _, want := range []string{"expected 200 got 500", "Check nil pointer in handler.go"} {
+		if !strings.Contains(secondArgv, want) {
+			t.Errorf("second attempt prompt missing %q:\n%s", want, secondArgv)
+		}
+	}
+}
+
+// issue #309: when Land stops on a protected-file guardrail (--override-guardrail),
+// dispatch blocks the issue immediately for human approval instead of wasting
+// remaining agent attempts.
+func TestOnce_GuardrailPauseBlocksImmediatelyWithoutRetrying(t *testing.T) {
+	d, gh, _, l := newFixture(t, 7)
+	gh.PRByBranch = map[string]int{"issue/7-dispatch-me": 9}
+	d.Land = func(_ context.Context, issue, pr int) error {
+		return errors.New("CI passed for PR #9, but it touches protected files (AGENTS.md). A human must run with --override-guardrail to merge.")
+	}
+
+	rep, err := d.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(rep.Results) != 1 || rep.Results[0].Outcome != OutcomeBlocked {
+		t.Fatalf("results = %+v, want immediate OutcomeBlocked on guardrail stop", rep.Results)
+	}
+	if len(l.Calls) != 1 {
+		t.Errorf("launch calls = %d, want 1", len(l.Calls))
+	}
+}
+
+

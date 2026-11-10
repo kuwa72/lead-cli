@@ -1036,6 +1036,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 								w.Attempts = 0
 								w.Status = state.StatusInProgress
 								w.PostMergeFailed = false
+								w.LastError = "human feedback: " + text
 								_ = store.Upsert(w)
 							}
 						}
