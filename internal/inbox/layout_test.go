@@ -200,9 +200,9 @@ func TestLayout_NarrowSplitPreview(t *testing.T) {
 func TestLayout_SplitPaneWidths(t *testing.T) {
 	tests := []struct{ w, leftW, rightW int }{
 		{86, 48, 37},
-		{100, 59, 40},
-		{120, 71, 48},
-		{200, 119, 80},
+		{100, 49, 50},
+		{120, 59, 60},
+		{200, 99, 100},
 	}
 	for _, tc := range tests {
 		t.Run(fmt.Sprintf("w%d", tc.w), func(t *testing.T) {
@@ -226,5 +226,73 @@ func TestLayout_SplitPaneMinimums(t *testing.T) {
 		if leftW+1+rightW != w {
 			t.Fatalf("w=%d: panes %d + border + %d do not fill the row", w, leftW, rightW)
 		}
+	}
+}
+
+func TestLayout_PreviewHeaderAndEmptyStateNeverOverflowRightPane(t *testing.T) {
+	// 1. Check narrow split with scrolled preview header
+	m := newSizedFixture(t, 86, 24)
+	m.detail = ports.Issue{Number: 315, Title: "title", Body: strings.Repeat("line\n", 50), State: "OPEN"}
+	m.inspectorFocus = true
+	m.previewOffset = 12
+	for _, line := range strings.Split(strings.TrimSuffix(m.View(), "\n"), "\n") {
+		if cellWidth(line) > m.width {
+			t.Errorf("rendered row exceeds terminal width %d (%d cells): %q", m.width, cellWidth(line), line)
+		}
+	}
+
+	// 2. Check empty inbox guidance in narrow split
+	m.sections = []Section{
+		{Kind: KindNeedsReview, Items: nil},
+		{Kind: KindBlocked, Items: nil},
+	}
+	m.detail = ports.Issue{}
+	m.repoOpenCount = 5
+	for _, line := range strings.Split(strings.TrimSuffix(m.View(), "\n"), "\n") {
+		if cellWidth(line) > m.width {
+			t.Errorf("empty-state rendered row exceeds terminal width %d (%d cells): %q", m.width, cellWidth(line), line)
+		}
+	}
+}
+
+func TestLayout_SplitPaneResizeWithKeysAndMouse(t *testing.T) {
+	m := newSizedFixture(t, 120, 30)
+	baseLeft, baseRight := m.splitWidths(120)
+	if baseLeft != 59 || baseRight != 60 {
+		t.Fatalf("expected default splitWidths(120) = (59, 60), got (%d, %d)", baseLeft, baseRight)
+	}
+
+	// Press '<' twice to narrow the left pane and widen the right Inspector pane
+	m = press(t, m, "<", "<")
+	leftW, rightW := m.splitWidths(120)
+	if leftW >= baseLeft || rightW <= baseRight {
+		t.Errorf("pressing '<' should shrink leftW and grow rightW, got (%d, %d) vs base (%d, %d)", leftW, rightW, baseLeft, baseRight)
+	}
+
+	// Press '>' once to widen the left pane
+	m = press(t, m, ">")
+	leftAfterGrow, _ := m.splitWidths(120)
+	if leftAfterGrow <= leftW {
+		t.Errorf("pressing '>' should grow leftW, got %d vs %d", leftAfterGrow, leftW)
+	}
+
+	// Press '=' to reset to default 50:50
+	m = press(t, m, "=")
+	resetLeft, resetRight := m.splitWidths(120)
+	if resetLeft != baseLeft || resetRight != baseRight {
+		t.Errorf("pressing '=' should reset splitWidths to (%d, %d), got (%d, %d)", baseLeft, baseRight, resetLeft, resetRight)
+	}
+
+	// Dragging the splitter border with the mouse resizes splitWidths
+	next, _ := m.Update(tea.MouseMsg{X: baseLeft, Y: 6, Type: tea.MouseLeft})
+	m = next.(Model)
+	next, _ = m.Update(tea.MouseMsg{X: 44, Y: 6, Type: tea.MouseMotion})
+	m = next.(Model)
+	next, _ = m.Update(tea.MouseMsg{X: 44, Y: 6, Type: tea.MouseRelease})
+	m = next.(Model)
+
+	dragLeft, _ := m.splitWidths(120)
+	if dragLeft != 44 {
+		t.Errorf("expected mouse drag on splitter to set leftW=44, got %d", dragLeft)
 	}
 }

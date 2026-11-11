@@ -16,10 +16,13 @@ import (
 // minListW/minPreviewW are the smallest usable widths for the list pane
 // and the preview content column in split mode.
 const (
-	minWidth    = 80
-	minHeight   = 24
-	minListW    = 48
-	minPreviewW = 36
+	minWidth          = 80
+	minHeight         = 24
+	minListW          = 48
+	minPreviewW       = 36
+	splitResizeStep   = 4
+	minResizeListW    = 30
+	minResizePreviewW = 28
 )
 
 // splitMinW is the smallest terminal width that fits both panes:
@@ -48,16 +51,38 @@ func (m Model) isSplit() bool {
 
 // splitPaneWidths apportions a terminal of width w between the list pane
 // (leftW) and the preview pane (rightW, including its 1-cell left
-// padding); the pane border takes the remaining cell. The list gets 60%
-// of the pane area, clamped so neither pane shrinks below its minimum.
+// padding); the pane border takes the remaining cell. The default split is
+// balanced 50:50, clamped so neither pane shrinks below its minimum.
 func splitPaneWidths(w int) (leftW, rightW int) {
 	avail := w - 1 // pane border
-	leftW = avail * 3 / 5
+	leftW = avail / 2
 	if leftW < minListW {
 		leftW = minListW
 	}
 	if maxLeft := avail - (minPreviewW + 1); leftW > maxLeft {
 		leftW = maxLeft
+	}
+	return leftW, avail - leftW
+}
+
+// splitWidths returns the active (leftW, rightW) taking user resize offset into account.
+func (m Model) splitWidths(w int) (leftW, rightW int) {
+	leftW, rightW = splitPaneWidths(w)
+	if m.splitOffset == 0 {
+		return leftW, rightW
+	}
+	avail := w - 1
+	leftW += m.splitOffset
+	minL := minResizeListW
+	maxL := avail - (minResizePreviewW + 1)
+	if maxL < minL {
+		return splitPaneWidths(w)
+	}
+	if leftW < minL {
+		leftW = minL
+	}
+	if leftW > maxL {
+		leftW = maxL
 	}
 	return leftW, avail - leftW
 }
@@ -483,14 +508,134 @@ func (m Model) hasAnyItems() bool {
 	return false
 }
 
+const maxPreviewLogicalLines = 2000
+
 // previewPaneHeight is the body height the preview pane gets in split mode.
 func (m Model) previewPaneHeight() int {
 	return m.bodyHeightFor(strings.Count(m.footer(), "\n") + 1 + logPaneHeight)
 }
 
+// previewTitleLines wraps the selected issue's title to w cells without ellipsis,
+// bounded to at most half the pane height on very short terminals.
+func (m Model) previewTitleLines(w, h int) []string {
+	if w <= 0 || h <= 0 || m.detail.Number == 0 {
+		return nil
+	}
+	lines := wrapCells(Sanitize(m.detail.Title), w)
+	maxTitleH := max(1, h/2)
+	if len(lines) > maxTitleH {
+		lines = lines[:maxTitleH]
+	}
+	return lines
+}
+
+// previewWrappedBody returns the wrapped visual lines of the active inspector tab
+// for width w and body height bodyH, and whether content overflows bodyH.
+func (m Model) previewWrappedBody(w, bodyH int) ([]string, bool) {
+	if w <= 0 || bodyH <= 0 {
+		return nil, false
+	}
+	row, ok := m.current()
+	if !ok || row.IsHeader() || m.detail.Number == 0 {
+		return nil, false
+	}
+
+	isLiveLog := (m.inspectorTab == inspectorTabLog && (m.detailAgentLog != "" || row.Item.LogPath != "" || row.Item.Kind == KindRunning)) ||
+		(m.inspectorTab == inspectorTabOverview && row.Item.Kind == KindRunning)
+
+	if isLiveLog && m.previewOffset == 0 && m.detailAgentLog != "" {
+		return m.liveLogWrappedBody(row.Item, w, bodyH)
+	}
+
+	content, more := m.previewContent(maxPreviewLogicalLines)
+	var allVisual []string
+	for _, l := range content {
+		allVisual = append(allVisual, wrapCells(Sanitize(l), w)...)
+	}
+	overflows := more || len(allVisual) > bodyH
+	return allVisual, overflows
+}
+
+// liveLogWrappedBody wraps the running agent header and log lines, ensuring that
+// at previewOffset == 0 the most recent wrapped log lines remain visible inside
+// bodyH even when earlier log lines wrap across multiple rows.
+func (m Model) liveLogWrappedBody(it *Item, w, bodyH int) ([]string, bool) {
+	var headerVisual []string
+	headerVisual = append(headerVisual, wrapCells("Agent Live Output", w)...)
+	if meta := runningMetaLine(it, m.detailPrNum, m.detailPrErr, m.now()); meta != "" {
+		headerVisual = append(headerVisual, wrapCells(meta, w)...)
+	}
+	if it.LogPath != "" {
+		headerVisual = append(headerVisual, wrapCells(fmt.Sprintf("Log: %s", Sanitize(it.LogPath)), w)...)
+	}
+
+	var logVisual []string
+	rawLogs := strings.Split(Sanitize(strings.ReplaceAll(m.detailAgentLog, "\r\n", "\n")), "\n")
+	for _, l := range rawLogs {
+		logVisual = append(logVisual, wrapCells(l, w)...)
+	}
+
+	var issueVisual []string
+	if m.detail.Body != "" {
+		rawIssue, _ := appendSourceBody(nil, m.detail.Body, "Issue", maxPreviewLogicalLines)
+		for _, l := range rawIssue {
+			issueVisual = append(issueVisual, wrapCells(Sanitize(l), w)...)
+		}
+	}
+
+	totalAll := len(headerVisual) + len(logVisual) + len(issueVisual)
+	if totalAll <= bodyH {
+		out := append(append(headerVisual, logVisual...), issueVisual...)
+		return out, false
+	}
+
+	// Reserve 1 line for "Enter: Full details" when overflowing.
+	visBudget := max(1, bodyH-1)
+	availForLog := visBudget - len(headerVisual)
+	if availForLog > 0 && len(logVisual) > availForLog {
+		trimmedLog := logVisual[len(logVisual)-availForLog:]
+		out := append(headerVisual, trimmedLog...)
+		return out, true
+	}
+	out := append(append(headerVisual, logVisual...), issueVisual...)
+	return out, true
+}
+
+// maxPreviewOffset is the maximum valid visual-line scroll offset for the right pane.
+func (m Model) maxPreviewOffset() int {
+	if !m.isSplit() {
+		return 0
+	}
+	row, ok := m.current()
+	if !ok || row.IsHeader() || m.detail.Number == 0 {
+		return 0
+	}
+	_, rightW := m.splitWidths(m.screenWidth())
+	w := rightW - 1
+	h := m.previewPaneHeight()
+	if w <= 0 || h <= 0 {
+		return 0
+	}
+	titleLines := m.previewTitleLines(w, h)
+	bodyH := h - len(titleLines)
+	if bodyH <= 1 {
+		return 0
+	}
+	content, _ := m.previewContent(maxPreviewLogicalLines)
+	var allVisual []string
+	for _, l := range content {
+		allVisual = append(allVisual, wrapCells(Sanitize(l), w)...)
+	}
+	if len(allVisual) <= bodyH {
+		return 0
+	}
+	visBudget := max(1, bodyH-1)
+	return max(0, len(allVisual)-visBudget)
+}
+
 // previewOverflows reports whether the selected issue's preview is taller than
-// the pane, so J/K can reveal more content. Pane height and content budget are
-// resolved here so the scroll hint and previewLines agree on what overflows.
+// the pane, so J/K can reveal more content. Pane height and wrapped visual lines
+// are resolved here so the scroll hint and previewLines agree on what overflows.
 func (m Model) previewOverflows() bool {
 	if !m.isSplit() {
 		return false
@@ -499,16 +644,19 @@ func (m Model) previewOverflows() bool {
 	if !ok || row.IsHeader() || m.detail.Number == 0 {
 		return false
 	}
+	_, rightW := m.splitWidths(m.screenWidth())
+	w := rightW - 1
 	h := m.previewPaneHeight()
-	content, more := m.previewContent(h + m.previewOffset + 20)
-	if more {
+	if w <= 0 || h <= 0 {
+		return false
+	}
+	titleLines := m.previewTitleLines(w, h)
+	bodyH := h - len(titleLines)
+	if bodyH <= 0 {
 		return true
 	}
-	visible := len(content) - m.previewOffset
-	if visible < 0 {
-		visible = 0
-	}
-	return visible+1 > h // +1 for the title line
+	_, overflows := m.previewWrappedBody(w, bodyH)
+	return overflows
 }
 
 // previewHeader is the column-header cell above the right preview pane.
@@ -538,8 +686,45 @@ func (m Model) previewHeader() string {
 	return header
 }
 
+// fitPreviewHeader formats the right-pane header to fit within w display cells
+// without overflowing the terminal width when the right pane is narrow.
+func (m Model) fitPreviewHeader(w int) string {
+	if w <= 0 {
+		return ""
+	}
+	row, ok := m.current()
+	if !ok || row.IsHeader() || m.detail.Number == 0 {
+		return fitLeft(m.previewHeader(), w)
+	}
+	full := m.previewHeader()
+	if cellWidth(full) <= w {
+		return padRight(full, w)
+	}
+	tabs := [3]string{"1:Overview", "2:Diff", "3:Log"}
+	idx := m.inspectorTab
+	if idx < 0 || idx >= len(tabs) {
+		idx = 0
+	}
+	tabs[idx] = "[" + tabs[idx] + "]"
+	tabsStr := strings.Join(tabs[:], " ")
+
+	prefix := ""
+	if m.inspectorFocus {
+		prefix = "● "
+	}
+	offsetStr := ""
+	if m.previewOffset > 0 {
+		offsetStr = fmt.Sprintf(" ↑%d", m.previewOffset)
+	}
+	shortLeft := prefix + fmt.Sprintf("#%d", m.detail.Number) + offsetStr
+	if cellWidth(shortLeft)+1+cellWidth(tabsStr) <= w {
+		return fitLeft(shortLeft+" "+tabsStr, w)
+	}
+	return fitLeft(full, w)
+}
+
 // previewLines renders the selected issue's detail into at most h lines of
-// width w, using section-specific extraction and source attribution.
+// width w, wrapping titles, bodies, diffs, and logs across visual lines.
 func (m Model) previewLines(w, h int) []string {
 	if h <= 0 || w <= 0 {
 		return nil
@@ -553,24 +738,33 @@ func (m Model) previewLines(w, h int) []string {
 	row, ok := m.current()
 	if !ok || row.IsHeader() || m.detail.Number == 0 {
 		if !m.hasAnyItems() {
-			var lines []string
-			lines = append(lines, "No inbox items")
-			lines = append(lines, "")
+			var raw []string
+			raw = append(raw, "No inbox items")
+			raw = append(raw, "")
 			if m.repoOpenCount > 0 {
-				lines = append(lines, fmt.Sprintf("Repository has %d open issue(s) on GitHub,", m.repoOpenCount))
-				lines = append(lines, "but none are labeled 'needs-review' or 'blocked'.")
+				raw = append(raw, fmt.Sprintf("Repository has %d open issue(s) on GitHub,", m.repoOpenCount))
+				raw = append(raw, "but none are labeled 'needs-review' or 'blocked'.")
 			} else {
-				lines = append(lines, "No open issues in repository.")
+				raw = append(raw, "No open issues in repository.")
 			}
-			lines = append(lines, "")
-			lines = append(lines, "Getting started:")
-			lines = append(lines, "  • Press 's' to create a new issue (AI / manual)")
-			lines = append(lines, "  • Run 'lead run' in terminal to pick any open issue")
+			raw = append(raw, "")
+			raw = append(raw, "Getting started:")
+			raw = append(raw, "  • Press 's' to create a new issue (AI / manual)")
+			raw = append(raw, "  • Run 'lead run' in terminal to pick any open issue")
 			if m.repoOpenCount > 0 {
-				lines = append(lines, "  • Label existing issue to show here:")
-				lines = append(lines, "    gh issue edit <n> --add-label needs-review")
+				raw = append(raw, "  • Label existing issue to show here:")
+				raw = append(raw, "    gh issue edit <n> --add-label needs-review")
 			}
-			lines = append(lines, "  • Press 'L' to view event log history")
+			raw = append(raw, "  • Press 'L' to view event log history")
+			var lines []string
+			for _, r := range raw {
+				for _, wrapped := range wrapCells(r, w) {
+					if len(lines) >= h {
+						break
+					}
+					lines = append(lines, wrapped)
+				}
+			}
 			for len(lines) < h {
 				lines = append(lines, "")
 			}
@@ -578,36 +772,49 @@ func (m Model) previewLines(w, h int) []string {
 		}
 		return nil
 	}
-	var lines []string
-	lines = append(lines, truncTail(Sanitize(m.detail.Title), w))
-	content, more := m.previewContent(max(0, h+m.previewOffset+20))
+
+	titleLines := m.previewTitleLines(w, h)
+	lines := append([]string(nil), titleLines...)
+	bodyH := h - len(titleLines)
+	if bodyH <= 0 {
+		return lines[:h]
+	}
+
+	allVisual, overflows := m.previewWrappedBody(w, bodyH)
+	if !overflows && m.previewOffset == 0 {
+		lines = append(lines, allVisual...)
+		for len(lines) < h {
+			lines = append(lines, "")
+		}
+		return lines[:h]
+	}
+
+	// When previewOffset > 0 on a live log, use the full wrapped visual lines so the user can scroll freely.
 	if m.previewOffset > 0 {
-		if m.previewOffset < len(content) {
-			content = content[m.previewOffset:]
-		} else if len(content) > 0 {
-			content = content[len(content)-1:]
+		content, _ := m.previewContent(maxPreviewLogicalLines)
+		allVisual = nil
+		for _, l := range content {
+			allVisual = append(allVisual, wrapCells(Sanitize(l), w)...)
 		}
 	}
-	for _, l := range content {
-		if len(lines) >= h {
-			more = true
-			break
-		}
-		for _, wrapped := range wrapCells(Sanitize(l), w) {
-			if len(lines) >= h {
-				more = true
-				break
-			}
-			lines = append(lines, wrapped)
-		}
+
+	visBudget := max(1, bodyH-1)
+	offset := m.previewOffset
+	maxOff := max(0, len(allVisual)-visBudget)
+	if offset > maxOff {
+		offset = maxOff
 	}
-	if (more || m.previewOffset > 0) && len(lines) < h {
-		lines = append(lines, "Enter: Full details")
+	if offset < len(allVisual) {
+		end := min(len(allVisual), offset+visBudget)
+		lines = append(lines, allVisual[offset:end]...)
+	}
+	if len(lines) < h {
+		lines = append(lines, truncTail("Enter: Full details", w))
 	}
 	for len(lines) < h {
 		lines = append(lines, "")
 	}
-	return lines
+	return lines[:h]
 }
 
 // scrollToCursor keeps the cursor inside the [listTop, listTop+bodyHeight)
