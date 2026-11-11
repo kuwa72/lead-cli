@@ -148,6 +148,8 @@ type Model struct {
 	previewOffset     int
 	inspectorFocus    bool
 	inspectorTab      int
+	splitOffset       int
+	draggingSplit     bool
 	previewSnapshot   previewSnapshot
 	input             inputState
 	status            string
@@ -779,6 +781,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pendingOps[msg.number] = true
 		return m, m.approveWithBodyCmd(msg.number, msg.body)
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 	case tea.KeyMsg:
 		if m.tooSmall() {
 			switch keyString(msg) {
@@ -815,6 +819,93 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) scrollPreviewBy(delta int) {
+	m.previewOffset += delta
+	if m.previewOffset < 0 {
+		m.previewOffset = 0
+		return
+	}
+	if maxOff := m.maxPreviewOffset(); maxOff > 0 && m.previewOffset > maxOff {
+		m.previewOffset = maxOff
+	}
+}
+
+func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.tooSmall() || m.mode == modeInput {
+		return m, nil
+	}
+	switch m.mode {
+	case modeDetail:
+		switch msg.Type {
+		case tea.MouseWheelUp:
+			m.detailOffset = max(0, m.detailOffset-3)
+		case tea.MouseWheelDown:
+			m.detailOffset += 3
+		}
+		return m, nil
+	case modeLog:
+		switch msg.Type {
+		case tea.MouseWheelUp:
+			m.logOffset += 3
+		case tea.MouseWheelDown:
+			m.logOffset = max(0, m.logOffset-3)
+		}
+		return m, nil
+	case modeList:
+		w := m.screenWidth()
+		split := m.isSplit()
+		leftW, _ := m.splitWidths(w)
+		switch msg.Type {
+		case tea.MouseRelease:
+			m.draggingSplit = false
+			return m, nil
+		case tea.MouseMotion:
+			if m.draggingSplit && split {
+				baseLeft, _ := splitPaneWidths(w)
+				minL := minResizeListW
+				maxL := (w - 1) - (minResizePreviewW + 1)
+				if maxL >= minL {
+					target := min(maxL, max(minL, msg.X))
+					m.splitOffset = target - baseLeft
+				}
+			}
+			return m, nil
+		case tea.MouseWheelUp:
+			if split && msg.X > leftW {
+				m.scrollPreviewBy(-3)
+				return m, nil
+			}
+			m.previewOffset = 0
+			m.cursor--
+			m.clampCursor()
+			m.scrollToCursor()
+			return m, m.loadPreviewForCurrent()
+		case tea.MouseWheelDown:
+			if split && msg.X > leftW {
+				m.scrollPreviewBy(3)
+				return m, nil
+			}
+			m.previewOffset = 0
+			m.cursor++
+			m.clampCursor()
+			m.scrollToCursor()
+			return m, m.loadPreviewForCurrent()
+		case tea.MouseLeft:
+			if split && (msg.X == leftW || msg.X == leftW+1) {
+				m.draggingSplit = true
+				return m, nil
+			}
+			if split && msg.X > leftW {
+				m.inspectorFocus = true
+				return m, nil
+			}
+			m.inspectorFocus = false
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
 func keyString(msg tea.KeyMsg) string {
 	if msg.Type == tea.KeyRunes {
 		if len(msg.Runes) != 1 {
@@ -833,28 +924,48 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inspectorFocus = false
 			return m, nil
 		case "j", "down":
-			m.previewOffset++
+			m.scrollPreviewBy(1)
 			return m, nil
 		case "k", "up":
-			if m.previewOffset > 0 {
-				m.previewOffset--
-			}
+			m.scrollPreviewBy(-1)
 			return m, nil
 		case "pgdown":
-			m.previewOffset += 10
+			m.scrollPreviewBy(10)
 			return m, nil
 		case "pgup":
-			if m.previewOffset > 10 {
-				m.previewOffset -= 10
-			} else {
-				m.previewOffset = 0
-			}
+			m.scrollPreviewBy(-10)
 			return m, nil
 		}
 	}
 	switch key {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "<", "-":
+		if m.isSplit() {
+			w := m.screenWidth()
+			baseLeft, _ := splitPaneWidths(w)
+			curLeft, _ := m.splitWidths(w)
+			targetLeft := max(minResizeListW, curLeft-splitResizeStep)
+			m.splitOffset = targetLeft - baseLeft
+		}
+		return m, nil
+	case ">", "+":
+		if m.isSplit() {
+			w := m.screenWidth()
+			baseLeft, _ := splitPaneWidths(w)
+			curLeft, _ := m.splitWidths(w)
+			maxLeft := (w - 1) - (minResizePreviewW + 1)
+			if maxLeft >= minResizeListW {
+				targetLeft := min(maxLeft, curLeft+splitResizeStep)
+				m.splitOffset = targetLeft - baseLeft
+			}
+		}
+		return m, nil
+	case "=":
+		if m.isSplit() {
+			m.splitOffset = 0
+		}
+		return m, nil
 	case "1":
 		m.inspectorTab = inspectorTabOverview
 		m.previewOffset = 0
@@ -888,22 +999,16 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.scrollToCursor()
 		return m, m.loadPreviewForCurrent()
 	case "J":
-		m.previewOffset++
+		m.scrollPreviewBy(1)
 		return m, nil
 	case "K":
-		if m.previewOffset > 0 {
-			m.previewOffset--
-		}
+		m.scrollPreviewBy(-1)
 		return m, nil
 	case "ctrl+d":
-		m.previewOffset += 5
+		m.scrollPreviewBy(5)
 		return m, nil
 	case "ctrl+u":
-		if m.previewOffset > 5 {
-			m.previewOffset -= 5
-		} else {
-			m.previewOffset = 0
-		}
+		m.scrollPreviewBy(-5)
 		return m, nil
 	case "tab":
 		if m.isSplit() {
@@ -1779,9 +1884,9 @@ func (m Model) statusLine(w int) string {
 		}
 	default:
 		if m.inspectorFocus {
-			s = "Inspector focused — j/k scroll  1/2/3 tab  Tab/Esc back to list"
+			s = "Inspector focused — j/k scroll  1/2/3 tab  </> resize  Tab/Esc back"
 		} else {
-			s = "j/k move  Tab inspector  1/2/3 view  Enter open  ? help  q quit"
+			s = "j/k move  Tab inspector  1/2/3 view  </> resize  Enter open  ? help  q quit"
 		}
 		if m.previewOverflows() {
 			s += "  J/K scroll preview"
@@ -1813,15 +1918,16 @@ func (m Model) viewList() string {
 	b.WriteString(m.ruleW(w) + "\n")
 
 	if m.isSplit() {
-		leftW, rightW := splitPaneWidths(w)
+		leftW, rightW := m.splitWidths(w)
 		cols := m.listColumns(leftW)
-		rightHeader := padRight(m.previewHeader(), rightW-1)
+		rightHeader := m.fitPreviewHeader(rightW - 1)
 		if m.theme != nil {
 			rightHeader = m.theme.Preview(rightHeader, true)
 		}
 		b.WriteString(m.columnHeaderLine(cols, leftW) + m.borderChar(true) + " " + rightHeader + "\n")
 		bodyLines := m.bodyLines(rows, m.listTop, bodyH, leftW, cols)
 		preview := m.previewLines(rightW-1, bodyH)
+		titleLineCount := max(1, len(m.previewTitleLines(rightW-1, bodyH)))
 		for i := 0; i < bodyH; i++ {
 			left := ""
 			if i < len(bodyLines) {
@@ -1833,7 +1939,7 @@ func (m Model) viewList() string {
 			}
 			right = padRight(right, rightW-1)
 			if m.theme != nil {
-				right = m.theme.Preview(right, i == 0)
+				right = m.theme.Preview(right, i < titleLineCount)
 			}
 			b.WriteString(padRight(left, leftW) + m.borderChar(true) + " " + right + "\n")
 		}
@@ -2049,6 +2155,7 @@ func (m Model) viewHelp() string {
 		"  [j/k] or [↑/↓]    Move up/down (or scroll inspector when focused)",
 		"  [Tab]             Focus inspector pane in split view (z/Tab toggles all sections)",
 		"  [1/2/3] or [[/]]  Switch inspector tab (1:Overview, 2:Diff, 3:Log)",
+		"  [</>] or [-/+]    Resize split panes ([=] reset to 50:50)",
 		"  [J/K]             Scroll preview pane down/up",
 		"  [Enter/space/→/l] Toggle section or open selected issue",
 		"",

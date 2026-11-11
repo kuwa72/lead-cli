@@ -733,3 +733,119 @@ func TestInspector_FocusToggleAndScroll(t *testing.T) {
 	}
 }
 
+func TestPreview_WrapsLongIssueTitle(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 100
+	m.height = 30
+	longTitle := "TITLESTART refactor(inbox): TUIの情報設計・2ペインフォーカス・インスペクタサブタブ・セマンティック配色の刷新 TITLEEND"
+	gh.Issues[8] = ports.Issue{Number: 8, Title: longTitle, Body: "short body", State: "OPEN"}
+	m = press(t, m, "j")
+
+	lines := splitPreviewPane(m)
+	// Skip the header row (index 0)
+	if len(lines) < 3 {
+		t.Fatalf("expected wrapped title lines in preview pane, got %v", lines)
+	}
+	var titleSegments []string
+	for _, l := range lines[1:] {
+		if strings.Contains(l, "short body") || l == "" {
+			break
+		}
+		titleSegments = append(titleSegments, l)
+	}
+	if len(titleSegments) < 2 {
+		t.Fatalf("long title should wrap across at least 2 lines, got %d: %q", len(titleSegments), titleSegments)
+	}
+	joined := strings.Join(titleSegments, "")
+	if joined != longTitle {
+		t.Errorf("wrapped title lines must join back to full title without truncation\n got: %q\nwant: %q", joined, longTitle)
+	}
+	if strings.Contains(joined, "…") {
+		t.Errorf("wrapped title must not be ellipsized: %q", joined)
+	}
+}
+
+func TestPreview_ScrollsByVisualWrappedLinesAndReachesTail(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 100
+	m.height = 24
+	// Single long paragraph that wraps into ~25 visual lines (only 1 logical line!)
+	longParagraph := "PARASTART " + strings.Repeat("これは1つの長い段落であり折り返し後に複数行になります。", 18) + " 段落の末尾END"
+	gh.Issues[8] = ports.Issue{Number: 8, Title: "spec: second", Body: longParagraph, State: "OPEN"}
+	m = press(t, m, "j")
+	m.status = ""
+
+	if !m.previewOverflows() {
+		t.Fatalf("a single paragraph that wraps past pane height must report previewOverflows()=true")
+	}
+	if strings.Contains(m.View(), "段落の末尾END") {
+		t.Fatalf("tail of long wrapped paragraph should be off screen initially")
+	}
+
+	// Scrolling 1 step with J should keep the second wrapped line of the same paragraph visible
+	// rather than dropping the entire paragraph at once.
+	m = press(t, m, "J")
+	if !strings.Contains(m.View(), "これは1つの長い段落") {
+		t.Fatalf("scrolling 1 visual line with J must not skip the entire wrapped paragraph:\n%s", m.View())
+	}
+
+	// Scrolling further should reach the tail of the wrapped paragraph inside the preview pane.
+	found := false
+	for i := 0; i < 40; i++ {
+		if strings.Contains(m.View(), "段落の末尾END") {
+			found = true
+			break
+		}
+		m = press(t, m, "J")
+	}
+	if !found {
+		t.Errorf("scrolling preview with J should reach the tail of a wrapped paragraph, got:\n%s", m.View())
+	}
+}
+
+func TestPreview_RunningLongLogLinesKeepLatestTailVisible(t *testing.T) {
+	gh, _, m := newFixture(t)
+	m.width = 100
+	m.height = 24
+
+	logDir := t.TempDir()
+	logPath := filepath.Join(logDir, "issue-75.log")
+	var logLines []string
+	for i := 1; i <= 15; i++ {
+		logLines = append(logLines, "[agy] verbose log line "+strings.Repeat("long_segment_", 8))
+	}
+	logLines = append(logLines, "[agy] final step: completed")
+	if err := os.WriteFile(logPath, []byte(strings.Join(logLines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := m.opts.Store
+	if err := store.Upsert(state.Workflow{
+		Issue:    75,
+		Status:   state.StatusInProgress,
+		Agent:    "agy",
+		LogPath:  logPath,
+		Branch:   "issue/75-long-log",
+		Attempts: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gh.Issues[75] = ports.Issue{Number: 75, Title: "feature: long log lines", Body: "body", State: "OPEN"}
+
+	m, _ = Drain(m, m.loadCmd())
+	m = press(t, m, "z")
+	idx := m.rowIndex(KindRunning, 75)
+	for m.cursor < idx {
+		m = press(t, m, "j")
+	}
+
+	v := m.View()
+	if !strings.Contains(v, "Agent Live Output") {
+		t.Errorf("running preview should contain 'Agent Live Output', got:\n%s", v)
+	}
+	if !strings.Contains(v, "[agy] final step: completed") {
+		t.Errorf("running preview at offset 0 must keep latest log line visible even when earlier log lines wrap, got:\n%s", v)
+	}
+}
+
+

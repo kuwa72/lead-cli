@@ -1495,7 +1495,7 @@ func TestOnce_RetryInjectsLastErrorAndCommentsIntoPrompt(t *testing.T) {
 		t.Fatalf("launch calls = %d, want 2", len(l.Calls))
 	}
 	secondArgv := strings.Join(l.Calls[1].Argv, " ")
-	for _, want := range []string{"expected 200 got 500", "Check nil pointer in handler.go"} {
+	for _, want := range []string{"expected 200 got 500", "Check nil pointer in handler.go", "再発防止原則", "3レイヤー"} {
 		if !strings.Contains(secondArgv, want) {
 			t.Errorf("second attempt prompt missing %q:\n%s", want, secondArgv)
 		}

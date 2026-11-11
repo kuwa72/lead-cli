@@ -577,6 +577,7 @@ func TestBuildPrompt_CarriesInputsAndChecklist(t *testing.T) {
 		"マイグレーションの後方互換",
 		"新規依存の妥当性",
 		"ついで",
+		"根本原因と再発防止",
 		"読み取り専用",
 		"VERDICT: pass", "VERDICT: needs-work",
 	} {

@@ -136,11 +136,33 @@ func press(t *testing.T, m Model, keys ...string) Model {
 	return m
 }
 
-// drive runs cmds synchronously until the model settles (no real terminal).
+// drive runs cmds synchronously until the model settles (no real terminal),
+// and enforces global section-exclusivity and terminal-width invariants.
 func drive(t *testing.T, m Model, _ tea.Msg, cmd tea.Cmd) Model {
 	t.Helper()
 	next, _ := Drain(m, cmd)
+	assertModelInvariants(t, next)
 	return next
+}
+
+func assertModelInvariants(t *testing.T, m Model) {
+	t.Helper()
+	seen := make(map[int]Kind)
+	for _, sec := range m.sections {
+		for _, it := range sec.Items {
+			if prev, dup := seen[it.Number]; dup {
+				t.Fatalf("invariant violation: issue #%d appears in both %s and %s sections", it.Number, prev.Title(), sec.Kind.Title())
+			}
+			seen[it.Number] = sec.Kind
+		}
+	}
+	if m.mode == modeList && m.width >= minWidth && !m.tooSmall() {
+		for i, line := range strings.Split(strings.TrimSuffix(m.View(), "\n"), "\n") {
+			if w := cellWidth(line); w > m.width {
+				t.Fatalf("invariant violation: viewList line %d width %d exceeds terminal width %d: %q", i+1, w, m.width, line)
+			}
+		}
+	}
 }
 
 func TestKeyA_ApprovesNeedsReviewIssue(t *testing.T) {

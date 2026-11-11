@@ -1088,6 +1088,7 @@ func (d *Dispatcher) buildPromptForRun(ctx context.Context, iss ports.Issue, pre
 	}
 	var fb strings.Builder
 	fmt.Fprintf(&fb, "\n---\n## 前回試行の失敗理由・フィードバック（試行 %d 回目）\n", prev.Attempts+1)
+	fb.WriteString("\n- 再発防止原則: 表面的な対症療法にとどめず、なぜ前回失敗したかを設計（状態の単一情報源・不変条件）・実装（境界条件）・確認（なぜ既存テストが見逃したか）の3レイヤーで分析し、同種の問題が再発しないテストを追加してから修正すること。\n")
 	if prev.LastError != "" {
 		fmt.Fprintf(&fb, "\n- 前回の失敗理由: %s\n", sanitizeFeedback(prev.LastError))
 	}
