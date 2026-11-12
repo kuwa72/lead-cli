@@ -171,6 +171,8 @@ func CommandStringForMode(agentName, prompt, mode string) (string, error) {
 type Launcher struct {
 	// LookPath resolves the agent binary; defaults to exec.LookPath.
 	LookPath func(name string) (string, error)
+	// Stdin feeds the interactive agent process when non-nil.
+	Stdin io.Reader
 	// Stdout/Stderr receive the agent's output; nil inherits os.Stdout/os.Stderr.
 	Stdout io.Writer
 	Stderr io.Writer
@@ -209,16 +211,23 @@ func (l *Launcher) LaunchInDir(ctx context.Context, dir, agentName, prompt, mode
 // LaunchForMode resolves the agent and execs it with mode-specific flags.
 func (l *Launcher) LaunchForMode(ctx context.Context, agentName, prompt, mode string) error {
 	name := Resolve(agentName)
-	if _, err := l.lookPath()(name); err != nil {
+	binPath, err := l.lookPath()(name)
+	if err != nil {
 		return &ports.BinaryNotFoundError{Binary: name}
+	}
+	if binPath == "" {
+		binPath = name
 	}
 	argv, err := ArgvForMode(name, prompt, mode)
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, name, argv...)
+	cmd := exec.CommandContext(ctx, binPath, argv...)
 	if l.Dir != "" {
 		cmd.Dir = l.Dir
+	}
+	if l.Stdin != nil {
+		cmd.Stdin = l.Stdin
 	}
 	if l.Stdout != nil {
 		cmd.Stdout = l.Stdout
