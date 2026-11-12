@@ -43,6 +43,7 @@ Sections:
 | Command | Purpose |
 |---|---|
 | `lead run [n]` | start an issue with an interactive agent (`--mode implement/review`, interactive picker without `n`) |
+| `lead bootstrap [goal]` | initialize an uninitialized directory 0→1 through an interactive coding agent |
 | `lead resume <issue\|branch\|pr>` | reconnect to existing work without creating a new branch or PR |
 | `lead lgtm <n>` | add `lgtm` label and post LGTM comment |
 | `lead unlgtm <n>` | remove `lgtm` label |

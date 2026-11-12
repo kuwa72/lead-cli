@@ -33,6 +33,7 @@ import (
 	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/adapters/ghcli"
 	"github.com/kuwa72/lead-cli/internal/adapters/git"
+	"github.com/kuwa72/lead-cli/internal/bootstrap"
 	"github.com/kuwa72/lead-cli/internal/dispatch"
 	"github.com/kuwa72/lead-cli/internal/doctor"
 	"github.com/kuwa72/lead-cli/internal/finish"
@@ -904,7 +905,22 @@ the issue open for the dispatcher to retry or block.`,
 	}
 	landCmd.Flags().Int("pr", 0, "PR number (default: resolve from the workflow branch)")
 
-	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, statsCmd, cleanCmd, peekCmd, stopCmd, finishCmd, postmergeCmd, reviewCmd, landCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
+	bootstrapCmd := &cobra.Command{
+		Use:   "bootstrap [goal]",
+		Short: "Initialize an uninitialized directory 0→1 via an interactive agent",
+		Long: `Inspect the current directory (git repo, GitHub origin, AGENTS.md, CI workflows)
+and launch an interactive LLM coding agent to bootstrap the project from 0→1:
+git init, initial starter files + tests + CI workflow, GitHub remote creation,
+` + "`lead enable`" + `, and initial issues.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runBootstrap(cmd, deps, args)
+		},
+	}
+	bootstrapCmd.Flags().String("agent", "", "interactive coding agent (default: inbox settings agent, then agy)")
+	bootstrapCmd.Flags().Bool("dry-run", false, "print the bootstrap prompt and agent command without launching")
+
+	root.AddCommand(versionCmd, dispatchCmd, runCmd, resumeCmd, statusCmd, statsCmd, cleanCmd, peekCmd, stopCmd, finishCmd, postmergeCmd, reviewCmd, landCmd, bootstrapCmd, serverCmd, apiCmd, setupCmd, completionCmd, doctorCmd, updateCmd, enableCmd, disableCmd, lgtmCmd, unlgtmCmd)
 	root.AddCommand(sayCmd)
 	root.AddCommand(newCmd, readyCmd, grillCmd, scenarioCmd)
 	return root
@@ -1080,8 +1096,30 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	}
 
 	keys := os.Getenv("LEAD_TEST_INBOX_KEYS")
-	if keys == "" && (!isTerminal(os.Stdin) || !isTerminal(os.Stdout)) {
+	interactive := (isTerminal(os.Stdin) && isTerminal(os.Stdout)) || os.Getenv("LEAD_TEST_TTY") == "1"
+	if keys == "" && !interactive {
 		return errors.New("lead: the inbox needs an interactive terminal (stdin/stdout are not a TTY); run `lead --help` for subcommands")
+	}
+	if keys == "" {
+		st := bootstrap.Inspect(cwd, deps.gitRunner())
+		if st.IsUninitialized() {
+			confirmed, err := confirmBootstrap(deps.stdin(), cmd.OutOrStdout(), st)
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				fmt.Fprintln(cmd.OutOrStdout(), "Cancelled. Run `lead bootstrap` when ready to initialize this directory.")
+				return nil
+			}
+			targetDir := st.WorkDir()
+			return bootstrap.Run(cmd.Context(), bootstrap.Options{
+				Dir:      targetDir,
+				Agent:    cfg.ImplAgent(),
+				Git:      deps.gitRunner(),
+				Launcher: newAgentLauncher(deps, cmd, targetDir),
+				Out:      cmd.OutOrStdout(),
+			})
+		}
 	}
 
 	if implAgent := cfg.ImplAgent(); implAgent != "" {
@@ -3010,4 +3048,84 @@ func runUnlgtm(cmd *cobra.Command, deps Deps, raw string) error {
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "removed lgtm from #%d\n", number)
 	return nil
+}
+
+func runBootstrap(cmd *cobra.Command, deps Deps, args []string) error {
+	cwd, err := deps.workDir()
+	if err != nil {
+		return fmt.Errorf("bootstrap: working directory: %w", err)
+	}
+	agentFlag, _ := cmd.Flags().GetString("agent")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	if agentFlag == "" {
+		if cfg, err := deps.headlessConfig(); err == nil {
+			agentFlag = cfg.ImplAgent()
+		}
+	}
+	var goal string
+	if len(args) > 0 {
+		goal = args[0]
+	}
+	st := bootstrap.Inspect(cwd, deps.gitRunner())
+	targetDir := st.WorkDir()
+	return bootstrap.Run(cmd.Context(), bootstrap.Options{
+		Dir:      targetDir,
+		Goal:     goal,
+		Agent:    agentFlag,
+		DryRun:   dryRun,
+		Git:      deps.gitRunner(),
+		Launcher: newAgentLauncher(deps, cmd, targetDir),
+		Out:      cmd.OutOrStdout(),
+	})
+}
+
+func newAgentLauncher(deps Deps, cmd *cobra.Command, dir string) *agent.Launcher {
+	return &agent.Launcher{
+		LookPath: deps.LookPath,
+		Stdin:    deps.stdin(),
+		Stdout:   cmd.OutOrStdout(),
+		Stderr:   cmd.ErrOrStderr(),
+		Dir:      dir,
+	}
+}
+
+func confirmBootstrap(r io.Reader, out io.Writer, st bootstrap.Status) (bool, error) {
+	if !st.InGitRepo {
+		fmt.Fprint(out, "このディレクトリは git 管理外です (`lead bootstrap`)。0→1 で立ち上げますか？ [Y/n] ")
+	} else {
+		fmt.Fprint(out, "GitHub `origin` リモートが未設定です (`lead bootstrap`)。0→1 で立ち上げますか？ [Y/n] ")
+	}
+	line, eof, err := readSingleLine(r)
+	if err != nil {
+		return false, fmt.Errorf("bootstrap: read confirmation: %w", err)
+	}
+	if eof && len(line) == 0 {
+		return false, nil
+	}
+	ans := strings.ToLower(strings.TrimSpace(line))
+	return ans == "" || ans == "y" || ans == "yes", nil
+}
+
+// readSingleLine reads up to '\n' one byte at a time so remaining stdin bytes
+// are preserved untouched for the spawned interactive agent process.
+func readSingleLine(r io.Reader) (string, bool, error) {
+	var buf []byte
+	var b [1]byte
+	for {
+		n, err := r.Read(b[:])
+		if n > 0 {
+			if b[0] == '\n' {
+				return string(buf), false, nil
+			}
+			if b[0] != '\r' {
+				buf = append(buf, b[0])
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return string(buf), true, nil
+			}
+			return string(buf), false, err
+		}
+	}
 }
