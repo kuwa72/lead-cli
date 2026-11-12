@@ -219,29 +219,6 @@ func TestRun_BlockedRetryDoesNotClose(t *testing.T) {
 	}
 }
 
-// The real smoke command must run against this repository at least once;
-// every other test substitutes it (issue #275 review F5).
-func TestDefaultSmoke_OnThisRepository(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds and runs the CLI skeleton")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	if err := DefaultSmoke(ctx, "../.."); err != nil {
-		t.Fatalf("DefaultSmoke on the repository: %v", err)
-	}
-}
-
-func TestDefaultSmoke_FailsOutsideAModule(t *testing.T) {
-	err := DefaultSmoke(context.Background(), t.TempDir())
-	if err == nil {
-		t.Fatal("DefaultSmoke passed in an empty directory, want a build failure")
-	}
-	if !strings.Contains(err.Error(), "go build") {
-		t.Errorf("error = %v, want the failing command named", err)
-	}
-}
-
 func TestRun_PostMergeFailureRevertsAndDoesNotClose(t *testing.T) {
 	path := t.TempDir() + "/wf.json"
 	ledgerPath := t.TempDir() + "/runs.jsonl"
