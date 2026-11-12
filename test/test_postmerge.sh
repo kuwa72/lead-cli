@@ -65,7 +65,9 @@ printf 'GITLOG %s\n' "$(printf '%s' "$*" | tr '\n' ' ')" >> "$GIT_ARGS_LOG"
 case "$1 $2" in
   "rev-parse --show-toplevel") pwd ;;
   "worktree add")
-    mkdir -p "$4"; echo "$4" >> "$GIT_WT_LIST" ;;
+    mkdir -p "$4"
+    [ -f AGENTS.md ] && cp AGENTS.md "$4/"
+    echo "$4" >> "$GIT_WT_LIST" ;;
   "worktree list")
     echo "worktree $(pwd)"
     if [ -f "$GIT_WT_LIST" ]; then
@@ -214,6 +216,52 @@ if finish_in "$repo_e" >/dev/null 2>&1; then fail "scenario E: finish exited 0 a
 grep -q "GHLOG pr create --head revert/pr-7-" "$GH_ARGS_LOG" || fail "scenario E: revert PR not created"
 grep -q "手動でマージ" "$GH_ARGS_LOG" || fail "scenario E: incident does not ask for a manual merge: $(cat "$GH_ARGS_LOG")"
 unset AUTO_MERGE_FAIL
+
+# --- F: without LEAD_TEST_POSTMERGE_SMOKE, postmerge delegates to the configured agent (dummy agy) ---
+mkdir -p "$tmp/agentbin"
+export AGY_ARGS_LOG="$tmp/agy-args.log"
+cat > "$tmp/agentbin/agy" <<'EOF'
+#!/bin/sh
+printf 'AGYLOG %s\n' "$(printf '%s' "$*" | tr '\n' ' ')" >> "$AGY_ARGS_LOG"
+if [ "${AGY_SMOKE_VERDICT:-pass}" = "fail" ]; then
+  echo "simulated smoke check failed"
+  echo "SMOKE: fail"
+  exit 1
+fi
+echo "simulated smoke check passed"
+echo "SMOKE: pass"
+EOF
+chmod +x "$tmp/agentbin/agy"
+
+unset LEAD_TEST_POSTMERGE_SMOKE || true
+
+seed f1; repo_f1="$repo"
+cat > "$repo_f1/AGENTS.md" <<'EOF'
+# Smoke
+Run fast project smoke checks.
+EOF
+reset_logs
+: > "$AGY_ARGS_LOG"
+export AGY_SMOKE_VERDICT=pass
+( cd "$repo_f1" && PATH="$tmp/agentbin:$tmp/gitbin:$tmp/ghbin:$REAL_PATH" "$tmp/lead" finish 36 --pr 7 --merge --close >/dev/null ) \
+  || fail "scenario F1: finish failed when dummy agy emitted SMOKE: pass"
+grep -q "AGYLOG " "$AGY_ARGS_LOG" || fail "scenario F1: postmerge did not invoke dummy agy"
+grep -q -- "-p " "$AGY_ARGS_LOG" || fail "scenario F1: postmerge did not pass headless prompt (-p) to dummy agy"
+grep -q "Run fast project smoke checks" "$AGY_ARGS_LOG" || fail "scenario F1: AGENTS.md instructions missing from smoke prompt"
+grep -q "GITLOG revert" "$GIT_ARGS_LOG" && fail "scenario F1: reverted although dummy agy passed"
+grep -q "GHLOG issue create" "$GH_ARGS_LOG" && fail "scenario F1: filed incident although dummy agy passed"
+
+seed f2; repo_f2="$repo"
+reset_logs
+: > "$AGY_ARGS_LOG"
+export AGY_SMOKE_VERDICT=fail
+if ( cd "$repo_f2" && PATH="$tmp/agentbin:$tmp/gitbin:$tmp/ghbin:$REAL_PATH" "$tmp/lead" finish 36 --pr 7 --merge --close >/dev/null 2>&1 ); then
+  fail "scenario F2: finish exited 0 although dummy agy emitted SMOKE: fail"
+fi
+grep -q "AGYLOG " "$AGY_ARGS_LOG" || fail "scenario F2: postmerge did not invoke dummy agy"
+grep -q "GITLOG revert --no-edit $SHA" "$GIT_ARGS_LOG" || fail "scenario F2: failed agent smoke did not revert"
+grep -q "GHLOG issue create .*--label incident" "$GH_ARGS_LOG" || fail "scenario F2: failed agent smoke did not file incident"
+unset AGY_SMOKE_VERDICT
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"
 

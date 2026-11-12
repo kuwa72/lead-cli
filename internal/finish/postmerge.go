@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/kuwa72/lead-cli/internal/adapters/agent"
 	"github.com/kuwa72/lead-cli/internal/inbox"
 	"github.com/kuwa72/lead-cli/internal/ports"
 )
@@ -50,12 +52,23 @@ type PostMergeOptions struct {
 	Base string
 	// Repo is "owner/repo" for the default-branch lookup; empty skips it.
 	Repo string
-	// Smoke overrides DefaultSmoke (tests).
+	// Smoke overrides AgentSmoke (tests).
 	Smoke func(ctx context.Context, dir string) error
+	// Agent runs headless LLM smoke verification when Smoke is nil.
+	Agent AgentRunner
+	// AgentName selects the agent CLI binary (default: "agy").
+	AgentName string
+	// LogDir stores post-merge smoke agent logs (defaults to os.TempDir()).
+	LogDir string
 	// Timeout caps the smoke (default 10m).
 	Timeout time.Duration
 	// Git runs the worktree/revert/push steps; required.
 	Git PostMergeGit
+}
+
+// AgentRunner invokes a headless coding agent in dir and returns its stdout.
+type AgentRunner interface {
+	Run(ctx context.Context, dir string, argv []string, logPath string) ([]byte, error)
 }
 
 // PostMergeResult reports one post-merge smoke.
@@ -127,7 +140,9 @@ func PostMerge(ctx context.Context, gh ports.GhClient, opts PostMergeOptions) (P
 	}
 	smoke := opts.Smoke
 	if smoke == nil {
-		smoke = DefaultSmoke
+		smoke = func(smokeCtx context.Context, smokeDir string) error {
+			return AgentSmoke(smokeCtx, opts, smokeDir)
+		}
 	}
 	smokeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -137,6 +152,12 @@ func PostMerge(ctx context.Context, gh ports.GhClient, opts PostMergeOptions) (P
 			Passed:  true,
 			Message: fmt.Sprintf("postmerge: main at %s passed the smoke", shortSHA(sha)),
 		}, nil
+	}
+	var setupErr *smokeSetupError
+	if errors.As(smokeErr, &setupErr) {
+		return PostMergeResult{
+			Message: fmt.Sprintf("postmerge: smoke did not run for PR #%d: %v", opts.PR, smokeErr),
+		}, smokeErr
 	}
 	return revertAndFile(ctx, gh, opts, sha, base, dir, smokeErr)
 }
@@ -243,20 +264,106 @@ func ensureIncidentLabel(ctx context.Context, gh ports.GhClient, repo string) er
 	})
 }
 
-// DefaultSmoke builds main and runs the fast shell-test subset.
-func DefaultSmoke(ctx context.Context, dir string) error {
-	for _, argv := range [][]string{
-		{"go", "build", "./..."},
-		{"bash", "test/test_cli_skeleton.sh"},
-	} {
-		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-		cmd.Dir = dir
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("%s: %w\n%s", strings.Join(argv, " "), err, tailLines(string(out), 20))
+const maxSmokeAgentsMDBytes = 8192
+
+type smokeSetupError struct {
+	err error
+}
+
+func (e *smokeSetupError) Error() string { return e.err.Error() }
+func (e *smokeSetupError) Unwrap() error { return e.err }
+
+// AgentSmoke delegates post-merge verification to a headless LLM agent running
+// inside dir. It fails closed unless the agent exits 0 and ends its output
+// with "SMOKE: pass".
+func AgentSmoke(ctx context.Context, opts PostMergeOptions, dir string) error {
+	if opts.Agent == nil {
+		return &smokeSetupError{err: errors.New("postmerge: no smoke agent configured (set Smoke or Agent)")}
+	}
+	agentName := strings.TrimSpace(opts.AgentName)
+	if agentName == "" {
+		agentName = "agy"
+	}
+	prompt := buildSmokePrompt(opts, dir)
+	argv, err := agent.HeadlessArgv(agentName, prompt)
+	if err != nil {
+		return &smokeSetupError{err: fmt.Errorf("postmerge: agent %q: %w", agentName, err)}
+	}
+	logDir := opts.LogDir
+	if logDir == "" {
+		logDir = os.TempDir()
+	}
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return &smokeSetupError{err: fmt.Errorf("postmerge: log dir: %w", err)}
+	}
+	logPath := filepath.Join(logDir, fmt.Sprintf("postmerge-pr%d-%d.log", opts.PR, time.Now().UnixNano()))
+	out, runErr := opts.Agent.Run(ctx, dir, argv, logPath)
+	var bnf *ports.BinaryNotFoundError
+	if errors.As(runErr, &bnf) || errors.Is(runErr, exec.ErrNotFound) {
+		return &smokeSetupError{err: fmt.Errorf("postmerge: agent %q unavailable: %w", agentName, runErr)}
+	}
+
+	verdict := parseSmokeVerdict(string(out))
+	switch verdict {
+	case "pass":
+		if runErr != nil {
+			return &smokeSetupError{err: fmt.Errorf("postmerge: agent %q exited with error despite pass verdict: %w\n%s", agentName, runErr, tailLines(string(out), 20))}
+		}
+		return nil
+	case "fail":
+		if runErr != nil {
+			return fmt.Errorf("postmerge: SMOKE: fail (%v)\n%s", runErr, tailLines(string(out), 20))
+		}
+		return fmt.Errorf("postmerge: SMOKE: fail\n%s", tailLines(string(out), 20))
+	default:
+		if runErr != nil {
+			return &smokeSetupError{err: fmt.Errorf("postmerge: agent %q failed without smoke verdict: %w\n%s", agentName, runErr, tailLines(string(out), 20))}
+		}
+		return &smokeSetupError{err: fmt.Errorf("postmerge: missing or unrecognized smoke verdict (last non-empty line must be 'SMOKE: pass' or 'SMOKE: fail')\n%s", tailLines(string(out), 20))}
+	}
+}
+
+func buildSmokePrompt(opts PostMergeOptions, dir string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "You are verifying the merged default branch checkout at %s (PR #%d, Issue #%d).\n\n", dir, opts.PR, opts.Issue)
+	b.WriteString("Tasks:\n")
+	b.WriteString("1. Inspect the repository layout, build/test configuration, and any verification docs.\n")
+	b.WriteString("2. Run a fast build and lightweight smoke check appropriate for this repository.\n")
+	b.WriteString("3. Do NOT modify tracked files, create commits, push branches, or run slow full release suites.\n")
+	if data, err := os.ReadFile(filepath.Join(dir, "AGENTS.md")); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		txt := string(data)
+		if len(txt) > maxSmokeAgentsMDBytes {
+			txt = txt[:maxSmokeAgentsMDBytes] + "\n...[truncated]"
+		}
+		b.WriteString("\n## Repository AGENTS.md\n\n")
+		b.WriteString(txt)
+		b.WriteString("\n")
+	}
+	b.WriteString("\nOutput requirements:\n")
+	b.WriteString("- Briefly report the smoke commands run and their outcomes.\n")
+	b.WriteString("- The final non-empty line MUST be strictly one of:\n")
+	b.WriteString("SMOKE: pass\n")
+	b.WriteString("SMOKE: fail\n")
+	return b.String()
+}
+
+func parseSmokeVerdict(out string) string {
+	lines := strings.Split(out, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		switch line {
+		case "SMOKE: pass":
+			return "pass"
+		case "SMOKE: fail":
+			return "fail"
+		default:
+			return ""
 		}
 	}
-	return nil
+	return ""
 }
 
 // tailLines keeps the end of a noisy command output.

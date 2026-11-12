@@ -726,10 +726,10 @@ opens a revert PR (auto-merge enabled) and files an incident issue (issue
 	postmergeCmd := &cobra.Command{
 		Use:   "postmerge <issue-number>",
 		Short: "Re-run the post-merge smoke and revert main when it fails",
-		Long: `Build main at the PR's merge commit in a temporary worktree and run
-the smoke (go build plus a fast shell-test subset). A failure opens a revert
-PR against the default branch, enables auto-merge, and files an incident issue
-(P0 equivalent). The revert goes through a PR because protected main refuses
+		Long: `Verify main at the PR's merge commit in a temporary worktree using
+the configured headless agent for a fast build/smoke check. A failure opens a
+revert PR against the default branch, enables auto-merge, and files an incident
+issue (P0 equivalent). The revert goes through a PR because protected main refuses
 direct pushes; if auto-merge is refused, the incident asks a human to merge it.
 Run it manually to re-check a merge that already happened; ` + "`lead finish`" + `
 runs the same check right after merging (issue #275).
@@ -1054,7 +1054,11 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 	opts.OverrideBlocked = func(ctx context.Context, number int, prNumber int) (string, error) {
 		var postMerge *finish.PostMergeOptions
 		if os.Getenv("LEAD_TEST_SKIP_POSTMERGE") == "" {
-			postMerge = &finish.PostMergeOptions{Smoke: postMergeSmoke()}
+			pm, err := postMergeOptions(deps, 0)
+			if err != nil {
+				return "", err
+			}
+			postMerge = &pm
 		}
 		res, err := finish.Run(ctx, deps.gh(), store, number, finish.Options{
 			PR:                prNumber,
@@ -2380,7 +2384,11 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 	// wiring tests that use a temp dir opt out with LEAD_TEST_SKIP_POSTMERGE.
 	var postMerge *finish.PostMergeOptions
 	if os.Getenv("LEAD_TEST_SKIP_POSTMERGE") == "" {
-		postMerge = &finish.PostMergeOptions{Smoke: postMergeSmoke()}
+		pm, err := postMergeOptions(deps, 0)
+		if err != nil {
+			return err
+		}
+		postMerge = &pm
 	}
 	res, err := finish.Run(cmd.Context(), deps.gh(), &state.Store{Path: deps.stateFile()}, number, finish.Options{
 		PR: pr, Part: part, Merge: merge, Close: closeIssue, NoClose: noClose,
@@ -2397,8 +2405,36 @@ func runFinish(cmd *cobra.Command, deps Deps, raw string) error {
 	return err
 }
 
+// postMergeOptions builds PostMergeOptions using LEAD_TEST_POSTMERGE_SMOKE when
+// set, otherwise wiring the configured headless review/smoke agent.
+func postMergeOptions(deps Deps, timeout time.Duration) (finish.PostMergeOptions, error) {
+	opts := finish.PostMergeOptions{
+		Smoke:   postMergeSmoke(),
+		LogDir:  filepath.Join(filepath.Dir(deps.stateFile()), "logs"),
+		Timeout: timeout,
+	}
+	if opts.Smoke != nil {
+		return opts, nil
+	}
+	cfg, err := deps.headlessConfig()
+	if err != nil {
+		return finish.PostMergeOptions{}, err
+	}
+	stallTimeout, err := cfg.StallTimeoutOr(dispatch.DefaultStuckAfter)
+	if err != nil {
+		return finish.PostMergeOptions{}, err
+	}
+	maxRuntime, err := cfg.MaxRuntimeOr(dispatch.DefaultMaxRuntime)
+	if err != nil {
+		return finish.PostMergeOptions{}, err
+	}
+	opts.Agent = deps.specAgent(stallTimeout, maxRuntime)
+	opts.AgentName = cfg.ReviewAgent()
+	return opts, nil
+}
+
 // postMergeSmoke returns the smoke override for LEAD_TEST_POSTMERGE_SMOKE
-// (headless shell tests); nil means finish.DefaultSmoke.
+// (headless shell tests); nil means finish.AgentSmoke.
 func postMergeSmoke() func(context.Context, string) error {
 	raw := os.Getenv("LEAD_TEST_POSTMERGE_SMOKE")
 	if raw == "" {
@@ -2451,10 +2487,16 @@ func runPostmerge(cmd *cobra.Command, deps Deps, raw string) error {
 	}
 
 	started := time.Now()
-	res, err := finish.PostMerge(cmd.Context(), deps.gh(), finish.PostMergeOptions{
-		Issue: number, PR: pr, WorkDir: workDir, Git: deps.gitRunner(),
-		Repo: git.RepoSlug(w.Repository), Smoke: postMergeSmoke(), Timeout: timeout,
-	})
+	pm, err := postMergeOptions(deps, timeout)
+	if err != nil {
+		return err
+	}
+	pm.Issue = number
+	pm.PR = pr
+	pm.WorkDir = workDir
+	pm.Git = deps.gitRunner()
+	pm.Repo = git.RepoSlug(w.Repository)
+	res, err := finish.PostMerge(cmd.Context(), deps.gh(), pm)
 	if res.Message != "" {
 		fmt.Fprintln(cmd.OutOrStdout(), res.Message)
 	}
