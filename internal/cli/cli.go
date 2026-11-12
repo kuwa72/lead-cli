@@ -2664,7 +2664,7 @@ func runLand(cmd *cobra.Command, deps Deps, raw string) error {
 	// Review reads the CI result; wait for it before asking for a verdict.
 	// Tests use a fake lead binary and set LEAD_TEST_SKIP_LAND_CI.
 	if os.Getenv("LEAD_TEST_SKIP_LAND_CI") == "" {
-		if err := finish.WaitChecks(cmd.Context(), deps.gh(), pr, finish.DefaultTimeout, finish.DefaultPollInterval, nil); err != nil {
+		if err := finish.WaitChecksInDir(cmd.Context(), deps.gh(), pr, workDir, finish.DefaultTimeout, finish.DefaultPollInterval, nil); err != nil {
 			return fmt.Errorf("land: CI: %w", err)
 		}
 	}

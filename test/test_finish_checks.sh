@@ -40,8 +40,9 @@ case "$1 $2" in
     esac ;;
   "pr checks")
     case "${GH_MODE:-pass}" in
-      skip) printf '[{"bucket":"skipping","name":"test","state":"SKIPPED"}]' ;;
-      *)    printf '[{"bucket":"pass","name":"test","state":"SUCCESS"}]' ;;
+      skip)  printf '[{"bucket":"skipping","name":"test","state":"SKIPPED"}]' ;;
+      empty) printf '[]' ;;
+      *)     printf '[{"bucket":"pass","name":"test","state":"SUCCESS"}]' ;;
     esac ;;
   "pr merge")
     printf '{"number":7,"state":"MERGED"}' ;;
@@ -91,6 +92,31 @@ cd "$repo_b"
   || fail "scenario B: finish on a passing check failed"
 grep -q "GHLOG pr merge 7 --squash --delete-branch --match-head-commit 0123456789abcdef0123456789abcdef01234567" "$GH_ARGS_LOG" \
   || fail "scenario B: merge not invoked on a pass-only run"
+
+# --- Scenario C: 0 checks + no .github/workflows -> safely skips CI wait and merges ---
+repo_c="$tmp/repo-c"; mk_repo "$repo_c"
+export LEAD_STATE_FILE="$tmp/state-c.json" GH_MODE=empty
+: > "$GH_ARGS_LOG"
+cd "$repo_c"
+"$tmp/lead" run 36 >/dev/null || fail "scenario C: work failed"
+"$tmp/lead" finish 36 --pr 7 --merge --timeout 50ms --poll-interval 10ms >/dev/null \
+  || fail "scenario C: finish blocked despite no .github/workflows"
+grep -q "GHLOG pr merge 7 " "$GH_ARGS_LOG" \
+  || fail "scenario C: merge not invoked when no CI workflows exist"
+
+# --- Scenario D: 0 checks + .github/workflows/ci.yml exists -> still waits and times out ---
+repo_d="$tmp/repo-d"; mk_repo "$repo_d"
+mkdir -p "$repo_d/.github/workflows"
+printf 'on: pull_request\n' > "$repo_d/.github/workflows/ci.yml"
+git -C "$repo_d" add . && git -C "$repo_d" commit -qm "add workflow"
+export LEAD_STATE_FILE="$tmp/state-d.json" GH_MODE=empty
+: > "$GH_ARGS_LOG"
+cd "$repo_d"
+"$tmp/lead" run 36 >/dev/null || fail "scenario D: work failed"
+if "$tmp/lead" finish 36 --pr 7 --merge --timeout 50ms --poll-interval 10ms >/dev/null 2>&1; then
+  fail "scenario D: finish exited 0 despite missing checks on a repo with .github/workflows"
+fi
+grep -q "GHLOG pr merge" "$GH_ARGS_LOG" && fail "scenario D: merged despite missing checks when workflow exists"
 
 [ "$HOME" = "$tmp/home" ] || fail "HOME isolation broken"
 
