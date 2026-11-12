@@ -103,6 +103,47 @@ func (o *Options) sleep(d time.Duration) {
 	time.Sleep(d)
 }
 
+// HasCIWorkflows reports whether dir contains any GitHub Actions workflow
+// file (*.yml or *.yaml) under .github/workflows.
+func HasCIWorkflows(dir string) bool {
+	if strings.TrimSpace(dir) == "" {
+		return false
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, ".github", "workflows"))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if isWorkflowYAML(e.Name()) {
+			return true
+		}
+	}
+	return false
+}
+
+func isWorkflowYAML(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext == ".yml" || ext == ".yaml"
+}
+
+func prAddsCIWorkflow(ctx context.Context, gh ports.GhClient, pr int) bool {
+	files, err := gh.PrFiles(ctx, pr)
+	if err != nil {
+		// Fail conservatively when PR files cannot be inspected.
+		return true
+	}
+	for _, f := range files {
+		clean := strings.TrimPrefix(filepath.ToSlash(f), "./")
+		if strings.HasPrefix(clean, ".github/workflows/") && isWorkflowYAML(clean) {
+			return true
+		}
+	}
+	return false
+}
+
 // WaitChecks polls `gh pr checks` until all checks pass, a check
 // fails/cancels/skips, the context ends, or the timeout hits. A skipped
 // check is not a pass: GitHub treats skipped and neutral as mergeable, so
@@ -110,6 +151,13 @@ func (o *Options) sleep(d time.Duration) {
 // (issue #273). Empty check lists keep waiting (checks not registered yet,
 // like bin/ci-wait).
 func WaitChecks(ctx context.Context, gh ports.GhClient, pr int, timeout, interval time.Duration, sleep func(time.Duration)) error {
+	return WaitChecksInDir(ctx, gh, pr, "", timeout, interval, sleep)
+}
+
+// WaitChecksInDir behaves like WaitChecks, except when workDir is non-empty
+// and 0 checks exist AND neither workDir nor the PR contains any
+// .github/workflows/*.y*ml file, waiting is safely skipped.
+func WaitChecksInDir(ctx context.Context, gh ports.GhClient, pr int, workDir string, timeout, interval time.Duration, sleep func(time.Duration)) error {
 	if sleep == nil {
 		sleep = time.Sleep
 	}
@@ -141,6 +189,9 @@ func WaitChecks(ctx context.Context, gh ports.GhClient, pr int, timeout, interva
 			return fmt.Errorf("PR #%d: skipped checks are not a pass: %s", pr, strings.Join(skipped, ", "))
 		}
 		if len(checks) > 0 && len(pending) == 0 {
+			return nil
+		}
+		if len(checks) == 0 && strings.TrimSpace(workDir) != "" && !HasCIWorkflows(workDir) && !prAddsCIWorkflow(ctx, gh, pr) {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -277,7 +328,7 @@ func Run(ctx context.Context, gh ports.GhClient, store *state.Store, issue int, 
 		return Result{}, err
 	}
 
-	if err := WaitChecks(ctx, gh, prNumber, opts.timeout(), opts.pollInterval(), opts.sleep); err != nil {
+	if err := WaitChecksInDir(ctx, gh, prNumber, opts.WorkDir, opts.timeout(), opts.pollInterval(), opts.sleep); err != nil {
 		return Result{}, err
 	}
 
