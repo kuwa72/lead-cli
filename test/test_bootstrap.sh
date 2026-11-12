@@ -16,6 +16,7 @@ REAL_PATH="$PATH"
 export HOME="$tmp/home"
 export GOPATH="$REAL_GOPATH" GOCACHE="$REAL_GOCACHE"
 unset XDG_STATE_HOME || true
+export LEAD_STATE_FILE="$tmp/wf.json"
 unset LEAD_TEST_INBOX_KEYS || true
 unset LEAD_TEST_TTY || true
 mkdir -p "$HOME"
@@ -67,8 +68,32 @@ dir_d="$tmp/git-no-origin"; git init -q -b main "$dir_d"
 out_d="$( cd "$dir_d" && printf 'n\n' | LEAD_TEST_TTY=1 PATH="$tmp/bin:$REAL_PATH" "$tmp/lead" 2>&1 )" \
   || fail "scenario D: declining bootstrap exited non-zero: $out_d"
 [ ! -s "$AGY_ARGS_LOG" ] || fail "scenario D: agy launched despite 'n' answer"
+case "$out_d" in
+  *"Cancelled. Run \`lead bootstrap\`"*) ;;
+  *) fail "scenario D: missing cancellation guidance: $out_d" ;;
+esac
 
-# --- Scenario E: bare `lead` without TTY in empty dir still fails with help hint ---
+# --- Scenario E: credentialed GitHub origin is redacted and subdir launches at repo root ---
+dir_e="$tmp/cred-repo"; git init -q -b main "$dir_e"
+git -C "$dir_e" remote add origin "https://x-access-token:ghp_topsecret123@github.com/kuwa72/demo-app.git"
+mkdir -p "$dir_e/sub/pkg"
+out_e="$( cd "$dir_e/sub/pkg" && "$tmp/lead" bootstrap --dry-run "verify redaction" )" \
+  || fail "scenario E: bootstrap --dry-run in subdir failed"
+case "$out_e" in
+  *"kuwa72/demo-app"*) ;;
+  *) fail "scenario E: missing redacted repo slug: $out_e" ;;
+esac
+case "$out_e" in
+  *"ghp_topsecret123"*|*"x-access-token"*)
+    fail "scenario E: credential leaked in bootstrap output: $out_e" ;;
+esac
+case "$out_e" in
+  *"from $dir_e "*) ;;
+  *"from $(cd "$dir_e" && pwd -P) "*) ;;
+  *) fail "scenario E: expected resolved repo root in prompt, got: $out_e" ;;
+esac
+
+# --- Scenario F: bare `lead` without TTY in empty dir still fails with help hint ---
 if ( cd "$dir_a" && "$tmp/lead" </dev/null >/dev/null 2>&1 ); then
   fail "scenario E: bare lead without TTY unexpectedly succeeded"
 fi

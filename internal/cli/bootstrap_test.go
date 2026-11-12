@@ -17,6 +17,7 @@ func installDummyAgyForBootstrap(t *testing.T, dir string) string {
 	}
 	script := filepath.Join(binDir, "agy")
 	body := `#!/bin/sh
+echo "DUMMY_AGY_PWD:$(pwd)"
 echo "DUMMY_AGY_ARGS:$*"
 input=$(cat)
 echo "DUMMY_AGY_STDIN:$input"
@@ -147,7 +148,79 @@ func TestBareLeadInteractiveTTY_DeclinedDoesNotLaunchBootstrap(t *testing.T) {
 	if launched {
 		t.Fatal("agent binary lookup ran despite user declining with 'n'")
 	}
-	if !strings.Contains(out.String(), "lead bootstrap") {
-		t.Errorf("output = %q, want hint pointing at lead bootstrap", out.String())
+	if !strings.Contains(out.String(), "lead bootstrap") || !strings.Contains(out.String(), "Cancelled.") {
+		t.Errorf("output = %q, want Cancelled hint pointing at lead bootstrap", out.String())
+	}
+}
+
+func TestBootstrapCommand_FromSubdirLaunchesAtRepoRoot(t *testing.T) {
+	repoRoot := t.TempDir()
+	subDir := filepath.Join(repoRoot, "nested", "pkg")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agyPath := installDummyAgyForBootstrap(t, t.TempDir())
+	t.Setenv("LEAD_STATE_FILE", filepath.Join(t.TempDir(), "wf.json"))
+
+	root := NewRootCmdWithDeps("v0.0.0-test", "abc1234", "2026-09-07", Deps{
+		Gh:      &testutil.FakeGhClient{},
+		Git:     &fakeGitRunner{root: repoRoot},
+		WorkDir: subDir,
+		Stdin:   strings.NewReader("go\n"),
+		LookPath: func(name string) (string, error) {
+			if name == "agy" {
+				return agyPath, nil
+			}
+			return "", os.ErrNotExist
+		},
+	})
+	var out strings.Builder
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"bootstrap", "subdir test"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("bootstrap from subdir = %v\nout=%s", err, out.String())
+	}
+	got := out.String()
+	wantPwd := "DUMMY_AGY_PWD:" + repoRoot
+	if !strings.Contains(got, wantPwd) {
+		t.Errorf("output = %q, want agent cwd %q (not subdir %q)", got, wantPwd, subDir)
+	}
+}
+
+func TestBareLeadInteractiveTTY_FromSubdirUsesRepoRoot(t *testing.T) {
+	repoRoot := t.TempDir()
+	subDir := filepath.Join(repoRoot, "nested", "pkg")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agyPath := installDummyAgyForBootstrap(t, t.TempDir())
+	t.Setenv("LEAD_STATE_FILE", filepath.Join(t.TempDir(), "wf.json"))
+	t.Setenv("LEAD_TEST_INBOX_KEYS", "")
+	t.Setenv("LEAD_TEST_TTY", "1")
+
+	root := NewRootCmdWithDeps("v0.0.0-test", "abc1234", "2026-09-07", Deps{
+		Gh:      &testutil.FakeGhClient{},
+		Git:     &fakeGitRunner{root: repoRoot},
+		WorkDir: subDir,
+		Stdin:   strings.NewReader("y\nnext\n"),
+		LookPath: func(name string) (string, error) {
+			if name == "agy" {
+				return agyPath, nil
+			}
+			return "", os.ErrNotExist
+		},
+	})
+	var out strings.Builder
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("bare lead from subdir = %v\nout=%s", err, out.String())
+	}
+	got := out.String()
+	wantPwd := "DUMMY_AGY_PWD:" + repoRoot
+	if !strings.Contains(got, wantPwd) {
+		t.Errorf("output = %q, want agent cwd %q (not subdir %q)", got, wantPwd, subDir)
 	}
 }

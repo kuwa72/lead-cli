@@ -66,8 +66,41 @@ func TestInspect_States(t *testing.T) {
 	t.Run("git repo with non-github origin is uninitialized", func(t *testing.T) {
 		dir := initTempRepo(t, "https://gitlab.com/org/app.git")
 		st := Inspect(dir, g)
-		if !st.InGitRepo || st.RepoSlug != "" || !st.IsUninitialized() {
-			t.Fatalf("Inspect = %+v, want non-github origin treated as uninitialized", st)
+		if !st.InGitRepo || !st.HasOrigin || st.RepoSlug != "" || !st.IsUninitialized() {
+			t.Fatalf("Inspect = %+v, want InGitRepo=true HasOrigin=true RepoSlug=\"\" IsUninitialized=true", st)
+		}
+	})
+
+	t.Run("lookalike host containing github.com is not treated as GitHub origin", func(t *testing.T) {
+		for _, remote := range []string{
+			"https://notgithub.com/org/app.git",
+			"https://github.com.evil.example/org/app.git",
+			"https://evil.example/github.com/org/app.git",
+			"git@github.com.evil.example:org/app.git",
+		} {
+			dir := initTempRepo(t, remote)
+			st := Inspect(dir, g)
+			if st.RepoSlug != "" || !st.IsUninitialized() {
+				t.Fatalf("Inspect(%q) = %+v, want lookalike host treated as uninitialized", remote, st)
+			}
+		}
+	})
+
+	t.Run("subdir inspects RepoRoot for AGENTS.md and WorkDir", func(t *testing.T) {
+		dir := initTempRepo(t, "")
+		sub := filepath.Join(dir, "nested", "pkg")
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Agents\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		st := Inspect(sub, g)
+		if !st.InGitRepo || !st.HasAgentsMD || !st.IsUninitialized() {
+			t.Fatalf("Inspect(subdir) = %+v, want InGitRepo=true HasAgentsMD=true IsUninitialized=true", st)
+		}
+		if st.RepoRoot == "" || st.WorkDir() == sub {
+			t.Fatalf("WorkDir() = %q (RepoRoot=%q), want resolved repo root != subdir %q", st.WorkDir(), st.RepoRoot, sub)
 		}
 	})
 
@@ -98,6 +131,30 @@ func TestPrompt_IncludesStateAndGoal(t *testing.T) {
 		if !strings.Contains(p, want) {
 			t.Errorf("Prompt missing %q:\n%s", want, p)
 		}
+	}
+}
+
+func TestPrompt_RedactsOriginCredentialsAndHandlesNonGitHubOrigin(t *testing.T) {
+	g := &git.Runner{}
+	credDir := initTempRepo(t, "https://x-access-token:ghp_secret999@github.com/kuwa72/clean-app.git")
+	stCred := Inspect(credDir, g)
+	if stCred.RepoSlug != "kuwa72/clean-app" || stCred.IsUninitialized() {
+		t.Fatalf("Inspect(cred) = %+v, want RepoSlug=kuwa72/clean-app", stCred)
+	}
+	pCred := Prompt(stCred, "")
+	if !strings.Contains(pCred, "kuwa72/clean-app") {
+		t.Errorf("Prompt missing clean slug:\n%s", pCred)
+	}
+	for _, secret := range []string{"ghp_secret999", "x-access-token"} {
+		if strings.Contains(pCred, secret) {
+			t.Errorf("Prompt leaked credential %q:\n%s", secret, pCred)
+		}
+	}
+
+	nonGhDir := initTempRepo(t, "https://gitlab.com/org/app.git")
+	pNonGh := Prompt(Inspect(nonGhDir, g), "")
+	if !strings.Contains(pNonGh, "non-GitHub origin remote") || !strings.Contains(pNonGh, "set-url origin") {
+		t.Errorf("Prompt for non-GitHub origin should explain existing origin and set-url:\n%s", pNonGh)
 	}
 }
 

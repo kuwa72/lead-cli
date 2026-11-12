@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,10 +21,18 @@ type Status struct {
 	Dir          string
 	InGitRepo    bool
 	RepoRoot     string
-	OriginURL    string
+	HasOrigin    bool
 	RepoSlug     string
 	HasAgentsMD  bool
 	HasWorkflows bool
+}
+
+// WorkDir returns the repository root when inside a git repo, or Dir otherwise.
+func (s Status) WorkDir() string {
+	if s.RepoRoot != "" {
+		return s.RepoRoot
+	}
+	return s.Dir
 }
 
 // IsUninitialized reports whether the directory lacks a git repository or a
@@ -58,16 +67,14 @@ func Inspect(dir string, g workflow.GitRunner) Status {
 			st.RepoRoot = root
 		}
 		if st.InGitRepo {
-			st.OriginURL = g.OriginURL(st.RepoRoot)
-			if isGitHubRemote(st.OriginURL) {
-				st.RepoSlug = git.RepoSlug(st.OriginURL)
+			origin := strings.TrimSpace(g.OriginURL(st.RepoRoot))
+			st.HasOrigin = origin != ""
+			if isGitHubRemote(origin) {
+				st.RepoSlug = git.RepoSlug(origin)
 			}
 		}
 	}
-	checkDir := dir
-	if st.RepoRoot != "" {
-		checkDir = st.RepoRoot
-	}
+	checkDir := st.WorkDir()
 	if _, err := os.Stat(filepath.Join(checkDir, "AGENTS.md")); err == nil {
 		st.HasAgentsMD = true
 	}
@@ -76,7 +83,35 @@ func Inspect(dir string, g workflow.GitRunner) Status {
 }
 
 func isGitHubRemote(remote string) bool {
-	return strings.Contains(strings.ToLower(remote), "github.com")
+	return remoteHost(remote) == "github.com"
+}
+
+func remoteHost(remote string) string {
+	s := strings.TrimSpace(remote)
+	if s == "" {
+		return ""
+	}
+	if strings.Contains(s, "://") {
+		u, err := url.Parse(s)
+		if err != nil {
+			return ""
+		}
+		return strings.ToLower(u.Hostname())
+	}
+	// SCP-style remote: [user@]host:path (colon must precede any slash).
+	colon := strings.IndexByte(s, ':')
+	if colon <= 0 {
+		return ""
+	}
+	if slash := strings.IndexByte(s, '/'); slash >= 0 && slash < colon {
+		return ""
+	}
+	host := s[:colon]
+	if at := strings.LastIndexByte(host, '@'); at >= 0 {
+		host = host[at+1:]
+	}
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	return strings.ToLower(host)
 }
 
 func hasCIWorkflows(dir string) bool {
@@ -99,12 +134,15 @@ func hasCIWorkflows(dir string) bool {
 // Prompt constructs the interactive 0→1 bootstrap prompt from status and goal.
 func Prompt(st Status, goal string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are bootstrapping a 0→1 project from %s so `lead` can drive issue-based development.\n\n", st.Dir)
+	fmt.Fprintf(&b, "You are bootstrapping a 0→1 project from %s so `lead` can drive issue-based development.\n\n", st.WorkDir())
 	b.WriteString("## Current Directory State\n")
 	fmt.Fprintf(&b, "- git repository: %v\n", st.InGitRepo)
-	if st.RepoSlug != "" {
-		fmt.Fprintf(&b, "- GitHub origin: %s (%s)\n", st.RepoSlug, st.OriginURL)
-	} else {
+	switch {
+	case st.RepoSlug != "":
+		fmt.Fprintf(&b, "- GitHub origin: %s\n", st.RepoSlug)
+	case st.HasOrigin:
+		b.WriteString("- GitHub origin: missing (existing non-GitHub origin remote detected)\n")
+	default:
 		b.WriteString("- GitHub origin: missing\n")
 	}
 	fmt.Fprintf(&b, "- AGENTS.md: %v\n", st.HasAgentsMD)
@@ -118,7 +156,7 @@ func Prompt(st Status, goal string) string {
 	b.WriteString("Work interactively with the user to complete any missing steps below (skip steps that are already satisfied):\n")
 	b.WriteString("1. Briefly confirm the project scope, language/stack, and architecture with the user if not already specified.\n")
 	b.WriteString("2. Initialize git (e.g. `git init -b main`) if not yet a git repository, create a minimal working starter structure, fast tests, and a CI workflow under `.github/workflows/ci.yml`.\n")
-	b.WriteString("3. Create or connect the GitHub remote repository (`origin`) using `gh repo create` (or `git remote add origin`) and push the initial `main` commit.\n")
+	b.WriteString("3. Create or connect the GitHub remote repository (`origin`) using `gh repo create` (or `git remote add origin` / `git remote set-url origin` if an `origin` already exists) and push the initial `main` commit.\n")
 	b.WriteString("4. Run `lead enable` to set up labels, workflow skills, and `AGENTS.md` (include concise fast verification commands in `AGENTS.md` for `lead`'s post-merge smoke agent).\n")
 	b.WriteString("5. Create initial well-scoped GitHub Issues (with `## 受入条件`, `## スコープ外`, `## シナリオ`) via `lead new` / `gh issue create` so `lead` / `lead dispatch` can start working immediately.\n")
 	return b.String()

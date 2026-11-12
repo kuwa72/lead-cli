@@ -1107,11 +1107,12 @@ func runInbox(cmd *cobra.Command, deps Deps) error {
 				fmt.Fprintln(cmd.OutOrStdout(), "Cancelled. Run `lead bootstrap` when ready to initialize this directory.")
 				return nil
 			}
+			targetDir := st.WorkDir()
 			return bootstrap.Run(cmd.Context(), bootstrap.Options{
-				Dir:      cwd,
+				Dir:      targetDir,
 				Agent:    cfg.ImplAgent(),
 				Git:      deps.gitRunner(),
-				Launcher: newAgentLauncher(deps, cmd, cwd),
+				Launcher: newAgentLauncher(deps, cmd, targetDir),
 				Out:      cmd.OutOrStdout(),
 			})
 		}
@@ -3023,13 +3024,15 @@ func runBootstrap(cmd *cobra.Command, deps Deps, args []string) error {
 	if len(args) > 0 {
 		goal = args[0]
 	}
+	st := bootstrap.Inspect(cwd, deps.gitRunner())
+	targetDir := st.WorkDir()
 	return bootstrap.Run(cmd.Context(), bootstrap.Options{
-		Dir:      cwd,
+		Dir:      targetDir,
 		Goal:     goal,
 		Agent:    agentFlag,
 		DryRun:   dryRun,
 		Git:      deps.gitRunner(),
-		Launcher: newAgentLauncher(deps, cmd, cwd),
+		Launcher: newAgentLauncher(deps, cmd, targetDir),
 		Out:      cmd.OutOrStdout(),
 	})
 }
