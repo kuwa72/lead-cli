@@ -233,8 +233,9 @@ func installDummyAgentArgRecorder(t *testing.T, dir, name string) string {
 	}
 	script := filepath.Join(binDir, name)
 	body := `#!/bin/sh
+printf 'ARGCOUNT:%d\n' "$#"
 printf 'ARG1:%s\n' "$1"
-printf 'ARG2:%s\n' "$2"
+printf 'ARG2_BEGIN\n%s\nARG2_END\n' "$2"
 input=$(cat)
 printf 'STDIN:%s\n' "$input"
 `
@@ -277,11 +278,19 @@ func TestBootstrapCommand_DevinAndOpencodeFlags(t *testing.T) {
 				t.Fatalf("bootstrap --agent %s = %v\nout=%s", tc.agent, err, out.String())
 			}
 			got := out.String()
+			if !strings.Contains(got, "ARGCOUNT:2\n") {
+				t.Errorf("%s unexpected arg count in %q", tc.agent, got)
+			}
 			if !strings.Contains(got, "ARG1:"+tc.wantArg1+"\n") {
 				t.Errorf("%s ARG1 = %q, want %q", tc.agent, got, "ARG1:"+tc.wantArg1)
 			}
-			if !strings.Contains(got, "read requirements.txt") || !strings.Contains(got, "STDIN:interactive reply") {
-				t.Errorf("%s output missing goal or stdin: %q", tc.agent, got)
+			_, afterBegin, hasBegin := strings.Cut(got, "ARG2_BEGIN\n")
+			arg2, _, hasEnd := strings.Cut(afterBegin, "\nARG2_END\n")
+			if !hasBegin || !hasEnd || !strings.Contains(arg2, "read requirements.txt") {
+				t.Errorf("%s ARG2 missing goal 'read requirements.txt' in %q", tc.agent, got)
+			}
+			if !strings.Contains(got, "STDIN:interactive reply") {
+				t.Errorf("%s output missing stdin: %q", tc.agent, got)
 			}
 		})
 	}
