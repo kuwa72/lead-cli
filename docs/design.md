@@ -71,8 +71,8 @@ Issue一覧から2段階の選択（Issue選定→エージェント選定）を
 | `claude` | `claude "<prompt>"` | `claude -p --dangerously-skip-permissions "<prompt>"` | `--dangerously-skip-permissions`: ツール実行プロンプトを自動承認。`-p` で非対話実行。 |
 | `codex` | `codex "<prompt>"` | `codex exec --dangerously-bypass-approvals-and-sandbox "<prompt>"` | `exec`: 非対話実行。`--dangerously-bypass-approvals-and-sandbox`: サンドボックスおよび確認プロンプトをバイパス。 |
 | `gemini` | `gemini "<prompt>"` | `gemini -y "<prompt>"` | `-y` (`--yolo`): 全てのアクションを自動承認。 |
-| `opencode` | `opencode "<prompt>"` | `opencode run --auto "<prompt>"` | `run --auto`: 自動承認で非対話実行。 |
-| `devin` | `devin "<prompt>"` | `devin --permission-mode dangerous -p "<prompt>"` | `--permission-mode dangerous`: 全ツールを自動承認。`-p` で非対話実行。 |
+| `opencode` | `opencode --prompt "<prompt>"` | `opencode run --auto "<prompt>"` | `--prompt`: 対話モードの初期プロンプト。`run --auto`: 自動承認で非対話実行。 |
+| `devin` | `devin -- "<prompt>"` | `devin --permission-mode dangerous -p "<prompt>"` | 対話モードは `--` でプロンプトを区切る（未指定時はパス/サブコマンド扱い）。`--permission-mode dangerous -p`: 全ツール自動承認で非対話実行。 |
 
 ---
 

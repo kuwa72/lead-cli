@@ -479,8 +479,8 @@ func TestWork_AgentCommandRespectsAgentFlag(t *testing.T) {
 		t.Fatalf("work 36 --agent devin: %v\n%s", err, out)
 	}
 
-	if !strings.Contains(out, `&& devin "`) {
-		t.Errorf("output missing devin positional prompt command, got:\n%s", out)
+	if !strings.Contains(out, `&& devin -- "`) {
+		t.Errorf("output missing devin `--` delimiter prompt command, got:\n%s", out)
 	}
 	if strings.Contains(out, "devin -i") {
 		t.Errorf("devin command must not use agy -i flag; got:\n%s", out)

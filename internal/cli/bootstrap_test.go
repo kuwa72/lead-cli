@@ -224,3 +224,65 @@ func TestBareLeadInteractiveTTY_FromSubdirUsesRepoRoot(t *testing.T) {
 		t.Errorf("output = %q, want agent cwd %q (not subdir %q)", got, wantPwd, subDir)
 	}
 }
+
+func installDummyAgentArgRecorder(t *testing.T, dir, name string) string {
+	t.Helper()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(binDir, name)
+	body := `#!/bin/sh
+printf 'ARG1:%s\n' "$1"
+printf 'ARG2:%s\n' "$2"
+input=$(cat)
+printf 'STDIN:%s\n' "$input"
+`
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+func TestBootstrapCommand_DevinAndOpencodeFlags(t *testing.T) {
+	for _, tc := range []struct {
+		agent    string
+		wantArg1 string
+	}{
+		{"devin", "--"},
+		{"opencode", "--prompt"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			dir := t.TempDir()
+			binPath := installDummyAgentArgRecorder(t, t.TempDir(), tc.agent)
+			t.Setenv("LEAD_STATE_FILE", filepath.Join(t.TempDir(), "wf.json"))
+
+			root := NewRootCmdWithDeps("v0.0.0-test", "abc1234", "2026-09-07", Deps{
+				Gh:      &testutil.FakeGhClient{},
+				Git:     &fakeGitRunner{},
+				WorkDir: dir,
+				Stdin:   strings.NewReader("interactive reply\n"),
+				LookPath: func(name string) (string, error) {
+					if name == tc.agent {
+						return binPath, nil
+					}
+					return "", os.ErrNotExist
+				},
+			})
+			var out strings.Builder
+			root.SetOut(&out)
+			root.SetErr(&out)
+			root.SetArgs([]string{"bootstrap", "--agent", tc.agent, "read requirements.txt"})
+			if err := root.Execute(); err != nil {
+				t.Fatalf("bootstrap --agent %s = %v\nout=%s", tc.agent, err, out.String())
+			}
+			got := out.String()
+			if !strings.Contains(got, "ARG1:"+tc.wantArg1+"\n") {
+				t.Errorf("%s ARG1 = %q, want %q", tc.agent, got, "ARG1:"+tc.wantArg1)
+			}
+			if !strings.Contains(got, "read requirements.txt") || !strings.Contains(got, "STDIN:interactive reply") {
+				t.Errorf("%s output missing goal or stdin: %q", tc.agent, got)
+			}
+		})
+	}
+}

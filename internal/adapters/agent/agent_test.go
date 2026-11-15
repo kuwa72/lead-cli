@@ -51,20 +51,35 @@ func TestLaunch_BatchMode(t *testing.T) {
 	}
 }
 
-func TestLaunch_OtherAgentUsesPositionalPrompt(t *testing.T) {
-	for _, name := range []string{"devin", "opencode", "claude"} {
-		logPath := mkDummyAgent(t, name, 0)
+func TestLaunch_InteractiveUsesAgentSpecificFlags(t *testing.T) {
+	cases := []struct {
+		name     string
+		wantArgs []string
+	}{
+		{"agy", []string{"-i", "do stuff"}},
+		{"devin", []string{"--", "do stuff"}},
+		{"opencode", []string{"--prompt", "do stuff"}},
+		{"claude", []string{"do stuff"}},
+		{"codex", []string{"do stuff"}},
+		{"gemini", []string{"do stuff"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logPath := mkDummyAgent(t, tc.name, 0)
 
-		if err := New().Launch(context.Background(), name, "do stuff"); err != nil {
-			t.Fatalf("Launch %s: %v", name, err)
-		}
-		log := testutil.LogText(t, logPath)
-		if !strings.Contains(log, "<do stuff>") {
-			t.Errorf("Launch %s argv missing positional prompt, got:\n%s", name, log)
-		}
-		if strings.Contains(log, "<-i>") {
-			t.Errorf("Launch %s must not use agy-only -i flag, got:\n%s", name, log)
-		}
+			if err := New().Launch(context.Background(), tc.name, "do stuff"); err != nil {
+				t.Fatalf("Launch %s: %v", tc.name, err)
+			}
+			log := testutil.LogText(t, logPath)
+			var wantLines []string
+			for _, arg := range tc.wantArgs {
+				wantLines = append(wantLines, "<"+arg+">")
+			}
+			wantBlock := strings.Join(wantLines, "\n")
+			if !strings.Contains(log, wantBlock) {
+				t.Errorf("Launch %s argv mismatch:\nwant consecutive lines:\n%s\ngot:\n%s", tc.name, wantBlock, log)
+			}
+		})
 	}
 }
 
@@ -121,12 +136,14 @@ func TestResolve(t *testing.T) {
 
 func TestCommandString_BuildsReviewableCommand(t *testing.T) {
 	// Legacy bin/hgf prepared these exact command strings in the new pane
-	// for human review (not auto-sent).
+	// for human review (not auto-sent), matching each CLI's `--help` syntax.
 	cases := map[string]string{
 		"agy":      `agy -i "hello"`,
-		"devin":    `devin "hello"`,
-		"opencode": `opencode "hello"`,
+		"devin":    `devin -- "hello"`,
+		"opencode": `opencode --prompt "hello"`,
 		"claude":   `claude "hello"`,
+		"codex":    `codex "hello"`,
+		"gemini":   `gemini "hello"`,
 	}
 	for agentName, want := range cases {
 		if got := CommandString(agentName, "hello"); got != want {
@@ -146,6 +163,8 @@ func TestCommandStringForMode(t *testing.T) {
 		wantErr bool
 	}{
 		{"agy", "interactive", `agy -i "hello"`, false},
+		{"devin", "interactive", `devin -- "hello"`, false},
+		{"opencode", "interactive", `opencode --prompt "hello"`, false},
 		{"agy", "batch", `agy --dangerously-skip-permissions --print-timeout 24h0m0s -p "hello"`, false},
 		{"agy", "dangerous", `agy --dangerously-skip-permissions --print-timeout 24h0m0s -p "hello"`, false},
 		{"claude", "batch", `claude -p --dangerously-skip-permissions "hello"`, false},
@@ -181,6 +200,8 @@ func TestArgvForMode(t *testing.T) {
 		wantErr bool
 	}{
 		{"agy", "interactive", []string{"-i", "hello"}, false},
+		{"devin", "interactive", []string{"--", "hello"}, false},
+		{"opencode", "interactive", []string{"--prompt", "hello"}, false},
 		{"agy", "batch", []string{"--dangerously-skip-permissions", "--print-timeout", "24h0m0s", "-p", "hello"}, false},
 		{"claude", "batch", []string{"-p", "--dangerously-skip-permissions", "hello"}, false},
 		{"codex", "batch", []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "hello"}, false},
