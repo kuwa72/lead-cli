@@ -152,13 +152,19 @@ func Prompt(st Status, goal string) string {
 		fmt.Fprintf(&b, "\n## Application Goal\n%s\n", g)
 	}
 
+	repoTarget := "<owner>/<repo>"
+	if st.RepoSlug != "" {
+		repoTarget = st.RepoSlug
+	}
 	b.WriteString("\n## Bootstrap Instructions\n")
 	b.WriteString("Work interactively with the user to complete any missing steps below (skip steps that are already satisfied):\n")
 	b.WriteString("1. Briefly confirm the project scope, language/stack, and architecture with the user if not already specified.\n")
 	b.WriteString("2. Initialize git (e.g. `git init -b main`) if not yet a git repository, create a minimal working starter structure, fast tests, and a CI workflow under `.github/workflows/ci.yml`.\n")
-	b.WriteString("3. Create or connect the GitHub remote repository (`origin`) using `gh repo create` (or `git remote add origin` / `git remote set-url origin` if an `origin` already exists) and push the initial `main` commit.\n")
-	b.WriteString("4. Run `lead enable` to set up labels, workflow skills, and `AGENTS.md` (include concise fast verification commands in `AGENTS.md` for `lead`'s post-merge smoke agent).\n")
-	b.WriteString("5. Create initial well-scoped GitHub Issues (with `## 受入条件`, `## スコープ外`, `## シナリオ`) via `lead new` / `gh issue create` so `lead` / `lead dispatch` can start working immediately.\n")
+	b.WriteString("3. Create or connect the GitHub remote repository (`origin`) using `gh repo create` (or `git remote add origin` / `git remote set-url origin` if an `origin` already exists).\n")
+	b.WriteString("4. Run `lead enable` to set up labels, workflow skills, and `AGENTS.md` (include concise fast verification commands in `AGENTS.md` for `lead`'s post-merge smoke agent), commit and push the initial `main` branch before enabling branch protection.\n")
+	fmt.Fprintf(&b, "5. Configure GitHub repository settings for safe unattended `lead dispatch` / `lead finish`: enable auto-merge (`gh repo edit --enable-auto-merge`), and if default-branch protection is not yet configured create a ruleset via `gh api -X POST repos/%s/rulesets --input -` with `{\"name\":\"protect-main\",\"target\":\"branch\",\"enforcement\":\"active\",\"conditions\":{\"ref_name\":{\"include\":[\"~DEFAULT_BRANCH\"],\"exclude\":[]}},\"rules\":[{\"type\":\"deletion\"},{\"type\":\"non_fast_forward\"},{\"type\":\"pull_request\",\"parameters\":{\"required_approving_review_count\":0,\"dismiss_stale_reviews_on_push\":false,\"require_code_owner_review\":false,\"require_last_push_approval\":false,\"required_review_thread_resolution\":false,\"allowed_merge_methods\":[\"merge\",\"squash\",\"rebase\"]}},{\"type\":\"required_status_checks\",\"parameters\":{\"strict_required_status_checks_policy\":false,\"do_not_enforce_on_create\":false,\"required_status_checks\":[{\"context\":\"<ci-job-name>\"}]}}]}` replacing `<ci-job-name>` with the job name(s) from `.github/workflows/ci.yml`. If ruleset or auto-merge configuration fails due to GitHub plan/permission limits (e.g., private repository on GitHub Free), report the reason and manual workaround and continue without failing.\n", repoTarget)
+	b.WriteString("6. Create initial well-scoped GitHub Issues (with `## 受入条件` as `- [ ]` checklist items, `## スコープ外`, `## シナリオ`) via `lead new` / `gh issue create` so `lead` / `lead dispatch` can start working immediately.\n")
+	b.WriteString("7. Run `lead doctor` to verify readiness and report any remaining `--` items to the user (such as GitHub Settings when blocked by plan limits, or `lead setup --write` for user-level shell completion/keybindings).\n")
 	return b.String()
 }
 

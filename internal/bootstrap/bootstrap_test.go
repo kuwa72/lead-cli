@@ -134,6 +134,38 @@ func TestPrompt_IncludesStateAndGoal(t *testing.T) {
 	}
 }
 
+func TestPrompt_IncludesProtectionAutoMergeAndDoctorSteps(t *testing.T) {
+	p := Prompt(Status{Dir: "/tmp/newapp", InGitRepo: true, RepoSlug: "kuwa72/newapp"}, "cli app")
+	for _, want := range []string{
+		"gh repo edit --enable-auto-merge",
+		"repos/kuwa72/newapp/rulesets",
+		`"required_approving_review_count":0`,
+		`"required_status_checks"`,
+		"GitHub plan/permission limits",
+		"lead doctor",
+		"lead setup --write",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("Prompt missing %q:\n%s", want, p)
+		}
+	}
+	pNoSlug := Prompt(Status{Dir: "/tmp/newapp"}, "cli app")
+	if !strings.Contains(pNoSlug, "repos/<owner>/<repo>/rulesets") {
+		t.Errorf("Prompt without RepoSlug missing placeholder endpoint:\n%s", pNoSlug)
+	}
+	enableIdx := strings.Index(p, "lead enable")
+	pushIdx := strings.Index(p, "push")
+	protectIdx := strings.Index(p, "gh repo edit --enable-auto-merge")
+	doctorIdx := strings.Index(p, "lead doctor")
+	if enableIdx < 0 || pushIdx < 0 || protectIdx < 0 || doctorIdx < 0 {
+		t.Fatalf("missing key steps in prompt:\n%s", p)
+	}
+	if !(enableIdx < protectIdx && pushIdx < protectIdx && protectIdx < doctorIdx) {
+		t.Errorf("expected order enable/push -> auto-merge & ruleset protection -> lead doctor, got indices enable=%d push=%d protect=%d doctor=%d",
+			enableIdx, pushIdx, protectIdx, doctorIdx)
+	}
+}
+
 func TestPrompt_RedactsOriginCredentialsAndHandlesNonGitHubOrigin(t *testing.T) {
 	g := &git.Runner{}
 	credDir := initTempRepo(t, "https://x-access-token:ghp_secret999@github.com/kuwa72/clean-app.git")

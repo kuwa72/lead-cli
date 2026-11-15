@@ -127,8 +127,8 @@ func TestRun_UnprotectedDefaultBranchWarnsWithGuidance(t *testing.T) {
 		t.Errorf("required-checks check = %+v, want optional warning with guidance", req)
 	}
 	auto := findCheck(rep, CheckAutoMerge)
-	if auto.OK || auto.Required || !strings.Contains(auto.Detail, "--merge") {
-		t.Errorf("auto-merge check = %+v, want optional gap with fallback note", auto)
+	if auto.OK || auto.Required || !strings.Contains(auto.Detail, "--merge") || !strings.Contains(auto.Detail, "gh repo edit --enable-auto-merge") {
+		t.Errorf("auto-merge check = %+v, want optional gap with fallback note and gh CLI hint", auto)
 	}
 	if got := fake.ProtectionCalls; len(got) != 1 || got[0] != "o/r@trunk" {
 		t.Errorf("protection asked for %v, want the default branch reported by gh", got)

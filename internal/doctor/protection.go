@@ -77,7 +77,7 @@ func (p Protection) Checks() []Check {
 		out = append(out, Check{Name: CheckAutoMerge, OK: true, Detail: "allow_auto_merge enabled"})
 	} else {
 		out = append(out, Check{Name: CheckAutoMerge,
-			Detail: "allow_auto_merge disabled; `lead finish` will pause for a manual --merge (enable in Settings > General)"})
+			Detail: "allow_auto_merge disabled; `lead finish` will pause for a manual --merge (run `gh repo edit --enable-auto-merge` or enable in Settings > General)"})
 	}
 	return out
 }

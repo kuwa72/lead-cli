@@ -678,7 +678,7 @@ func protectionReport(gh ProtectionClient, repo string) (lines []string, ok bool
 	if auto {
 		lines = append(lines, "protection/auto-merge: ok (allow_auto_merge enabled)")
 	} else {
-		lines = append(lines, "protection/auto-merge: off (allow_auto_merge disabled; `lead finish` will pause for a manual --merge)")
+		lines = append(lines, "protection/auto-merge: off (allow_auto_merge disabled; `lead finish` will pause for a manual --merge; run `gh repo edit --enable-auto-merge` or enable in Settings > General)")
 	}
 	if !ok {
 		lines = append(lines, "Next: protect the default branch (Settings > Branches / Rules) so dispatch can start, then re-run `lead enable --check`")
