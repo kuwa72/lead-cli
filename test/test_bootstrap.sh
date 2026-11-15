@@ -93,7 +93,26 @@ case "$out_e" in
   *) fail "scenario E: expected resolved repo root in prompt, got: $out_e" ;;
 esac
 
-# --- Scenario F: bare `lead` without TTY in empty dir still fails with help hint ---
+# --- Scenario F: `lead bootstrap --agent devin` passes `--` before prompt ---
+export DEVIN_ARGS_LOG="$tmp/devin-args.log"
+cat > "$tmp/bin/devin" <<'EOF'
+#!/bin/sh
+printf 'ARG1:%s\nARG2:%s\n' "$1" "$2" > "$DEVIN_ARGS_LOG"
+cat >/dev/null
+EOF
+chmod +x "$tmp/bin/devin"
+dry_devin="$( cd "$dir_a" && "$tmp/lead" bootstrap --dry-run --agent devin "read requirements.txt" )" \
+  || fail "scenario F: bootstrap --dry-run --agent devin failed"
+case "$dry_devin" in
+  *'devin -- "'*) ;;
+  *) fail "scenario F: dry-run missing devin -- delimiter: $dry_devin" ;;
+esac
+( cd "$dir_a" && printf 'ok\n' | PATH="$tmp/bin:$REAL_PATH" "$tmp/lead" bootstrap --agent devin "read requirements.txt" >/dev/null ) \
+  || fail "scenario F: bootstrap --agent devin failed"
+grep -qxF 'ARG1:--' "$DEVIN_ARGS_LOG" || fail "scenario F: devin arg1 is not --: $(cat "$DEVIN_ARGS_LOG")"
+grep -q 'read requirements.txt' "$DEVIN_ARGS_LOG" || fail "scenario F: devin arg2 missing goal: $(cat "$DEVIN_ARGS_LOG")"
+
+# --- Scenario G: bare `lead` without TTY in empty dir still fails with help hint ---
 if ( cd "$dir_a" && "$tmp/lead" </dev/null >/dev/null 2>&1 ); then
   fail "scenario E: bare lead without TTY unexpectedly succeeded"
 fi

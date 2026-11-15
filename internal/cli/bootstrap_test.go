@@ -224,3 +224,74 @@ func TestBareLeadInteractiveTTY_FromSubdirUsesRepoRoot(t *testing.T) {
 		t.Errorf("output = %q, want agent cwd %q (not subdir %q)", got, wantPwd, subDir)
 	}
 }
+
+func installDummyAgentArgRecorder(t *testing.T, dir, name string) string {
+	t.Helper()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(binDir, name)
+	body := `#!/bin/sh
+printf 'ARGCOUNT:%d\n' "$#"
+printf 'ARG1:%s\n' "$1"
+printf 'ARG2_BEGIN\n%s\nARG2_END\n' "$2"
+input=$(cat)
+printf 'STDIN:%s\n' "$input"
+`
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+func TestBootstrapCommand_DevinAndOpencodeFlags(t *testing.T) {
+	for _, tc := range []struct {
+		agent    string
+		wantArg1 string
+	}{
+		{"devin", "--"},
+		{"opencode", "--prompt"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			dir := t.TempDir()
+			binPath := installDummyAgentArgRecorder(t, t.TempDir(), tc.agent)
+			t.Setenv("LEAD_STATE_FILE", filepath.Join(t.TempDir(), "wf.json"))
+
+			root := NewRootCmdWithDeps("v0.0.0-test", "abc1234", "2026-09-07", Deps{
+				Gh:      &testutil.FakeGhClient{},
+				Git:     &fakeGitRunner{},
+				WorkDir: dir,
+				Stdin:   strings.NewReader("interactive reply\n"),
+				LookPath: func(name string) (string, error) {
+					if name == tc.agent {
+						return binPath, nil
+					}
+					return "", os.ErrNotExist
+				},
+			})
+			var out strings.Builder
+			root.SetOut(&out)
+			root.SetErr(&out)
+			root.SetArgs([]string{"bootstrap", "--agent", tc.agent, "read requirements.txt"})
+			if err := root.Execute(); err != nil {
+				t.Fatalf("bootstrap --agent %s = %v\nout=%s", tc.agent, err, out.String())
+			}
+			got := out.String()
+			if !strings.Contains(got, "ARGCOUNT:2\n") {
+				t.Errorf("%s unexpected arg count in %q", tc.agent, got)
+			}
+			if !strings.Contains(got, "ARG1:"+tc.wantArg1+"\n") {
+				t.Errorf("%s ARG1 = %q, want %q", tc.agent, got, "ARG1:"+tc.wantArg1)
+			}
+			_, afterBegin, hasBegin := strings.Cut(got, "ARG2_BEGIN\n")
+			arg2, _, hasEnd := strings.Cut(afterBegin, "\nARG2_END\n")
+			if !hasBegin || !hasEnd || !strings.Contains(arg2, "read requirements.txt") {
+				t.Errorf("%s ARG2 missing goal 'read requirements.txt' in %q", tc.agent, got)
+			}
+			if !strings.Contains(got, "STDIN:interactive reply") {
+				t.Errorf("%s output missing stdin: %q", tc.agent, got)
+			}
+		})
+	}
+}

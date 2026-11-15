@@ -153,7 +153,7 @@ case "$out" in *'claude "'*) ;; *) fail "picker run output lacks claude command:
 rm -f "$LEAD_STATE_FILE"
 out="$(cd "$repo" && LEAD_TEST_SELECTION=36:devin "$tmp/lead" run 2>&1)" || fail "run (picker devin) failed: $out"
 case "$out" in *"Agent: devin"*) ;; *) fail "picker run lacks 'Agent: devin': $out";; esac
-case "$out" in *'devin "'*) ;; *) fail "picker run output lacks devin command: $out";; esac
+case "$out" in *'devin -- "'*) ;; *) fail "picker run output lacks devin command: $out";; esac
 
 # resume without a recorded agent uses config.
 rm -f "$LEAD_STATE_FILE"
@@ -167,7 +167,7 @@ cat > "$LEAD_STATE_FILE" <<'EOF'
 EOF
 out="$(cd "$repo" && "$tmp/lead" resume 36 2>&1)" || fail "resume 36 (recorded devin) failed: $out"
 case "$out" in *"Agent: devin"*) ;; *) fail "resume should keep recorded devin over config: $out";; esac
-case "$out" in *'devin "'*) ;; *) fail "resume output lacks devin command: $out";; esac
+case "$out" in *'devin -- "'*) ;; *) fail "resume output lacks devin command: $out";; esac
 [ ! -s "$HERDR_LOG" ] || fail "resume must not invoke herdr: $(cat "$HERDR_LOG")"
 
 # --- 2. fallbacks --------------------------------------------------------------

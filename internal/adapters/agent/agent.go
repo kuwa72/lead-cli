@@ -49,15 +49,22 @@ func IsKnown(name string) bool {
 	return false
 }
 
-// Argv builds the exec argv for launching agent with prompt.
-// agy takes interactive prompts via -i/--prompt-interactive (closed #19);
-// other agents take the prompt positionally.
+// Argv builds the exec argv for launching agent interactively with prompt.
+// Per each CLI's `--help`: agy takes `-i`, devin requires `--` before the
+// prompt, opencode takes `--prompt`, and claude/codex/gemini take the prompt
+// positionally.
 func Argv(agentName, prompt string) []string {
 	name := Resolve(agentName)
-	if name == "agy" {
+	switch name {
+	case "agy":
 		return []string{"-i", prompt}
+	case "devin":
+		return []string{"--", prompt}
+	case "opencode":
+		return []string{"--prompt", prompt}
+	default:
+		return []string{prompt}
 	}
-	return []string{prompt}
 }
 
 // ArgvForMode returns the argv (without the binary name) for launching the agent
@@ -131,10 +138,7 @@ func HeadlessArgv(agentName, prompt string) ([]string, error) {
 // user to run (not auto-sent).
 func CommandString(agentName, prompt string) string {
 	name := Resolve(agentName)
-	if name == "agy" {
-		return "agy -i " + strconv.Quote(prompt)
-	}
-	return name + " " + strconv.Quote(prompt)
+	return formatCommand(name, Argv(name, prompt))
 }
 
 // CommandStringForMode builds the shell command string for launching the agent
@@ -152,18 +156,23 @@ func CommandStringForMode(agentName, prompt, mode string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		var parts []string
-		for i, arg := range argv {
-			if i == len(argv)-1 {
-				parts = append(parts, strconv.Quote(arg))
-			} else {
-				parts = append(parts, arg)
-			}
-		}
-		return strings.Join(parts, " "), nil
+		return formatCommand(argv[0], argv[1:]), nil
 	default:
 		return "", fmt.Errorf("unknown agent mode %q (supported: interactive, batch, dangerous)", mode)
 	}
+}
+
+func formatCommand(bin string, args []string) string {
+	parts := make([]string, 0, 1+len(args))
+	parts = append(parts, bin)
+	for i, arg := range args {
+		if i == len(args)-1 {
+			parts = append(parts, strconv.Quote(arg))
+		} else {
+			parts = append(parts, arg)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // Launcher runs the agent binary directly in the current terminal

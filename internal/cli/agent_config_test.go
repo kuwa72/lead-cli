@@ -245,8 +245,8 @@ func TestWork_AgentFlagBeatsInboxConfig(t *testing.T) {
 	if !strings.Contains(out, "Agent: devin") {
 		t.Errorf("output missing 'Agent: devin':\n%s", out)
 	}
-	if !strings.Contains(out, `devin "`) {
-		t.Errorf("output missing `devin \"<prompt>\"`:\n%s", out)
+	if !strings.Contains(out, `devin -- "`) {
+		t.Errorf("output missing `devin -- \"<prompt>\"`:\n%s", out)
 	}
 }
 
