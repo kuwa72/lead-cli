@@ -911,7 +911,8 @@ the issue open for the dispatcher to retry or block.`,
 		Long: `Inspect the current directory (git repo, GitHub origin, AGENTS.md, CI workflows)
 and launch an interactive LLM coding agent to bootstrap the project from 0→1:
 git init, initial starter files + tests + CI workflow, GitHub remote creation,
-` + "`lead enable`" + `, and initial issues.`,
+` + "`lead enable`" + `, repository auto-merge / branch protection, initial issues,
+and ` + "`lead doctor`" + ` verification.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBootstrap(cmd, deps, args)

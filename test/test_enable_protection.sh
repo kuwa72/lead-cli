@@ -38,10 +38,19 @@ if [ "$1 $2" = "label create" ]; then
   printf '%s\n' "$3" >> "$GH_LABEL_STATE"
   exit 0
 fi
+if [ "$1 $2" = "auth status" ]; then
+  exit 0
+fi
+if [ "$1 $2" = "api user" ]; then
+  printf 'tester'
+  exit 0
+fi
 if [ "$1 $2" = "api repos/o/r" ]; then
   case "$*" in
     *"--jq .default_branch"*) printf 'main' ;;
-    *"--jq .allow_auto_merge"*) printf 'true' ;;
+    *"--jq .allow_auto_merge"*)
+      if [ -f "$AUTO_OFF_FLAG" ]; then printf 'false'; else printf 'true'; fi
+      ;;
     *) echo "unexpected gh api: $@" >&2; exit 3 ;;
   esac
   exit 0
@@ -67,6 +76,7 @@ export PATH="$tmp/bin:$PATH"
 export GH_ARG_LOG="$tmp/gh-args.log"
 export GH_LABEL_STATE="$tmp/gh-labels.txt"
 export PROT_FLAG="$tmp/protected"
+export AUTO_OFF_FLAG="$tmp/auto-off"
 : > "$GH_ARG_LOG"
 printf 'needs-review\nready\nblocked\n' > "$GH_LABEL_STATE"
 
@@ -98,6 +108,14 @@ case "$out" in *"protection/branch-protection: ok"*) ;; *) fail "protected repo 
 case "$out" in *"protection/required-checks: ok"*) ;; *) fail "protected repo missing checks ok line: $out";; esac
 grep -q 'branches/main/protection' "$GH_ARG_LOG" || fail "protection api not called: $(cat "$GH_ARG_LOG")"
 out="$("$tmp/lead" enable --check)" || fail "enable --check failed on protected repo: $out"
+
+# --- 3b. allow_auto_merge=false surfaces `gh repo edit --enable-auto-merge` in enable and doctor ---
+: > "$AUTO_OFF_FLAG"
+out="$("$tmp/lead" enable --check)" || fail "enable --check with auto-merge off failed: $out"
+case "$out" in *"protection/auto-merge: off"*"gh repo edit --enable-auto-merge"*) ;; *) fail "enable --check missing auto-merge CLI hint: $out";; esac
+doc_out="$("$tmp/lead" doctor)" || fail "doctor with auto-merge off failed: $doc_out"
+case "$doc_out" in *"auto-merge:"*"gh repo edit --enable-auto-merge"*) ;; *) fail "doctor missing auto-merge CLI hint: $doc_out";; esac
+rm -f "$AUTO_OFF_FLAG"
 
 # --- 4. no origin remote: protection skipped, gh api never called ---
 git remote remove origin || fail "git remote remove failed"

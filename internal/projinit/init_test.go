@@ -98,6 +98,7 @@ func TestProtectionReport_Missing(t *testing.T) {
 	for _, want := range []string{
 		"protection/branch-protection: missing",
 		"protection/required-checks: missing",
+		"gh repo edit --enable-auto-merge",
 		"recommended for safe unattended dispatch",
 		"Next:",
 	} {

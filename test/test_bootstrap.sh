@@ -45,6 +45,10 @@ case "$out_a" in
   *"agy -i"*) ;;
   *) fail "scenario A: dry-run missing interactive command preview: $out_a" ;;
 esac
+case "$out_a" in
+  *"gh repo edit --enable-auto-merge"*rulesets*"lead doctor"*) ;;
+  *) fail "scenario A: dry-run missing auto-merge/rulesets/doctor steps: $out_a" ;;
+esac
 
 # --- Scenario B: `lead bootstrap` launches interactive agent with prompt and stdin ---
 dir_b="$tmp/empty-b"; mkdir -p "$dir_b"
